@@ -10,7 +10,7 @@ table is the index. Status: ✅ done & tested · 🟡 in progress · ⬜ not sta
 |------|--------:|--------|-------|
 | docs/index.html | 1.0.0 | ✅ | Loads fonts + styles.css + main.js (module). Relative paths for Pages subpath. |
 | docs/.nojekyll | — | ✅ | Empty; keeps Pages from stripping `js/`-prefixed paths. |
-| docs/css/styles.css | 1.0.0 | ✅ | Section A = new launcher/shell styles; Section B = canonical game CSS verbatim (tokens + all mode screens). 732 lines. |
+| docs/css/styles.css | 1.2.0 | ✅ | Section A launcher/shell + B canonical game CSS + C single-player + D Pokédex additions. |
 | docs/js/lib/dom.js | 1.0.0 | ✅ | `el()`, `clear`, `mount`, `on`. No global state. |
 | docs/js/modes.js | 1.1.0 | ✅ | Registry (8 entries). Draft split: **Draft Battle** (free-play, random) + **Daily Challenge** (same seeded draft); both lazy-load draftbattle.js, differ by `params.variant`. All `enabled:false` until ported. |
 | docs/js/main.js | 1.1.0 | ✅ | Config load, menu render, hash router `#/<mode>/<gen>`, lazy launch, friendly fallbacks. Now passes `mode.params` to the controller. Tested under jsdom (8 cards, real config load). |
@@ -27,18 +27,29 @@ table is the index. Status: ✅ done & tested · 🟡 in progress · ⬜ not sta
 | docs/data/typechart-gen2.json | gen | ✅ | GSC-era 17-type chart, self-validated. Only Draft (Gen 2) uses it. |
 | docs/data/_data-report.json | gen | ✅ | Move-cleaning audit: `rescued` (verify) + `unresolved` (fix at Excel source). |
 
-### Phase 2b (remaining — needed by Draft, not by Guess)
-| File | Status | Notes |
-|------|--------|-------|
-| docs/data/movestats-gen{1,2}.json | ⬜ | Per-move type/bp/acc/prio from a vetted source, with a **completeness gate** (fail loudly if any movepool move lacks stats — this is what catches the last garbled cells). |
-| docs/data/typechart-gen1.json | ⬜ | Deferred; only a future Gen 1 Draft would need it. |
+### Phase 2b (DONE this pass) — movestats + Gen 1 type chart
+| File | Version | Status | Notes |
+|------|--------:|--------|-------|
+| tools/generate-movestats.mjs | 1.0.0 | ✅ | **Bootstrap only** — PokeAPI → initial movestats + review CSVs. Superseded by apply-movestats once curated. |
+| tools/apply-movestats.mjs | 1.0.0 | ✅ | Curated `movestats-gen{N}.review.csv` → `movestats-gen{N}.json`, and reconciles movelists (drops moves you deleted so the gate stays satisfied). Run after editing the CSVs. |
+| docs/data/movestats-gen1.json | curated | ✅ | 163 moves (from your CSV). Variable-power moves still bp 0; only matters for a future Gen 1 Draft. |
+| docs/data/movestats-gen2.json | curated | ✅ | 244 moves. Your edits applied: bp set on 12 variable moves; Bide/Counter/Beat Up/Mirror Coat/Present deleted (and pulled from all movelists, 228 entries); OHKO moves bp 0 + `ohko` flag. Drives sim correctly; no empty movepools. |
+| docs/data/movestats-gen{1,2}.review.csv | curated | ✅ | Your edited CSVs — the source of record for apply-movestats. |
+| docs/data/typechart-gen1.json | gen | ✅ | 15 types, **derived** from the Gen 2 chart (Dark/Steel removed; Bug↔Poison 2×, Ghost→Psychic 0). Please verify edge matchups. |
 
-## Guess modes (Phase 3)
-| File | Status | Notes |
-|------|--------|-------|
-| docs/js/lib/engine.js | ⬜ | Port from canonical HTML. Resolve gen1/gen2 controller split here. |
-| docs/js/modes/{single,pokedex,safari,victoryroad}.js | ⬜ | |
+## Guess modes (Phase 3 — IN PROGRESS)
+| File | Version | Status | Notes |
+|------|--------:|--------|-------|
+| docs/js/lib/engine.js | 1.0.0 | ✅ | DOM-free `PokeGuessRound` + `normalizeName`. Faithful port of the canonical Gen 2 round logic (pools, availability/locks/exhaustion, rising+discounted costs, purchase limits, all clue-value specials, category diversity, weighted random reveal, guess+score). **One engine, both gens:** ids ≤26 are identical across gens (literal); moveset clues (ids 27-34 diverge) resolve by `special`/`field`. Tested headless vs real gen1 + gen2 data (26/27 assertions; the 1 was a bad test fixture, not a bug). |
+| docs/js/modes/single.js | 1.0.0 | ✅ | Single-player screen on engine.js: config (difficulty/guess-mode/clue-mode/diversity/custom) → game (clue grid, points bar, autocomplete guessing, revealed summary, forced phases) → win/loss summary. No rules of its own. Tested under jsdom (config→buy→wrong→win→summary; shell→router→mode integration). **Mode enabled.** |
+| docs/js/modes/pokedex.js | 1.0.0 | ✅ | Pokédex/study reference: searchable, sortable (#/A–Z) list; catch tracker (localStorage); detail view (info, type matchups, comp movesets, full move list). Reads movelist. Tested under jsdom (11 assertions). **Mode enabled.** |
+| docs/js/modes/{safari,victoryroad}.js | — | ⬜ | Reuse engine.js + dex data. |
 | docs/js/lib/mp-rules.js + docs/js/modes/multiplayer.js | ⬜ | Hot-seat first. |
+
+### Resolved: Gen 1 vs Gen 2 guess split (SPEC §11 Q1) — CONFIRMED
+ONE engine + ONE set of controllers, driven by `gen{N}.json`. **Gen 1 adopts Gen 2's
+rules** (confirmed by user): the unified engine applies Gen 2's contextual-availability
+cross-inference to both gens. No per-gen rule branching.
 
 ## Online + identity + leaderboard (Phase 4)
 | File | Status |
@@ -62,17 +73,30 @@ table is the index. Status: ✅ done & tested · 🟡 in progress · ⬜ not sta
 | tools/test/*.mjs | ⬜ (unit tests for engine/sim/draft/mp-rules) |
 
 ## Notes
-- **Gen 1 Excel ≠ old inline data (expected).** The `v5` Gen 1 workbook is newer
-  and richer than the Gen 1 data baked into the shipped launcher: `exampleMoveset`
-  and `tmHmMove` are populated in the Excel but were empty inline, and
-  `evoMethod`/`compMoveset*`/`evolvesFrom` differ on some entries (540 cells).
-  Per "Excel is the source of truth," the generated `gen1.json` is authoritative.
-  Gen 2 matched the inline data exactly (0 diffs).
+- **Gen 1 source = `PokeGuess_Red_Blue_Yellow_v3.xlsx`** — treated as the source of
+  truth; richer than the old inline Gen 1 data.
+- **Name reconciliation (3):** the v3 move sheet spells a few names differently from
+  its dex sheet — `Nidoran(f)→Nidoran-F`, `Nidoran(m)→Nidoran-M`, `Farfetch'd→Farfetchd`.
+  The pipeline normalises move-sheet names to the dex spelling so movelist keys match
+  what engine.js/draft.js look up (`dexName.toLowerCase()`).
+- **Golbat moves** were missing from the v3 move sheet; supplied via
+  `tools/supplemental/gen1-moves.json` (7 Level-up + 14 TM/HM) and merged by the
+  pipeline (de-duplicated, so it self-deactivates once added to the Excel). All
+  151 Gen 1 species now have moves; every move in both gens resolves to movestats.
 - **Unresolved move cells (2):** phanpy & donphan have a literal `"but why?)"`
   in the Move column — correctly dropped. Optionally fix at the Excel source.
 
+- **Non-moves removed by the gate (2):** `Gyarados` (Gen 2, from a garbled
+  "Gyarados only): Thunderbolt" cell) and `Tail Club` (Gen 1, Cubone/Marowak —
+  not a real move; their real move "Bone Club" is present). Both correctly dropped.
+- **Movestats to set manually:** variable/fixed-power moves are flagged
+  `NEEDS_BP_REVIEW` in the review CSVs (Counter, Seismic Toss, Return/Frustration,
+  Dragon Rage, OHKO moves, etc.) — `bp` is left at 0 for you to fill in. Move
+  type/power/accuracy come from a modern base; the main Gen-2-era nuance already
+  handled is type (e.g. Bite = Normal in Gen 1, Dark in Gen 2).
+
 ## Inputs held this session
 Canonical HTML (launcher wrapping two inline-data games), Gen 1 Excel
-(`PokeGuess_Red_Blue_Yellow_v5.xlsx`), Gen 2 Excel (`pokeguessworkbook.xlsx`,
+(`PokeGuess_Red_Blue_Yellow_v3.xlsx`), Gen 2 Excel (`pokeguessworkbook.xlsx`,
 incl. `Field Reference` map), `sim.js`, `draft.js` v0.4.1. Still needed from you:
 silhouette sprite assets (named by Pokédex #), Firebase web config (Phase 4).

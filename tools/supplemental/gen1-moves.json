@@ -1,0 +1,26 @@
+{
+  "_note": "Stopgap moves not present in the Excel move sheet. The pipeline merges these into movelist-gen1.json, de-duplicated by move+source, so once the same rows are added to the Excel this file becomes a harmless no-op (and can be deleted). Keys are dexName.toLowerCase().",
+  "golbat": [
+    { "move": "Bite", "source": "Level-up" },
+    { "move": "Leech Life", "source": "Level-up" },
+    { "move": "Screech", "source": "Level-up" },
+    { "move": "Supersonic", "source": "Level-up" },
+    { "move": "Confuse Ray", "source": "Level-up" },
+    { "move": "Wing Attack", "source": "Level-up" },
+    { "move": "Haze", "source": "Level-up" },
+    { "move": "Razor Wind", "source": "TM / HM" },
+    { "move": "Whirlwind", "source": "TM / HM" },
+    { "move": "Toxic", "source": "TM / HM" },
+    { "move": "Take Down", "source": "TM / HM" },
+    { "move": "Double-Edge", "source": "TM / HM" },
+    { "move": "Hyper Beam", "source": "TM / HM" },
+    { "move": "Rage", "source": "TM / HM" },
+    { "move": "Mega Drain", "source": "TM / HM" },
+    { "move": "Mimic", "source": "TM / HM" },
+    { "move": "Double Team", "source": "TM / HM" },
+    { "move": "Bide", "source": "TM / HM" },
+    { "move": "Swift", "source": "TM / HM" },
+    { "move": "Rest", "source": "TM / HM" },
+    { "move": "Substitute", "source": "TM / HM" }
+  ]
+}

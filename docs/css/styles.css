@@ -730,3 +730,113 @@ h1,h2,h3{font-family:var(--font-pixel);}
 .vr-perfect-lap{font-size:11px;color:var(--text-dim);margin-bottom:22px;}
 .vr-perfect-btns{display:flex;flex-direction:column;gap:10px;}
 
+
+/* ============================================================================
+   SECTION C — Single Player controller (modular build)
+   Uses the Section B design tokens. Class names mirror the canonical screen.
+   ========================================================================= */
+.sp-content { max-width: 1100px; margin: 0 auto; padding: 16px; }
+.sp-section-title {
+  font-family: var(--font-pixel); font-size: 12px; color: var(--accent-gold);
+  margin: 18px 4px 10px; letter-spacing: .5px;
+}
+.diff-grid {
+  display: grid; gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+.diff-card {
+  background: var(--bg-card); border: 2px solid var(--border-card);
+  border-radius: var(--radius); padding: 14px; cursor: pointer;
+  transition: var(--transition);
+}
+.diff-card:hover { border-color: var(--accent-gold-dim); background: var(--bg-hover); }
+.diff-card.selected { border-color: var(--accent-gold); box-shadow: var(--shadow-glow); }
+.diff-card .diff-name { font-family: var(--font-pixel); font-size: 12px; color: var(--text-primary); }
+.diff-card .diff-points { font-size: 20px; font-weight: 800; color: var(--accent-gold); margin-top: 6px; }
+.diff-card .diff-points span { font-size: 11px; color: var(--text-dim); font-weight: 600; }
+.diff-card .diff-desc { font-size: 11px; color: var(--text-secondary); margin-top: 6px; line-height: 1.4; }
+
+.sp-custom-panel {
+  display: flex; gap: 16px; flex-wrap: wrap; margin: 12px 4px;
+  background: var(--bg-card); border: 1px solid var(--border-subtle);
+  border-radius: var(--radius); padding: 14px;
+}
+.sp-custom-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-secondary); }
+.sp-custom-field input {
+  width: 110px; padding: 8px; border-radius: 8px; border: 1px solid var(--border-card);
+  background: var(--bg-deep); color: var(--text-primary); font-family: var(--font-body);
+}
+.sp-opt-row { display: flex; align-items: center; gap: 12px; margin: 8px 4px; flex-wrap: wrap; }
+.sp-opt-label { font-size: 12px; color: var(--text-secondary); min-width: 130px; }
+.sp-opt-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+.sp-opt-btn {
+  padding: 7px 12px; border-radius: 100px; border: 1px solid var(--border-card);
+  background: var(--bg-card); color: var(--text-secondary); cursor: pointer;
+  font-size: 12px; transition: var(--transition);
+}
+.sp-opt-btn:hover { border-color: var(--accent-gold-dim); color: var(--text-primary); }
+.sp-opt-btn.active { background: var(--accent-gold); color: #1a1205; border-color: var(--accent-gold); font-weight: 700; }
+
+.sp-start-row { display: flex; justify-content: space-between; gap: 12px; margin: 22px 4px 8px; }
+.btn-primary {
+  padding: 11px 22px; border-radius: 10px; border: none; cursor: pointer;
+  background: var(--accent-gold); color: #1a1205; font-weight: 800;
+  font-family: var(--font-body); font-size: 14px; transition: var(--transition);
+}
+.btn-primary:hover { filter: brightness(1.08); box-shadow: var(--shadow-glow); }
+.btn-secondary {
+  padding: 11px 18px; border-radius: 10px; cursor: pointer;
+  background: var(--bg-card); color: var(--text-secondary);
+  border: 1px solid var(--border-card); font-family: var(--font-body); font-size: 14px;
+  transition: var(--transition);
+}
+.btn-secondary:hover { border-color: var(--accent-gold-dim); color: var(--text-primary); }
+
+/* game layout */
+.game-body { display: grid; grid-template-columns: 1fr 340px; gap: 16px; margin-top: 12px; }
+@media (max-width: 820px) { .game-body { grid-template-columns: 1fr; } }
+.game-exit { padding: 7px 12px; font-size: 12px; }
+.game-side { display: flex; flex-direction: column; gap: 14px; }
+.guess-block { background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius); padding: 14px; }
+.sp-forced-indicator {
+  font-family: var(--font-pixel); font-size: 10px; color: var(--accent-gold);
+  align-self: center; padding: 4px 10px; border: 1px solid var(--accent-gold-dim); border-radius: 100px;
+}
+
+/* summary extras */
+.summary-result { font-family: var(--font-pixel); font-size: 16px; margin-bottom: 8px; }
+.summary-mon { font-size: 22px; font-weight: 800; color: var(--text-primary); }
+.summary-score { font-size: 15px; color: var(--accent-gold); font-weight: 700; margin-top: 4px; }
+.summary-meta { display: flex; gap: 20px; justify-content: center; color: var(--text-secondary); font-size: 13px; margin: 14px 0; }
+.summary-header.win .summary-result { color: #29cc66; }
+.summary-header.loss .summary-result { color: #e06060; }
+
+/* ============================================================================
+   SECTION D — Pokédex (study) controller additions
+   ========================================================================= */
+.study-catchbar {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  font-size: 11px; font-weight: 700; padding: 8px 10px;
+  background: var(--bg-elevated); border-radius: var(--radius);
+  border: 1px solid var(--border-card); margin-bottom: 10px;
+}
+.study-catchbar-filters { margin-left: auto; display: flex; gap: 5px; }
+.study-row-ball { display: flex; align-items: center; margin-left: 6px; width: 22px; flex-shrink: 0; }
+.study-detail-pos { font-size: 12px; color: var(--text-secondary); padding: 0 8px; align-self: center; }
+.catch-controls {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin: 10px 0 14px; padding: 10px; background: var(--bg-card);
+  border: 1px solid var(--border-subtle); border-radius: var(--radius);
+}
+.catch-label { font-size: 12px; color: var(--text-secondary); }
+.catch-btn {
+  padding: 6px 12px; border-radius: 100px; cursor: pointer;
+  border: 1px solid var(--border-card); background: var(--bg-elevated);
+  color: var(--text-secondary); font-size: 12px; transition: var(--transition);
+}
+.catch-btn:hover { border-color: var(--accent-gold-dim); color: var(--text-primary); }
+.catch-btn.active { background: var(--accent-gold); color: #1a1205; border-color: var(--accent-gold); font-weight: 700; }
+.info-subhead {
+  font-size: 10px; font-weight: 800; text-transform: uppercase;
+  letter-spacing: .5px; color: var(--text-secondary); margin-bottom: 5px;
+}

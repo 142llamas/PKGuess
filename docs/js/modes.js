@@ -41,13 +41,13 @@ export const MODES = [
   {
     id: 'single', label: 'Single Player', icon: '🎯', group: 'Guess',
     blurb: 'Spend a point budget on clues, then name the mystery Pokémon.',
-    enabled: false, gens: [1, 2],
+    enabled: true, gens: [1, 2],
     load: () => import('./modes/single.js'),
   },
   {
     id: 'pokedex', label: 'Pokédex', icon: '📖', group: 'Guess',
     blurb: 'Browse and quiz yourself on every Pokémon and its clue data.',
-    enabled: false, gens: [1, 2],
+    enabled: true, gens: [1, 2],
     load: () => import('./modes/pokedex.js'),
   },
   {

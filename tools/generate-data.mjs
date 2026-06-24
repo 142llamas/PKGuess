@@ -39,7 +39,7 @@ function arg(name, dflt) {
   return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : dflt;
 }
 const PATHS = {
-  gen1: arg('gen1', join(REPO_ROOT, 'PokeGuess_Red_Blue_Yellow_v5.xlsx')),
+  gen1: arg('gen1', join(REPO_ROOT, 'PokeGuess_Red_Blue_Yellow_v3.xlsx')),
   gen2: arg('gen2', join(REPO_ROOT, 'pokeguessworkbook.xlsx')),
   out: arg('out', join(REPO_ROOT, 'docs', 'data')),
   rules: arg('rules', join(__dirname, 'rules')),
@@ -175,7 +175,7 @@ function loadRules(gen) {
 }
 
 function buildGen(gen, path, fm) {
-  const report = { gen, pokedexRows: 0, missingHeaders: [], rescued: [], unresolved: [], droppedStat: 0 };
+  const report = { gen, pokedexRows: 0, missingHeaders: [], rescued: [], unresolved: [], droppedStat: 0, renamedSpecies: [], unmatchedMoveSpecies: [], dexWithoutMoves: [] };
   const wb = readWorkbook(path);
 
   // --- pokedex ---
@@ -194,22 +194,71 @@ function buildGen(gen, path, fm) {
     });
   report.pokedexRows = pokedex.length;
 
-  // --- move list (cleaned) ---
+  // Reconcile move-sheet names to dex names. engine.js and draft.js both join by
+  // dexName.toLowerCase(), so the movelist MUST be keyed by the dex spelling.
+  // Some sheets spell a few names differently (Nidoran(f) vs Nidoran-F,
+  // Farfetch'd vs Farfetchd, ♀/♂ vs -F/-M). Normalise to bridge the two sides.
+  const normKey = (s) => String(s || '').toLowerCase()
+    .replace(/\u2640/g, 'f').replace(/\u2642/g, 'm')   // ♀ ♂
+    .replace(/[^a-z0-9]/g, '');
+  const dexByNorm = new Map();
+  for (const p of pokedex) dexByNorm.set(normKey(p.name), p.name);
+
+  // --- move list (cleaned + name-reconciled) ---
   const mlSheet = findSheet(wb, /move/i);
   const movelist = {};
+  const seenUnmatched = new Set();
   if (mlSheet) {
     const rows2 = XLSX.utils.sheet_to_json(mlSheet, { defval: '' });
     for (const r of rows2) {
-      const k = String(r['Pokémon'] || '').trim().toLowerCase();
+      const rawSpecies = String(r['Pokémon'] || '').trim();
       const rawMove = String(r['Move'] || '').trim();
-      if (!k || !rawMove) continue;
+      if (!rawSpecies || !rawMove) continue;
+      const dexName = dexByNorm.get(normKey(rawSpecies));
+      if (!dexName) {
+        if (!seenUnmatched.has(rawSpecies)) { seenUnmatched.add(rawSpecies); report.unmatchedMoveSpecies.push(rawSpecies); }
+        continue;
+      }
+      if (dexName.toLowerCase() !== rawSpecies.toLowerCase()
+          && !report.renamedSpecies.some((x) => x.from === rawSpecies)) {
+        report.renamedSpecies.push({ from: rawSpecies, to: dexName });
+      }
+      const key = dexName.toLowerCase();
       const { move, status, from } = cleanMoveCell(rawMove);
       if (status === 'dropped-stat') { report.droppedStat++; continue; }
-      if (status === 'unresolved') { report.unresolved.push({ species: k, raw: from }); continue; }
-      if (status === 'rescued') report.rescued.push({ species: k, from, to: move });
-      (movelist[k] ||= []).push({ move, source: String(r['Source'] || '').trim() });
+      if (status === 'unresolved') { report.unresolved.push({ species: key, raw: from }); continue; }
+      if (status === 'rescued') report.rescued.push({ species: key, from, to: move });
+      (movelist[key] ||= []).push({ move, source: String(r['Source'] || '').trim() });
     }
   }
+  // --- supplemental moves (gaps not present in the Excel move sheet) ---------
+  // Merged de-duplicated by move+source, so it self-deactivates once the same
+  // rows are added to the Excel. Keys are dexName.toLowerCase().
+  const suppPath = join(__dirname, 'supplemental', `gen${gen}-moves.json`);
+  if (existsSync(suppPath)) {
+    const supp = JSON.parse(readFileSync(suppPath, 'utf8'));
+    for (const [key, list] of Object.entries(supp)) {
+      if (key.startsWith('_') || !Array.isArray(list)) continue;
+      const dexName = dexByNorm.get(normKey(key));
+      if (!dexName) { report.unmatchedMoveSpecies.push(`(supplemental) ${key}`); continue; }
+      const realKey = dexName.toLowerCase();
+      const existing = (movelist[realKey] ||= []);
+      const have = new Set(existing.map((m) => `${m.move}\u0000${m.source}`));
+      let added = 0;
+      for (const m of list) {
+        const { move, status } = cleanMoveCell(String(m.move || ''));
+        if (status === 'dropped-stat' || status === 'unresolved' || !move) continue;
+        const sig = `${move}\u0000${m.source || ''}`;
+        if (have.has(sig)) continue;
+        existing.push({ move, source: String(m.source || '').trim() });
+        have.add(sig); added++;
+      }
+      if (added) report.supplemented = (report.supplemented || []).concat([{ species: realKey, added }]);
+    }
+  }
+
+  // dex species that ended up with no moves at all (genuine data gaps)
+  for (const p of pokedex) if (!movelist[p.name.toLowerCase()] || !movelist[p.name.toLowerCase()].length) report.dexWithoutMoves.push(`${p.num} ${p.name}`);
 
   // --- fold in the engine rules (clues/categories/difficulties/multiClue) ---
   const rules = loadRules(gen);
@@ -247,6 +296,23 @@ const TYPECHART_GEN2 = {
   Steel:    { Fire: 0.5, Water: 0.5, Electric: 0.5, Ice: 2, Rock: 2, Steel: 0.5 },
 };
 const GEN2_TYPES = Object.keys(TYPECHART_GEN2);
+
+// Gen 1 (RBY) chart, DERIVED from the Gen 2 chart to minimise transcription
+// error: drop Dark & Steel (they don't exist in Gen 1), then apply the
+// well-known Gen-1-specific differences. PLEASE VERIFY a few edge matchups
+// (e.g. Ice↔Fire) — the famous Gen-1 quirks below are intentional.
+function deriveGen1Chart(gen2) {
+  const chart = JSON.parse(JSON.stringify(gen2));
+  delete chart.Dark; delete chart.Steel;                 // no such attacker types
+  for (const row of Object.values(chart)) { delete row.Dark; delete row.Steel; } // nor defenders
+  chart.Bug.Poison = 2;          // Gen 1: Bug is super-effective on Poison
+  delete chart.Bug.Ghost;        // Gen 1: Bug→Ghost was neutral
+  chart.Poison.Bug = 2;          // Gen 1: Poison is super-effective on Bug
+  chart.Ghost.Psychic = 0;       // Gen 1 bug: Ghost→Psychic had "no effect"
+  return chart;
+}
+const TYPECHART_GEN1 = deriveGen1Chart(TYPECHART_GEN2);
+const GEN1_TYPES = Object.keys(TYPECHART_GEN1);
 
 function validateTypechart(chart, types) {
   const problems = [];
@@ -304,19 +370,34 @@ function main() {
       `${report.droppedStat} stat-fragments dropped, ` +
       `${report.rescued.length} moves rescued from bleed, ` +
       `${report.unresolved.length} unresolved (need Excel fix).`);
+    if (report.renamedSpecies.length) {
+      console.log(`  name-reconciled ${report.renamedSpecies.length}: ` +
+        report.renamedSpecies.map((x) => `${x.from}→${x.to}`).join(', '));
+    }
+    if (report.unmatchedMoveSpecies.length) {
+      console.error(`  !! move rows with no matching dex name: ${report.unmatchedMoveSpecies.join(', ')}`);
+    }
+    if (report.supplemented && report.supplemented.length) {
+      console.log(`  supplemented: ${report.supplemented.map((x) => `${x.species} (+${x.added})`).join(', ')}`);
+    }
+    if (report.dexWithoutMoves.length) {
+      console.error(`  !! dex species with NO moves: ${report.dexWithoutMoves.join(', ')}`);
+    }
     if (report.missingHeaders.length) {
       console.error(`  !! MISSING HEADERS: ${report.missingHeaders.join(' | ')}`);
     }
   }
 
-  // Gen 2 type chart (the only chart Draft needs right now)
-  const tcProblems = validateTypechart(TYPECHART_GEN2, GEN2_TYPES);
-  if (tcProblems.length) {
-    console.error('  !! TYPECHART PROBLEMS:\n   ' + tcProblems.join('\n   '));
-    throw new Error('typechart-gen2 failed validation');
+  // Gen 2 type chart (the one Draft needs now) + Gen 1 (derived; verify)
+  for (const [g, chart, types] of [[2, TYPECHART_GEN2, GEN2_TYPES], [1, TYPECHART_GEN1, GEN1_TYPES]]) {
+    const problems = validateTypechart(chart, types);
+    if (problems.length) {
+      console.error(`  !! TYPECHART gen${g} PROBLEMS:\n   ` + problems.join('\n   '));
+      throw new Error(`typechart-gen${g} failed validation`);
+    }
+    writeJson(`typechart-gen${g}.json`, chart);
+    console.log(`typechart-gen${g}.json: ${types.length} types, validated.`);
   }
-  writeJson('typechart-gen2.json', TYPECHART_GEN2);
-  console.log(`\ntypechart-gen2.json: ${GEN2_TYPES.length} types, validated.`);
 
   writeJson('config.json', buildConfig());
   console.log('config.json written.');
@@ -324,16 +405,20 @@ function main() {
   // data report -> file the human can act on (fix the Excel at source)
   const rescued = reports.flatMap((r) => r.rescued.map((a) => ({ gen: r.gen, ...a })));
   const unresolved = reports.flatMap((r) => r.unresolved.map((a) => ({ gen: r.gen, ...a })));
+  const renamed = reports.flatMap((r) => r.renamedSpecies.map((a) => ({ gen: r.gen, ...a })));
+  const dexWithoutMoves = reports.flatMap((r) => r.dexWithoutMoves.map((s) => ({ gen: r.gen, species: s })));
+  const unmatchedMoveSpecies = reports.flatMap((r) => r.unmatchedMoveSpecies.map((s) => ({ gen: r.gen, species: s })));
   writeJson('_data-report.json', {
     generatedAt: new Date().toISOString(),
-    note: 'Move-list cleaning report. `rescued` = a real move was recovered from ' +
-          'a bled/annotated cell (verify these look right). `unresolved` = could ' +
-          'not safely recover a move; fix at the Excel source and re-run (SPEC §7 / ' +
-          'MANIFEST §3). Not produced here: movestats-gen{1,2}.json, typechart-gen1.json.',
-    rescued,
-    unresolved,
+    note: 'Move-list cleaning + name reconciliation. `rescued` = move recovered from ' +
+          'a bled cell. `unresolved` = couldn\'t recover (fix at Excel source). ' +
+          '`renamedSpecies` = move-sheet name mapped to the dex spelling. ' +
+          '`dexWithoutMoves` = dex Pokémon with zero moves found (genuine data gap). ' +
+          '`removedNonMoves` (from generate-movestats) = movelist entries that aren\'t ' +
+          'real moves. typechart-gen1.json is DERIVED — verify edge matchups.',
+    rescued, unresolved, renamed, dexWithoutMoves, unmatchedMoveSpecies,
   });
-  console.log(`\n_data-report.json: ${rescued.length} rescued, ${unresolved.length} unresolved.`);
+  console.log(`\n_data-report.json: ${rescued.length} rescued, ${unresolved.length} unresolved, ${renamed.length} renamed, ${dexWithoutMoves.length} dex w/o moves.`);
   console.log('\nDONE.');
 }
 
