@@ -1,8 +1,13 @@
 /**
  * @file        docs/js/modes.js
- * @version     1.0.0
+ * @version     1.1.0
  * @updated     2026-06-23
  * @changelog
+ *   1.1.0 — Split Draft into two menu entries: Draft Battle (free-play, random,
+ *           throne) and Daily Challenge (same seeded draft for everyone, one
+ *           attempt/day). Both lazy-load the SAME draftbattle.js controller and
+ *           differ only by `params.variant` ('freeplay' | 'daily'), which the
+ *           shell passes through to the factory.
  *   1.0.0 — Initial mode registry. One entry per screen controller. `enabled`
  *           gates what the menu offers while modes are still being ported, so
  *           the shell is testable before every controller exists. `load()` is a
@@ -71,8 +76,14 @@ export const MODES = [
   },
   {
     id: 'draftbattle', label: 'Draft Battle', icon: '⚔️', group: 'Draft',
-    blurb: 'Draft a Frankenstein Pokémon and battle for the throne. (Gen 2)',
-    enabled: false, gens: [2],
+    blurb: 'Free play: a fresh random draft each time. Battle the thrones. (Gen 2)',
+    enabled: false, gens: [2], params: { variant: 'freeplay' },
+    load: () => import('./modes/draftbattle.js'),
+  },
+  {
+    id: 'dailychallenge', label: 'Daily Challenge', icon: '📅', group: 'Draft',
+    blurb: 'Everyone drafts from the same seeded Pokémon. One attempt a day. (Gen 2)',
+    enabled: false, gens: [2], params: { variant: 'daily' },
     load: () => import('./modes/draftbattle.js'),
   },
 ];

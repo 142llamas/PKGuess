@@ -1,8 +1,10 @@
 /**
  * @file        docs/js/main.js
- * @version     1.0.0
+ * @version     1.1.0
  * @updated     2026-06-23
  * @changelog
+ *   1.1.0 — Pass mode.params (e.g. Draft variant 'freeplay'|'daily') through to
+ *           the controller factory so two menu entries can share one controller.
  *   1.0.0 — Initial app shell. Loads config.json (falls back to a built-in
  *           default so the skeleton runs before Phase 2 generates data),
  *           renders the mode-select screen from modes.js, routes on the URL
@@ -200,6 +202,7 @@ async function launchMode(mode, gen) {
     mount: surface,
     config: CONFIG,
     data,
+    params: mode.params || {},
     onExit: () => navigate('#/'),
   }) || null;
 }

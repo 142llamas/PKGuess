@@ -12,18 +12,26 @@ table is the index. Status: ✅ done & tested · 🟡 in progress · ⬜ not sta
 | docs/.nojekyll | — | ✅ | Empty; keeps Pages from stripping `js/`-prefixed paths. |
 | docs/css/styles.css | 1.0.0 | ✅ | Section A = new launcher/shell styles; Section B = canonical game CSS verbatim (tokens + all mode screens). 732 lines. |
 | docs/js/lib/dom.js | 1.0.0 | ✅ | `el()`, `clear`, `mount`, `on`. No global state. |
-| docs/js/modes.js | 1.0.0 | ✅ | Registry (7 modes), `getMode`, `resolveFactory`. Guess modes gens [1,2]; Draft [2]. All `enabled:false` until ported. |
-| docs/js/main.js | 1.0.0 | ✅ | Config load (graceful default), menu render, hash router `#/<mode>/<gen>`, lazy launch, friendly fallbacks. Tested under jsdom. |
+| docs/js/modes.js | 1.1.0 | ✅ | Registry (8 entries). Draft split: **Draft Battle** (free-play, random) + **Daily Challenge** (same seeded draft); both lazy-load draftbattle.js, differ by `params.variant`. All `enabled:false` until ported. |
+| docs/js/main.js | 1.1.0 | ✅ | Config load, menu render, hash router `#/<mode>/<gen>`, lazy launch, friendly fallbacks. Now passes `mode.params` to the controller. Tested under jsdom (8 cards, real config load). |
 
-## Data pipeline & data (Phase 2 — NEXT)
+## Data pipeline & data (Phase 2 — DONE this pass, except 2b below)
 | File | Version | Status | Notes |
 |------|--------:|--------|-------|
-| tools/generate-data.mjs | — | ⬜ | Excel → data/*.json with SPEC §7 cleaning; completeness-gate on movestats. |
-| docs/data/config.json | — | ⬜ | Difficulties, categories, defaults, modes list. |
-| docs/data/gen1.json / gen2.json | — | ⬜ | Generated from both Excels. |
-| docs/data/movelist-gen{1,2}.json | — | ⬜ | Full movepools, cleaned. |
-| docs/data/movestats-gen{1,2}.json | — | ⬜ | Derived; `cat` computed from type. |
-| docs/data/typechart-gen{1,2}.json | — | ⬜ | Derived. |
+| tools/generate-data.mjs | 1.0.0 | ✅ | Excel → data/*.json. Reproduces the game's own `fm` header→key map verbatim; cleans the move list (drops stat-block bleed, rescues annotation bleed, collapses double-spaces, fixes known typos); writes `_data-report.json`. Needs `npm install xlsx`. |
+| tools/rules/gen1.rules.json / gen2.rules.json | 1.0.0 | ✅ | Per-gen engine config (clues/categories/difficulties/multiClue) lifted verbatim from the canonical HTML; folded into gen{N}.json by the pipeline. |
+| docs/data/config.json | 1.0.0 | ✅ | App shell: title, gens, genLabels, mpDefaults, modes list. |
+| docs/data/gen1.json | gen | ✅ | 151 mons + clues/categories/difficulties/multiClue. (Excel is richer than old inline — see note below.) |
+| docs/data/gen2.json | gen | ✅ | 251 mons + rules. **0 cell diffs vs the shipped game's inline data.** |
+| docs/data/movelist-gen{1,2}.json | gen | ✅ | Cleaned movepools `{speciesLower:[{move,source}]}`. 175 stat-fragments dropped, 78 bled moves rescued, 2 junk cells unresolved (phanpy/donphan). |
+| docs/data/typechart-gen2.json | gen | ✅ | GSC-era 17-type chart, self-validated. Only Draft (Gen 2) uses it. |
+| docs/data/_data-report.json | gen | ✅ | Move-cleaning audit: `rescued` (verify) + `unresolved` (fix at Excel source). |
+
+### Phase 2b (remaining — needed by Draft, not by Guess)
+| File | Status | Notes |
+|------|--------|-------|
+| docs/data/movestats-gen{1,2}.json | ⬜ | Per-move type/bp/acc/prio from a vetted source, with a **completeness gate** (fail loudly if any movepool move lacks stats — this is what catches the last garbled cells). |
+| docs/data/typechart-gen1.json | ⬜ | Deferred; only a future Gen 1 Draft would need it. |
 
 ## Guess modes (Phase 3)
 | File | Status | Notes |
@@ -52,6 +60,16 @@ table is the index. Status: ✅ done & tested · 🟡 in progress · ⬜ not sta
 | database.rules.json | ⬜ |
 | README.md | ⬜ |
 | tools/test/*.mjs | ⬜ (unit tests for engine/sim/draft/mp-rules) |
+
+## Notes
+- **Gen 1 Excel ≠ old inline data (expected).** The `v5` Gen 1 workbook is newer
+  and richer than the Gen 1 data baked into the shipped launcher: `exampleMoveset`
+  and `tmHmMove` are populated in the Excel but were empty inline, and
+  `evoMethod`/`compMoveset*`/`evolvesFrom` differ on some entries (540 cells).
+  Per "Excel is the source of truth," the generated `gen1.json` is authoritative.
+  Gen 2 matched the inline data exactly (0 diffs).
+- **Unresolved move cells (2):** phanpy & donphan have a literal `"but why?)"`
+  in the Move column — correctly dropped. Optionally fix at the Excel source.
 
 ## Inputs held this session
 Canonical HTML (launcher wrapping two inline-data games), Gen 1 Excel
