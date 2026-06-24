@@ -227,6 +227,11 @@ function buildGen(gen, path, fm) {
       const { move, status, from } = cleanMoveCell(rawMove);
       if (status === 'dropped-stat') { report.droppedStat++; continue; }
       if (status === 'unresolved') { report.unresolved.push({ species: key, raw: from }); continue; }
+      // A "move" whose name is actually a Pokémon species (e.g. the bled
+      // "Gyarados") is junk — no Gen 1/2 move shares a species name. Drop it.
+      // (Real moves like Counter/Bide stay: the guess game needs the full
+      // learnset; draft excludes non-battle moves at draft time via movestats.)
+      if (dexByNorm.has(normKey(move))) { (report.removedNonMoves ||= []).push({ species: key, move }); continue; }
       if (status === 'rescued') report.rescued.push({ species: key, from, to: move });
       (movelist[key] ||= []).push({ move, source: String(r['Source'] || '').trim() });
     }

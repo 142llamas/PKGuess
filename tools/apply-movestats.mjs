@@ -64,63 +64,63 @@ function parseBp(v) {
   return Number.isFinite(n) ? n : 0;
 }
 
+function buildMovestatsFromCsv(csvPath) {
+  const rows = parseCsv(readFileSync(csvPath, 'utf8'));
+  const ms = {};
+  for (const r of rows) {
+    const id = r.moveId && r.moveId.trim();
+    if (!id) continue;
+    const entry = { name: r.name, type: r.type, bp: parseBp(r.bp), acc: parseAcc(r.acc), prio: parseInt(r.prio, 10) || 0, cat: r.cat };
+    if ((r.ohko || '').toLowerCase() === 'yes') entry.ohko = true;
+    if ((r.highCrit || '').toLowerCase() === 'yes') entry.highCrit = true;
+    ms[id] = entry;
+  }
+  return ms;
+}
+
+// Report (do not remove) movelist moves that have no movestats — these are real
+// learnset moves that simply aren't draftable (e.g. Counter/Bide that were
+// removed from movestats). The guess game still uses them; draft.js skips them.
+function nonDraftable(mlPath, movestats) {
+  if (!existsSync(mlPath)) return [];
+  const ml = JSON.parse(readFileSync(mlPath, 'utf8'));
+  const set = new Set();
+  for (const arr of Object.values(ml)) for (const m of arr) if (!movestats[moveId(m.move)]) set.add(m.move);
+  return [...set];
+}
+
 function main() {
   const summary = [];
-  for (const gen of [1, 2]) {
-    const csvPath = join(OUT, `movestats-gen${gen}.review.csv`);
-    if (!existsSync(csvPath)) { console.log(`  (skip gen${gen}: no curated CSV at ${csvPath})`); continue; }
-    const rows = parseCsv(readFileSync(csvPath, 'utf8'));
 
-    const movestats = {};
-    for (const r of rows) {
-      const id = r.moveId && r.moveId.trim();
-      if (!id) continue;
-      const entry = {
-        name: r.name, type: r.type,
-        bp: parseBp(r.bp), acc: parseAcc(r.acc),
-        prio: parseInt(r.prio, 10) || 0, cat: r.cat,
-      };
-      if ((r.ohko || '').toLowerCase() === 'yes') entry.ohko = true;
-      if ((r.highCrit || '').toLowerCase() === 'yes') entry.highCrit = true;
-      movestats[id] = entry;
-    }
-    writeFileSync(join(OUT, `movestats-gen${gen}.json`), JSON.stringify(movestats));
+  // --- GEN 2: curated CSV is the source of truth --------------------------
+  const csv2 = join(OUT, 'movestats-gen2.review.csv');
+  if (!existsSync(csv2)) { console.error(`missing ${csv2}`); process.exit(1); }
+  const ms2 = buildMovestatsFromCsv(csv2);
+  writeFileSync(join(OUT, 'movestats-gen2.json'), JSON.stringify(ms2));
+  const nd2 = nonDraftable(join(OUT, 'movelist-gen2.json'), ms2);
+  console.log(`GEN2: ${Object.keys(ms2).length} movestats (curated). Non-draftable real moves kept in movelist: ${nd2.join(', ') || '\u2014'}`);
+  summary.push({ gen: 2, source: 'curated-csv', moves: Object.keys(ms2).length, nonDraftable: nd2 });
 
-    // reconcile movelist: drop any move not present in the curated movestats
-    const mlPath = join(OUT, `movelist-gen${gen}.json`);
-    const removed = [];
-    if (existsSync(mlPath)) {
-      const ml = JSON.parse(readFileSync(mlPath, 'utf8'));
-      for (const [sp, arr] of Object.entries(ml)) {
-        const kept = arr.filter((m) => {
-          if (movestats[moveId(m.move)]) return true;
-          removed.push({ species: sp, move: m.move });
-          return false;
-        });
-        ml[sp] = kept;
-      }
-      writeFileSync(mlPath, JSON.stringify(ml));
-    }
-
-    // gate: confirm every remaining movelist move resolves
-    const ml = JSON.parse(readFileSync(mlPath, 'utf8'));
-    const unresolved = new Set();
-    for (const arr of Object.values(ml)) for (const m of arr) if (!movestats[moveId(m.move)]) unresolved.add(m.move);
-
-    const removedUnique = [...new Set(removed.map((r) => r.move))];
-    summary.push({ gen, moves: Object.keys(movestats).length, removedFromMovelist: removed.length, removedUnique, unresolved: [...unresolved] });
-    console.log(`GEN${gen}: ${Object.keys(movestats).length} movestats; ` +
-      `removed ${removed.length} movelist entries (${removedUnique.length} distinct: ${removedUnique.join(', ') || '—'}); ` +
-      `unresolved after reconcile: ${unresolved.size}`);
-    if (unresolved.size) console.error('  !! still unresolved:', [...unresolved]);
+  // --- GEN 1: derived from GEN 2 (mirrors Gen 2 values; only covers moves --
+  // --- that exist in Gen 2, so Gen-2-introduced moves are naturally absent). -
+  const ml1Path = join(OUT, 'movelist-gen1.json');
+  const ms1 = {};
+  if (existsSync(ml1Path)) {
+    const ml1 = JSON.parse(readFileSync(ml1Path, 'utf8'));
+    const used = new Set();
+    for (const arr of Object.values(ml1)) for (const m of arr) used.add(moveId(m.move));
+    for (const id of used) if (ms2[id]) ms1[id] = { ...ms2[id] };
   }
+  writeFileSync(join(OUT, 'movestats-gen1.json'), JSON.stringify(ms1));
+  const nd1 = nonDraftable(ml1Path, ms1);
+  console.log(`GEN1: ${Object.keys(ms1).length} movestats (derived from Gen 2). Non-draftable real moves kept in movelist: ${nd1.join(', ') || '\u2014'}`);
+  summary.push({ gen: 1, source: 'derived-from-gen2', moves: Object.keys(ms1).length, nonDraftable: nd1 });
 
-  // fold into the data report
   const repPath = join(OUT, '_data-report.json');
   const report = existsSync(repPath) ? JSON.parse(readFileSync(repPath, 'utf8')) : {};
   report.curatedMovestats = { appliedAt: new Date().toISOString(), perGen: summary };
   writeFileSync(repPath, JSON.stringify(report, null, 0));
-  console.log('\nDONE. movestats JSON written from curated CSVs; movelists reconciled.');
+  console.log('\nDONE. Movestats written (Gen 2 curated, Gen 1 derived). Movelists left intact (full learnsets for the guess game).');
 }
 
 main();

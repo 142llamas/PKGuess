@@ -198,13 +198,23 @@ async function launchMode(mode, gen) {
 
   const factory = resolveFactory(mod);
   const surface = clear(appRoot);
-  activeController = factory({
-    mount: surface,
-    config: CONFIG,
-    data,
-    params: mode.params || {},
-    onExit: () => navigate('#/'),
-  }) || null;
+  try {
+    activeController = factory({
+      mount: surface,
+      config: CONFIG,
+      data,
+      params: mode.params || {},
+      onExit: () => navigate('#/'),
+    }) || null;
+  } catch (err) {
+    screenShell(
+      el('header', { class: 'shell-header' }, el('h1', { class: 'shell-title' }, mode.label)),
+      backBar(el('p', { class: 'placeholder-text' },
+        `Something went wrong starting ${mode.label} (${String(err && err.message || err)}). ` +
+        `If you just updated the site, the data files for Gen ${gen} may be out of date — ` +
+        `re-run the pipeline and re-upload docs/data/.`)),
+    );
+  }
 }
 
 async function fetchGenData(gen) {

@@ -53,7 +53,7 @@ export const MODES = [
   {
     id: 'safari', label: 'Safari Zone', icon: '🏕️', group: 'Guess',
     blurb: 'One shared budget across many Pokémon — score is how many you catch.',
-    enabled: false, gens: [1, 2],
+    enabled: true, gens: [1, 2],
     load: () => import('./modes/safari.js'),
   },
   {

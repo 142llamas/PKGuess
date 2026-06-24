@@ -22,6 +22,23 @@ export function createSingle({ mount, config, data, params = {}, onExit }) {
   const root = el('div', { class: 'sp-content' });
   clear(mount).appendChild(root);
 
+  // Guard: this mode needs the clue/difficulty config folded into gen{N}.json by
+  // the data pipeline. If it's absent (e.g. a stale data file was deployed),
+  // show a clear message instead of throwing into a blank screen.
+  if (!Array.isArray(data.difficulties) || !data.difficulties.length
+      || !Array.isArray(data.clues) || !data.clues.length
+      || !Array.isArray(data.categories) || !data.categories.length) {
+    root.append(
+      el('h2', { class: 'sp-section-title' }, 'Data needs updating'),
+      el('p', { class: 'placeholder-text' },
+        `This generation's data file is missing its clue/difficulty configuration. `
+        + `Re-run the data pipeline (tools/generate-data.mjs) and re-upload `
+        + `docs/data/${data.id || 'genN'}.json, then reload.`),
+      el('button', { class: 'btn-secondary', onClick: () => onExit && onExit() }, '\u2190 Back'),
+    );
+    return { destroy() { clear(mount); } };
+  }
+
   const cats = data.categories || [];
   const clues = data.clues || [];
   const catById = new Map(cats.map((c) => [c.id, c]));
