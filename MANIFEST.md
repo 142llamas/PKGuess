@@ -10,10 +10,10 @@ table is the index. Status: ✅ done & tested · 🟡 in progress · ⬜ not sta
 |------|--------:|--------|-------|
 | docs/index.html | 1.0.0 | ✅ | Loads fonts + styles.css + main.js (module). Relative paths for Pages subpath. |
 | docs/.nojekyll | — | ✅ | Empty; keeps Pages from stripping `js/`-prefixed paths. |
-| docs/css/styles.css | 1.2.0 | ✅ | Section A launcher/shell + B canonical game CSS + C single-player + D Pokédex additions. |
+| docs/css/styles.css | 1.2.0 | ✅ | Sections A–E: shell, canonical game CSS, single-player, Pokédex, Safari. |
 | docs/js/lib/dom.js | 1.0.0 | ✅ | `el()`, `clear`, `mount`, `on`. No global state. |
 | docs/js/modes.js | 1.1.0 | ✅ | Registry (8 entries). Draft split: **Draft Battle** (free-play, random) + **Daily Challenge** (same seeded draft); both lazy-load draftbattle.js, differ by `params.variant`. All `enabled:false` until ported. |
-| docs/js/main.js | 1.1.0 | ✅ | Config load, menu render, hash router `#/<mode>/<gen>`, lazy launch, friendly fallbacks. Now passes `mode.params` to the controller. Tested under jsdom (8 cards, real config load). |
+| docs/js/main.js | 1.2.0 | ✅ | (controller try/catch added)  Config load, menu render, hash router `#/<mode>/<gen>`, lazy launch, friendly fallbacks. Now passes `mode.params` to the controller. Tested under jsdom (8 cards, real config load). |
 
 ## Data pipeline & data (Phase 2 — DONE this pass, except 2b below)
 | File | Version | Status | Notes |
@@ -31,9 +31,10 @@ table is the index. Status: ✅ done & tested · 🟡 in progress · ⬜ not sta
 | File | Version | Status | Notes |
 |------|--------:|--------|-------|
 | tools/generate-movestats.mjs | 1.0.0 | ✅ | **Bootstrap only** — PokeAPI → initial movestats + review CSVs. Superseded by apply-movestats once curated. |
-| tools/apply-movestats.mjs | 1.0.0 | ✅ | Curated `movestats-gen{N}.review.csv` → `movestats-gen{N}.json`, and reconciles movelists (drops moves you deleted so the gate stays satisfied). Run after editing the CSVs. |
-| docs/data/movestats-gen1.json | curated | ✅ | 163 moves (from your CSV). Variable-power moves still bp 0; only matters for a future Gen 1 Draft. |
-| docs/data/movestats-gen2.json | curated | ✅ | 244 moves. Your edits applied: bp set on 12 variable moves; Bide/Counter/Beat Up/Mirror Coat/Present deleted (and pulled from all movelists, 228 entries); OHKO moves bp 0 + `ohko` flag. Drives sim correctly; no empty movepools. |
+| tools/apply-movestats.mjs | 1.1.0 | ✅ | Gen 2 movestats from curated CSV; **Gen 1 movestats derived from Gen 2** (mirrors values; Gen-2-only + deleted moves naturally absent). Does NOT strip movelists — see note. |
+| docs/data/movestats-gen1.json | derived | ✅ | 160 moves, mirrors Gen 2 exactly. Per user: "Gen 1 follows Gen 2." |
+| docs/data/movestats-gen2.json | curated | ✅ | 244 moves. Bide/Counter/Beat Up/Mirror Coat/Present excluded → not draftable. |
+| docs/data/movelist-gen{1,2}.json | gen | ✅ | **Full real-move learnsets** (kept for the guess game's moveset clues). Junk like the bled "Gyarados" is dropped (species-name = not a move); real moves without movestats (Counter, Bide…) stay here and are simply excluded from Draft at draft time. |
 | docs/data/movestats-gen{1,2}.review.csv | curated | ✅ | Your edited CSVs — the source of record for apply-movestats. |
 | docs/data/typechart-gen1.json | gen | ✅ | 15 types, **derived** from the Gen 2 chart (Dark/Steel removed; Bug↔Poison 2×, Ghost→Psychic 0). Please verify edge matchups. |
 
@@ -41,10 +42,20 @@ table is the index. Status: ✅ done & tested · 🟡 in progress · ⬜ not sta
 | File | Version | Status | Notes |
 |------|--------:|--------|-------|
 | docs/js/lib/engine.js | 1.0.0 | ✅ | DOM-free `PokeGuessRound` + `normalizeName`. Faithful port of the canonical Gen 2 round logic (pools, availability/locks/exhaustion, rising+discounted costs, purchase limits, all clue-value specials, category diversity, weighted random reveal, guess+score). **One engine, both gens:** ids ≤26 are identical across gens (literal); moveset clues (ids 27-34 diverge) resolve by `special`/`field`. Tested headless vs real gen1 + gen2 data (26/27 assertions; the 1 was a bad test fixture, not a bug). |
-| docs/js/modes/single.js | 1.0.0 | ✅ | Single-player screen on engine.js: config (difficulty/guess-mode/clue-mode/diversity/custom) → game (clue grid, points bar, autocomplete guessing, revealed summary, forced phases) → win/loss summary. No rules of its own. Tested under jsdom (config→buy→wrong→win→summary; shell→router→mode integration). **Mode enabled.** |
+| docs/js/modes/single.js | 1.1.0 | ✅ | Single-player on engine.js (config → game → summary). **1.1.0:** guards stale/missing clue-difficulty data with a message instead of a blank screen; main.js now also try/catches controllers. Tested under jsdom. **Enabled.** |
 | docs/js/modes/pokedex.js | 1.0.0 | ✅ | Pokédex/study reference: searchable, sortable (#/A–Z) list; catch tracker (localStorage); detail view (info, type matchups, comp movesets, full move list). Reads movelist. Tested under jsdom (11 assertions). **Mode enabled.** |
-| docs/js/modes/{safari,victoryroad}.js | — | ⬜ | Reuse engine.js + dex data. |
+| docs/js/modes/safari.js | 1.0.0 | ✅ | Safari Zone: shared budget across a shuffled pool; 2 free start clues (Generation + BST Range); bait (random reveal), run (skip), wrong −1; ends on 0 pts / pool exhausted; score = caught; catch tracker shared w/ Pokédex. Tested under jsdom (14 assertions). **Enabled.** |
+| docs/js/modes/victoryroad.js | — | ⬜ | Endless streak gauntlet (next). |
 | docs/js/lib/mp-rules.js + docs/js/modes/multiplayer.js | ⬜ | Hot-seat first. |
+
+### Draft structure (Phase 5) — DECIDED: 6×2
+Draft shows **6 Pokémon; the player takes ~2 aspects from each** to assemble the 12
+(6 stats / 2 types / 4 moves) — framed as "build one Pokémon from a team of six."
+Chosen over the vetted engine's 12-spins-one-aspect model (less of a slog; thematic
+team-of-6). Accepted consequence: rerolls reveal new Pokémon, so taking 1 aspect then
+rerolling can pull from MORE than 6 species before all 12 are filled — fine by design.
+**Implication:** `draft.js` v0.4.1 (vetted 12-spin engine) must be reworked for 6×2 and
+re-verified; applies to both free-play and daily.
 
 ### Resolved: Gen 1 vs Gen 2 guess split (SPEC §11 Q1) — CONFIRMED
 ONE engine + ONE set of controllers, driven by `gen{N}.json`. **Gen 1 adopts Gen 2's

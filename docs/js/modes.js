@@ -45,7 +45,7 @@ export const MODES = [
     load: () => import('./modes/single.js'),
   },
   {
-    id: 'pokedex', label: 'Pokédex', icon: '📖', group: 'Guess',
+    id: 'pokedex', label: 'Pokédex', icon: '📖', group: 'Reference',
     blurb: 'Browse and quiz yourself on every Pokémon and its clue data.',
     enabled: true, gens: [1, 2],
     load: () => import('./modes/pokedex.js'),
@@ -69,7 +69,7 @@ export const MODES = [
     load: () => import('./modes/multiplayer.js'),
   },
   {
-    id: 'leaderboard', label: 'Leaderboard', icon: '🏆', group: 'Guess',
+    id: 'leaderboard', label: 'Leaderboard', icon: '🏆', group: 'Reference',
     blurb: 'Top scores per generation and mode.',
     enabled: false, gens: [1, 2],
     load: () => import('./modes/leaderboard.js'),
