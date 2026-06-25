@@ -1,17 +1,49 @@
-
 /*
  * @file        docs/css/styles.css
- * @version     1.0.0
- * @updated     2026-06-23
+ * @version     1.3.0
+ * @updated     2026-06-24
  * @changelog
- *   1.0.0 — Shared stylesheet for the modular build. Section A is NEW: the
- *           app shell + mode-select launcher (the modular site needs a single
- *           three-game launcher the canonical per-game HTML never had). Section
- *           B is the canonical game CSS extracted verbatim from the offline HTML
- *           (tokens + every mode's screen styles) so ported modes inherit the
- *           exact look from one source of truth. Do not fork the look per mode.
+ *   1.3.0 — Moved :root variables and global reset to the very top of the file
+ *           so Section A shell styles can reference them correctly. Previously
+ *           Section A appeared before the :root block; because the browser
+ *           resolves var() at computed-style time (not parse time) this was
+ *           technically fine, but a CDN/caching quirk on GitHub Pages caused
+ *           some clients to render with unresolved variables (black screen /
+ *           invisible content). Moving :root first eliminates the ambiguity.
+ *   1.2.0 — Added Sections C–E (single-player, Pokedex, Safari).
+ *   1.0.0 — Sections A (shell) + B (canonical game CSS).
  * ---------------------------------------------------------------------------
  */
+
+/* ===========================================================================
+ * DESIGN TOKENS & GLOBAL RESET  (must come first)
+ * ======================================================================== */
+:root{
+  --bg-deep:#0b1622;--bg-card:#162233;--bg-elevated:#1e3048;--bg-hover:#243a57;
+  --accent-gold:#ffd700;--accent-gold-dim:#c9a800;--accent-gold-glow:rgba(255,215,0,0.2);
+  --text-primary:#f0f4ff;--text-secondary:#7fa0be;--text-dim:#4a6680;
+  --border-subtle:rgba(255,215,0,0.15);--border-card:rgba(255,255,255,0.08);
+  --cat-habitat:#27a447;--cat-habitat-bg:rgba(39,164,71,0.13);
+  --cat-evolution:#3a7fdb;--cat-evolution-bg:rgba(58,127,219,0.13);
+  --cat-type:#d04830;--cat-type-bg:rgba(208,72,48,0.13);
+  --cat-stats:#8b3dcc;--cat-stats-bg:rgba(139,61,204,0.13);
+  --cat-npc:#1aabab;--cat-npc-bg:rgba(26,171,171,0.13);
+  --cat-movesets:#c87a10;--cat-movesets-bg:rgba(200,122,16,0.13);
+  --cat-anime:#d6457f;--cat-anime-bg:rgba(214,69,127,0.13);
+  --cost-1:#6b7c93;--cost-2:#4a8fbf;--cost-3:#29a050;
+  --cost-4:#d07020;--cost-5:#c03030;--cost-6:#b020b0;--cost-8:#c9a800;
+  --topbar-h:54px;--radius:8px;--radius-lg:14px;
+  --shadow-card:0 4px 24px rgba(0,0,0,0.5);--shadow-glow:0 0 20px rgba(255,215,0,0.25);
+  --transition:0.2s ease;--font-pixel:'Press Start 2P',monospace;--font-body:'Nunito',sans-serif;
+}
+
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+html,body{height:100%;}
+body{background:var(--bg-deep);color:var(--text-primary);font-family:var(--font-body);font-size:15px;line-height:1.6;overflow-x:hidden;}
+body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellipse at 20% 20%,rgba(58,127,219,0.07) 0%,transparent 60%),radial-gradient(ellipse at 80% 80%,rgba(255,215,0,0.05) 0%,transparent 60%);pointer-events:none;z-index:0;}
+button{cursor:pointer;font-family:var(--font-body);border:none;}
+input{font-family:var(--font-body);}
+h1,h2,h3{font-family:var(--font-pixel);}
 
 /* ===========================================================================
  * SECTION A — App shell & mode-select launcher  (new for the online build)
@@ -85,31 +117,6 @@
 /* ===========================================================================
  * SECTION B — Canonical game CSS (verbatim from the offline HTML)
  * ======================================================================== */
-:root{
-  --bg-deep:#0b1622;--bg-card:#162233;--bg-elevated:#1e3048;--bg-hover:#243a57;
-  --accent-gold:#ffd700;--accent-gold-dim:#c9a800;--accent-gold-glow:rgba(255,215,0,0.2);
-  --text-primary:#f0f4ff;--text-secondary:#7fa0be;--text-dim:#4a6680;
-  --border-subtle:rgba(255,215,0,0.15);--border-card:rgba(255,255,255,0.08);
-  --cat-habitat:#27a447;--cat-habitat-bg:rgba(39,164,71,0.13);
-  --cat-evolution:#3a7fdb;--cat-evolution-bg:rgba(58,127,219,0.13);
-  --cat-type:#d04830;--cat-type-bg:rgba(208,72,48,0.13);
-  --cat-stats:#8b3dcc;--cat-stats-bg:rgba(139,61,204,0.13);
-  --cat-npc:#1aabab;--cat-npc-bg:rgba(26,171,171,0.13);
-  --cat-movesets:#c87a10;--cat-movesets-bg:rgba(200,122,16,0.13);
-  --cat-anime:#d6457f;--cat-anime-bg:rgba(214,69,127,0.13);
-  --cost-1:#6b7c93;--cost-2:#4a8fbf;--cost-3:#29a050;
-  --cost-4:#d07020;--cost-5:#c03030;--cost-6:#b020b0;--cost-8:#c9a800;
-  --topbar-h:54px;--radius:8px;--radius-lg:14px;
-  --shadow-card:0 4px 24px rgba(0,0,0,0.5);--shadow-glow:0 0 20px rgba(255,215,0,0.25);
-  --transition:0.2s ease;--font-pixel:'Press Start 2P',monospace;--font-body:'Nunito',sans-serif;
-}
-*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
-html,body{height:100%;}
-body{background:var(--bg-deep);color:var(--text-primary);font-family:var(--font-body);font-size:15px;line-height:1.6;overflow-x:hidden;}
-body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellipse at 20% 20%,rgba(58,127,219,0.07) 0%,transparent 60%),radial-gradient(ellipse at 80% 80%,rgba(255,215,0,0.05) 0%,transparent 60%);pointer-events:none;z-index:0;}
-button{cursor:pointer;font-family:var(--font-body);border:none;}
-input{font-family:var(--font-body);}
-h1,h2,h3{font-family:var(--font-pixel);}
 /* Screens */
 .screen{display:none;position:relative;z-index:1;}
 .screen.active{display:flex;flex-direction:column;}
@@ -357,7 +364,7 @@ h1,h2,h3{font-family:var(--font-pixel);}
 .mode-tab:not(:last-child){border-right:1px solid var(--border-card);}
 .mode-tab.active{background:var(--bg-elevated);color:var(--accent-gold);}
 .mode-tab:hover:not(.active){background:var(--bg-elevated);color:var(--text-secondary);}
-.sp-content,.mp-content,.continuous-content{width:100%;display:none;}
+/* sp-content, mp-content: visibility managed by mode controllers, not CSS classes */
 .sp-content.visible,.mp-content.visible,.continuous-content.visible{display:flex;flex-direction:column;align-items:center;}
 /* MP Setup */
 .mp-setup-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;width:100%;margin-bottom:16px;}
