@@ -898,9 +898,23 @@ h1,h2,h3{font-family:var(--font-pixel);}
 }
 .vr-tier-preview { display:flex; flex-direction:column; gap:6px; margin:10px 4px 16px; }
 .vr-tier-row {
-  display:flex; align-items:center; gap:12px;
+  display:flex; align-items:center; gap:12px; cursor:pointer;
   background:var(--bg-card); border:1px solid var(--border-card); border-radius:var(--radius);
-  padding:8px 12px;
+  padding:8px 12px; transition:var(--transition); user-select:none;
+}
+.vr-tier-row:hover { border-color:var(--accent-gold-dim); }
+.vr-tier-chevron { margin-left:auto; font-size:9px; color:var(--text-dim); flex-shrink:0; }
+.vr-tier-detail {
+  display:none; flex-wrap:wrap; gap:5px;
+  padding:8px 12px 10px; background:var(--bg-elevated);
+  border:1px solid var(--border-card); border-top:none;
+  border-radius:0 0 var(--radius) var(--radius); margin-top:-2px;
+}
+.vr-tier-detail.open { display:flex; }
+.vr-tier-clue-tag {
+  font-size:10px; padding:3px 8px; border-radius:100px;
+  background:rgba(255,215,0,0.08); border:1px solid rgba(255,215,0,0.2);
+  color:var(--text-secondary);
 }
 .vr-tier-label { font-family:var(--font-pixel); font-size:9px; color:var(--accent-gold); min-width:50px; }
 .vr-tier-streak { font-size:11px; color:var(--text-secondary); min-width:44px; }
@@ -1012,3 +1026,30 @@ h1,h2,h3{font-family:var(--font-pixel);}
 .mp-history-table th { color:var(--text-dim); font-weight:700; padding:4px 8px; border-bottom:1px solid var(--border-card); text-align:left; }
 .mp-history-table td { padding:4px 8px; border-bottom:1px solid rgba(255,255,255,0.04); color:var(--text-secondary); }
 .mp-history-table tr:last-child td { border-bottom:none; }
+
+/* ============================================================================
+   SECTION H — Firebase / Identity / Leaderboard
+   ========================================================================= */
+.name-prompt-toast {
+  position:fixed; bottom:18px; left:50%; transform:translateX(-50%);
+  background:var(--bg-elevated); border:1px solid var(--accent-gold-dim);
+  border-radius:var(--radius-lg); padding:14px 18px; z-index:500;
+  box-shadow:var(--shadow-card); max-width:440px; width:calc(100% - 32px);
+  display:flex; flex-direction:column; gap:4px;
+}
+.lb-tabs { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:14px; }
+.lb-tab {
+  padding:6px 12px; border-radius:100px; border:1px solid var(--border-card);
+  background:var(--bg-card); color:var(--text-secondary); cursor:pointer;
+  font-size:11px; transition:var(--transition);
+}
+.lb-tab:hover { border-color:var(--accent-gold-dim); }
+.lb-tab.active { background:var(--accent-gold); color:#1a1205; font-weight:700; border-color:var(--accent-gold); }
+.lb-board { margin-bottom:16px; }
+.lb-empty { color:var(--text-dim); font-size:13px; padding:24px; text-align:center; }
+.lb-table { width:100%; border-collapse:collapse; font-size:13px; }
+.lb-table th { color:var(--text-dim); font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.5px; padding:6px 10px; border-bottom:1px solid var(--border-card); text-align:left; }
+.lb-table td { padding:8px 10px; border-bottom:1px solid rgba(255,255,255,0.04); color:var(--text-secondary); }
+.lb-table tr:last-child td { border-bottom:none; }
+.lb-table tr.lb-me td { background:rgba(255,215,0,0.05); }
+.lb-detail { font-size:10px; color:var(--text-dim); max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
