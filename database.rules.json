@@ -26,12 +26,12 @@
     },
 
     "leaderboard": {
+      ".read": "auth !== null",
       "$gen": {
         ".validate": "$gen === 'gen1' || $gen === 'gen2'",
         "$mode": {
           ".validate": "$mode === 'single' || $mode === 'victoryroad' || $mode === 'safari'",
           "$entryId": {
-            ".read": "auth !== null",
             ".write": "auth !== null && (!data.exists() || data.child('uid').val() === auth.uid)",
             ".validate": "newData.hasChildren(['uid', 'name', 'score', 'at'])
                        && newData.child('uid').val() === auth.uid
@@ -64,7 +64,6 @@
                      && newData.hasChildren(['holderUid', 'holderName', 'takenAt'])"
         }
       },
-
       "daily": {
         "$dateCT": {
           "seed": {

@@ -38,6 +38,22 @@ table is the index. Status: ✅ done & tested · 🟡 in progress · ⬜ not sta
 | docs/data/movestats-gen{1,2}.review.csv | curated | ✅ | Your edited CSVs — the source of record for apply-movestats. |
 | docs/data/typechart-gen1.json | gen | ✅ | 15 types, **derived** from the Gen 2 chart (Dark/Steel removed; Bug↔Poison 2×, Ghost→Psychic 0). Please verify edge matchups. |
 
+## Fixes & polish pass
+| Change | Status |
+|--------|--------|
+| Menu group order: Draft → Guess → Reference | ✅ |
+| Menu cards wider on desktop (max-width 860px) | ✅ |
+| Stat spread labels (HP/Atk/Def/Spc/Spe gen1, HP/Atk/Def/SpA/SpD/Spe gen2) via `statSpreadEl()` in dom.js | ✅ |
+| Victory Road icon: 🗻 (mountain) instead of 🏎 (race car) | ✅ |
+| VR tier rows expandable/collapsible with clue names | ✅ |
+| Leaderboard gen buttons navigate to leaderboard (gen sets default tab) | ✅ |
+| Leaderboard waits for auth before reading (fixes empty board) | ✅ |
+| database.rules.json: `.read` moved to leaderboard parent level (fixes read permission) | ✅ |
+| Multiplayer: gen shown in setup title and game topbar | ✅ |
+| Multiplayer: running guess log for current round | ✅ |
+| Multiplayer: null value removed from action block (RTG mode) | ✅ |
+| Safari: Bait = cheap clues (<4pt base), Rock = costly clues (≥4pt base), Run = 3 buttons | ✅ |
+
 ## Firebase + Identity + Leaderboards (Phase 4 — DONE)
 | File | Version | Status | Notes |
 |------|--------:|--------|-------|
@@ -47,6 +63,15 @@ table is the index. Status: ✅ done & tested · 🟡 in progress · ⬜ not sta
 | docs/js/modes/leaderboard.js | 1.0.0 | ✅ | Browse screen: 6 tabs (gen × mode), top-10 per board, your rank highlighted, refresh button. **Enabled.** |
 | database.rules.json | 1.0.0 | ✅ | Firebase Realtime DB security rules. players/nameclaims/leaderboard/rooms/draft all validated. Daily entries immutable once written. Throne writes validated. |
 | docs/js/main.js | 1.2.0 | ✅ | Added lazy identity init + first-launch name-prompt toast. |
+
+## Draft Battle (Phase 5 — IN PROGRESS)
+| File | Version | Status | Notes |
+|------|--------:|--------|-------|
+| docs/js/lib/sim.js | vetted | ✅ | Verbatim copy of vetted sim.js (runMatch/simulateBattle/toRealStats/moveId). Do not edit. |
+| docs/js/lib/draft.js | 0.4.1 | ✅ | Verbatim copy of vetted draft.js. Import path updated to ./sim.js. Do not rewrite. |
+| docs/js/lib/share.js | 1.0.0 | ✅ | buildSummaryText, copyToClipboard, shareWhatsApp, centralDateStr (CT-aware), seedFromDate. |
+| docs/js/modes/draftbattle.js | 1.0.0 | ✅ | Draft Battle + Daily Challenge controller. 6-card queue UI, pick stats/types/moves, rerolls, throne challenge (Firebase), daily submit+rank, battle playback, share. Tested: 14-assertion engine test + smoke test. Both modes enabled. |
+| docs/css/styles.css | 1.4.0 | ✅ | Section I: draft layout, stat/type/move pick buttons, queue chips, throne grid, battle result, sidebar progress. |
 
 ## Guess modes (Phase 3 — IN PROGRESS)
 | File | Version | Status | Notes |
