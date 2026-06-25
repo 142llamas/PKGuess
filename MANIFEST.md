@@ -54,6 +54,28 @@ table is the index. Status: ✅ done & tested · 🟡 in progress · ⬜ not sta
 | Multiplayer: null value removed from action block (RTG mode) | ✅ |
 | Safari: Bait = cheap clues (<4pt base), Rock = costly clues (≥4pt base), Run = 3 buttons | ✅ |
 
+## Draft Battle + Daily Challenge (Phase 5a — DONE: engine + data)
+| File | Version | Status | Notes |
+|------|--------:|--------|-------|
+| docs/js/sim.js | vetted | ✅ | Copied verbatim from provided sim__1_.js. runMatch/simulateBattle/toRealStats/moveId. |
+| docs/js/draft.js | v0.4.1 | ✅ | Copied verbatim from provided draft__1_.js. DraftSession/autoDraft/buildSpeciesList/buildLearnsetMap/normalizeSpecies. |
+| docs/js/lib/draft-adapter.js | 1.0.0 | ✅ | Thin re-export shim so mode controllers import cleanly from lib/. |
+| docs/js/modes/draftbattle.js | 1.0.0 | ✅ | 6×2 draft UI: one card at a time, pick 0–2 attributes, advance. Stats/types/moves all interactive. Reroll buttons. Drafted-summary sidebar. Skip advances. Complete screen. Battle phase wired as Phase 5b stub. **Enabled (Draft Battle + Daily Challenge).** |
+| docs/data/movelist-gen2.json | gen | ✅ | **Smeargle**: expanded to all 242 draftable moves via Sketch (no Sketch itself). **Mew**: expanded to 95 moves including 93 TM/HMs via "All of them" sentinel. |
+
+### Sanity check results
+- Smeargle: 242 draftable moves, Sketch excluded ✓
+- Mew: 95 moves (93 TM/HM + level-up/tutor) ✓
+- Magikarp: 19 draftable moves, shows ≤10 per card ✓
+- Ditto + Unown: excluded from draft ✓
+- 6×2 draft completes in ~6–12 cards as designed ✓
+
+### Still pending (Phase 5b)
+- Battle phase: runMatch integration + playback UI
+- Throne system (Firebase-backed)
+- Daily Challenge: one-attempt gate + all-pairs ranking + share card
+- share.js (WhatsApp/clipboard summary)
+
 ## Firebase + Identity + Leaderboards (Phase 4 — DONE)
 | File | Version | Status | Notes |
 |------|--------:|--------|-------|
