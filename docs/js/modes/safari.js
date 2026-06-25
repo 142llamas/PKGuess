@@ -17,6 +17,7 @@
 
 import { el, clear } from '../lib/dom.js';
 import { PokeGuessRound, normalizeName } from '../lib/engine.js';
+import { submitScore } from '../lib/leaderboard-data.js';
 
 const CATCH_KEY = 'pokeGuess_catchTracker';
 
@@ -267,6 +268,9 @@ export function createSafari({ mount, config, data, params = {}, onExit }) {
     if (!sf) return;
     const exhausted = sf.idx >= sf.pool.length && round.pointsRemaining > 0;
     if (round.mystery && !round.gameOver) markCatch(round.mystery.name, 'seen');
+    // Submit to leaderboard
+    const gen = data.id || 'gen2';
+    submitScore(gen, 'safari', { score: done.caught, detail: `budget:${done.startPts} spent:${ptsUsed}` }).catch(() => {});
     const ptsUsed = sf.startPts - round.pointsRemaining;
     const eff = sf.startPts > 0 ? (sf.caught / sf.startPts * 100).toFixed(1) : '0';
     const done = sf; sf = null;

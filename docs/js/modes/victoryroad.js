@@ -1,8 +1,9 @@
 /**
  * @file        js/modes/victoryroad.js
- * @version     1.0.0
+ * @version     1.1.0
  * @updated     2026-06-24
  * @changelog
+ *   1.1.0 — Tier rows expandable/collapsible: click to reveal clue names.
  *   1.0.0 — Victory Road, ported from the canonical screen. Endless streak
  *           gauntlet: one guess per Pokémon, wrong = game over. Pre-revealed
  *           clues shrink as the streak climbs through 8 tiers (fewer clues =
@@ -16,6 +17,7 @@
 
 import { el, clear } from '../lib/dom.js';
 import { PokeGuessRound, normalizeName } from '../lib/engine.js';
+import { submitScore } from '../lib/leaderboard-data.js';
 
 // Tier definitions (streak thresholds + which clue specials/fields to pre-reveal).
 // Specials/fields listed in render order; the controller resolves them to actual
@@ -91,16 +93,34 @@ export function createVictoryRoad({ mount, config, data, params = {}, onExit }) 
 
   // ---- CONFIG SCREEN -------------------------------------------------------
   function showConfig() {
+    // Build expandable tier preview — resolve slot names to clue labels
+    const tierRows = VR_TIERS.map((t) => {
+      const clueNames = t.slots.map((slot) => {
+        const c = resolveSlot(slot);
+        return c ? c.name : slot;
+      });
+      const header = el('div', { class: 'vr-tier-row', dataset: { expanded: 'false' } },
+        el('span', { class: 'vr-tier-label' }, t.label),
+        el('span', { class: 'vr-tier-streak' }, t.minStreak === 0 ? 'Start' : `${t.minStreak}+`),
+        el('span', { class: 'vr-tier-slots' }, `${t.slots.length} clues`),
+        el('span', { class: 'vr-tier-chevron' }, '▶'));
+      const detail = el('div', { class: 'vr-tier-detail' },
+        ...clueNames.map((name) => el('span', { class: 'vr-tier-clue-tag' }, name)));
+      header.addEventListener('click', () => {
+        const open = header.dataset.expanded === 'true';
+        header.dataset.expanded = String(!open);
+        header.querySelector('.vr-tier-chevron').textContent = open ? '▶' : '▼';
+        detail.classList.toggle('open', !open);
+      });
+      return el('div', {}, header, detail);
+    });
+
     clear(root).append(
       el('div', { class: 'sp-section-title' }, '\uD83C\uDFCE\uFE0F Victory Road'),
       el('p', { class: 'sf-intro' },
         'One guess per Pok\u00e9mon. Wrong answer = game over. Fewer clues as your streak grows. '
         + 'Name all 251 for a perfect sweep!'),
-      el('div', { class: 'vr-tier-preview' }, ...VR_TIERS.map((t) =>
-        el('div', { class: 'vr-tier-row' },
-          el('span', { class: 'vr-tier-label' }, t.label),
-          el('span', { class: 'vr-tier-streak' }, t.minStreak === 0 ? 'Start' : `${t.minStreak}+`),
-          el('span', { class: 'vr-tier-slots' }, `${t.slots.length} clues`)))),
+      el('div', { class: 'vr-tier-preview' }, ...tierRows),
       el('div', { class: 'sp-start-row' },
         el('button', { class: 'btn-secondary', onClick: () => onExit && onExit() }, '\u2190 Back'),
         el('button', { class: 'btn-primary', onClick: begin }, '\uD83C\uDFCE\uFE0F Begin \u25b6')));
@@ -404,6 +424,11 @@ export function createVictoryRoad({ mount, config, data, params = {}, onExit }) 
     const avgMs = s.streak > 0 ? Math.round(totalMs / s.streak) : null;
     const tier = getTier(s.streak);
     const isPerfect = s.perfectLaps > 0;
+    // Submit to leaderboard
+    submitScore(data.id || 'gen2', 'victoryroad', {
+      score: s.streak,
+      detail: `time:${fmtTime(totalMs)} best:${s.bestPokeMs ? (s.bestPokeMs/1000).toFixed(1)+'s' : '-'} laps:${s.perfectLaps}`,
+    }).catch(() => {});
     const done = s; vr = null;
     clear(root).append(
       el('div', { class: 'summary-container' },

@@ -17,6 +17,7 @@
 
 import { el, clear } from '../lib/dom.js';
 import { PokeGuessRound, normalizeName } from '../lib/engine.js';
+import { submitScore } from '../lib/leaderboard-data.js';
 
 export function createSingle({ mount, config, data, params = {}, onExit }) {
   const root = el('div', { class: 'sp-content' });
@@ -348,7 +349,13 @@ export function createSingle({ mount, config, data, params = {}, onExit }) {
     closeAutocomplete();
     const res = round.submitGuess(name);
     if (!res.ok) return;
-    if (res.correct) { showSummary(); return; }
+    if (res.correct) { 
+      // Submit to leaderboard (fire-and-forget — never blocks the UI)
+      const gen = data.id || 'gen2';
+      const detail = `diff:${chosen.difficulty} clues:${Object.keys(round.revealedClues).length} wrong:${round.wrongGuesses.length}`;
+      submitScore(gen, 'single', { score: round.pointsRemaining, detail }).catch(() => {});
+      showSummary(); return; 
+    }
     // wrong
     const fb = root.querySelector('#guess-feedback');
     if (fb) {
