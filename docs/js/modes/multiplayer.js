@@ -1,0 +1,617 @@
+/**
+ * @file        js/modes/multiplayer.js
+ * @version     1.0.0
+ * @updated     2026-06-24
+ * @changelog
+ *   1.0.0 — Hot-seat multiplayer, ported from the canonical MP screen.
+ *           2–4 players pass the device. Shared point pool per round; whoever
+ *           correctly identifies the Pokémon earns the remaining points. Two
+ *           game modes: RTG (reveal-then-guess) and GTR (guess-then-reveal).
+ *           Two clue modes: choose or weighted-random. Per-round clue exclusion
+ *           panel. Evolution cross-inference auto-deductions. Round-end overlay
+ *           with standings; final podium + per-player stats; collapsible round
+ *           history table. All clue rules via engine.js.
+ *
+ * Contract: createMultiplayer({ mount, config, data, params, onExit }) → { destroy }
+ */
+
+import { el, clear } from '../lib/dom.js';
+import { PokeGuessRound, normalizeName } from '../lib/engine.js';
+
+const PLAYER_COLORS = ['#ffd700', '#3a7fdb', '#27a447', '#d04830'];
+const PLACE_EMOJI = ['\uD83E\uDD47', '\uD83E\uDD48', '\uD83E\uDD49', '4\uFE0F\u20E3'];
+
+export function createMultiplayer({ mount, config, data, params = {}, onExit }) {
+  const root = el('div', { class: 'sp-content' });
+  clear(mount).appendChild(root);
+
+  if (!Array.isArray(data.clues) || !data.clues.length) {
+    root.append(
+      el('h2', { class: 'sp-section-title' }, 'Data needs updating'),
+      el('p', { class: 'placeholder-text' }, `Re-run the pipeline and re-upload docs/data/${data.id || 'genN'}.json.`),
+      el('button', { class: 'btn-secondary', onClick: () => onExit && onExit() }, '\u2190 Back'));
+    return { destroy() { clear(mount); } };
+  }
+
+  const rng = params.rng || Math.random;
+  const poolFilter = data.id === 'gen1' ? 'gen1' : 'gen2';
+  const dflt = (config && config.mpDefaults) || {};
+  let movelist = {};
+  let mp = null; // runtime state
+  let acIndex = -1;
+
+  fetch(`data/movelist-${data.id}.json`)
+    .then((r) => (r.ok ? r.json() : {}))
+    .then((ml) => { movelist = ml || {}; })
+    .catch(() => { movelist = {}; })
+    .finally(showSetup);
+
+  // ===== SETUP SCREEN =======================================================
+  let setup = {
+    playerNames: ['Player 1', 'Player 2', '', ''],
+    playerCount: 2,
+    gameMode: 'rtg',   // 'rtg' | 'gtr'
+    clueMode: 'choose', // 'choose' | 'random'
+    winTarget: dflt.winTarget || 150,
+    poolStart: dflt.poolPerRound || 75,
+    guessCost: dflt.guessCost || 0,
+    excludedIds: new Set(),
+  };
+
+  function showSetup() {
+    clear(root);
+    root.append(
+      el('div', { class: 'sp-section-title' }, '\u2694\uFE0F Multiplayer Setup'),
+      el('div', { class: 'mp-setup-body' },
+        playerSection(),
+        modeSection(),
+        clueSection(),
+        numbersSection(),
+        excludeSection(),
+      ),
+      el('div', { class: 'sp-start-row' },
+        el('button', { class: 'btn-secondary', onClick: () => onExit && onExit() }, '\u2190 Back'),
+        el('button', { class: 'btn-primary', onClick: startGame }, '\u2694\uFE0F Start Multiplayer')));
+  }
+
+  function playerSection() {
+    const inputs = el('div', { class: 'mp-player-inputs', id: 'mp-player-inputs' });
+    renderPlayerInputs(inputs);
+    return el('div', { class: 'mp-form-section' },
+      el('div', { class: 'mp-form-label' }, 'Players (2\u20134)'),
+      inputs,
+      el('div', { class: 'mp-player-btns' },
+        el('button', { class: 'btn-secondary', style: { fontSize: '12px', padding: '6px 12px' },
+          onClick: () => { setup.playerCount = Math.min(4, setup.playerCount + 1); renderPlayerInputs(inputs); } }, '+ Add'),
+        el('button', { class: 'btn-secondary', style: { fontSize: '12px', padding: '6px 12px' },
+          onClick: () => { setup.playerCount = Math.max(2, setup.playerCount - 1); renderPlayerInputs(inputs); } }, '\u2212 Remove')));
+  }
+
+  function renderPlayerInputs(container) {
+    clear(container);
+    for (let i = 0; i < setup.playerCount; i++) {
+      const color = PLAYER_COLORS[i];
+      const inp = el('input', { class: 'mp-name-input', type: 'text', placeholder: `Player ${i + 1}`, value: setup.playerNames[i] || '',
+        onInput: (e) => { setup.playerNames[i] = e.target.value; },
+        style: { borderColor: color } });
+      container.append(el('div', { class: 'mp-name-row' },
+        el('span', { class: 'mp-name-swatch', style: { background: color } }),
+        inp));
+    }
+  }
+
+  function toggle(id, opts, current, onChange) {
+    return el('div', { class: 'mp-toggle-row' },
+      ...opts.map(([val, label, sub]) => {
+        const btn = el('button', {
+          class: 'mp-toggle-btn' + (current() === val ? ' active' : ''),
+          dataset: { val },
+          onClick: (e) => { onChange(val); e.currentTarget.closest('.mp-toggle-row').querySelectorAll('.mp-toggle-btn').forEach((b) => b.classList.toggle('active', b.dataset.val === val)); },
+        }, el('div', { class: 'mp-tb-label' }, label), sub ? el('div', { class: 'mp-tb-sub' }, sub) : null);
+        return btn;
+      }));
+  }
+
+  function modeSection() {
+    return el('div', { class: 'mp-form-section' },
+      el('div', { class: 'mp-form-label' }, 'Game Mode'),
+      toggle('gameMode', [
+        ['rtg', 'Reveal, then Guess', 'Reveal a clue first, then make your guess each turn'],
+        ['gtr', 'Guess, then Reveal', 'Guess first — if wrong, reveal a clue then pass'],
+      ], () => setup.gameMode, (v) => { setup.gameMode = v; }));
+  }
+
+  function clueSection() {
+    return el('div', { class: 'mp-form-section' },
+      el('div', { class: 'mp-form-label' }, 'Clue Selection'),
+      toggle('clueMode', [
+        ['choose', 'Choose Clues', 'Active player picks which clue to reveal'],
+        ['random', 'Random Clues', 'A weighted-random clue is revealed automatically'],
+      ], () => setup.clueMode, (v) => { setup.clueMode = v; }));
+  }
+
+  function numInput(label, key, min, max) {
+    return el('label', { class: 'sp-custom-field' }, label,
+      el('input', { type: 'number', value: String(setup[key]), min: String(min), max: String(max),
+        onInput: (e) => { setup[key] = clampInt(e.target.value, min, max, setup[key]); } }));
+  }
+  function numbersSection() {
+    return el('div', { class: 'sp-custom-panel' },
+      numInput('Win target (pts)', 'winTarget', 10, 9999),
+      numInput('Pool per round (pts)', 'poolStart', 10, 999),
+      numInput('Wrong-guess cost (pts)', 'guessCost', 0, 50));
+  }
+
+  function excludeSection() {
+    const body = el('div', { class: 'mp-exclude-body', id: 'mp-excl-body', style: { display: 'none' } });
+    const tog = el('button', { class: 'mp-excl-toggle',
+      onClick: () => { const open = body.style.display !== 'none'; body.style.display = open ? 'none' : ''; tog.classList.toggle('open', !open); } },
+      '\u2699\uFE0F Clue Availability ', el('span', { class: 'adv-arrow' }, '\u25bc'));
+    buildExcludeGrid(body);
+    return el('div', { class: 'mp-form-section' }, tog, body);
+  }
+
+  function buildExcludeGrid(container) {
+    const cats = data.categories, clues = data.clues;
+    for (const cat of cats) {
+      const catClues = clues.filter((c) => c.cat === cat.id);
+      const catBlock = el('div', { class: 'mp-excl-cat' });
+      const header = el('div', { class: 'mp-excl-cat-head', style: { color: cat.color } }, cat.name);
+      catBlock.append(header);
+      for (const c of catClues) {
+        const cb = el('input', { type: 'checkbox', checked: true,
+          onChange: (e) => { e.target.checked ? setup.excludedIds.delete(c.id) : setup.excludedIds.add(c.id); } });
+        catBlock.append(el('label', { class: 'mp-excl-row' }, cb, el('span', {}, c.name),
+          el('span', { class: 'mp-excl-cost' }, `${c.cost}pt`)));
+      }
+      container.append(catBlock);
+    }
+  }
+
+  // ===== GAME STATE =========================================================
+  function startGame() {
+    const names = setup.playerNames.slice(0, setup.playerCount).map((n, i) => (n && n.trim()) || `Player ${i + 1}`);
+    const players = names.map((name, i) => ({
+      id: i, name, color: PLAYER_COLORS[i],
+      score: 0, roundsWon: 0, pointsEarned: 0,
+      guessesTotal: 0, guessesCorrect: 0, guessesWrong: 0,
+      clueCount: 0, clueCostTotal: 0,
+    }));
+    // Build shuffled pool from dex
+    const pool = data.pokedex.filter((p) => {
+      const n = parseInt(p.num, 10);
+      return poolFilter === 'gen1' ? n <= 151 : n >= 152 && n <= 251;
+    });
+    mp = {
+      players, turnOrder: players.map((p) => p.id),
+      currentTurnPos: 0, gameMode: setup.gameMode, clueMode: setup.clueMode,
+      winTarget: setup.winTarget, poolStart: setup.poolStart, guessCost: setup.guessCost,
+      excludedIds: new Set(setup.excludedIds),
+      pool, round: null, phase: null, turnHasRevealed: false,
+      pointPool: setup.poolStart, roundNum: 1, roundHistory: [],
+      lastRandomRevealCat: null, gameOver: false,
+    };
+    startRound();
+  }
+
+  function startRound() {
+    const poke = mp.pool[Math.floor(rng() * mp.pool.length)];
+    mp.round = new PokeGuessRound({ genData: data, movelist, rng });
+    mp.round.start({
+      difficultyId: 'custom', poolFilter, mystery: poke,
+      custom: { points: mp.poolStart, guessCost: 0, startClueMode: 'none' },
+    });
+    mp.pointPool = mp.poolStart;
+    mp.phase = mp.gameMode === 'rtg' ? 'reveal' : 'guess';
+    mp.turnHasRevealed = false;
+    mp.lastRandomRevealCat = null;
+    acIndex = -1;
+    showGame();
+  }
+
+  // ===== GAME SCREEN ========================================================
+  function showGame() {
+    const cur = mp.players[mp.turnOrder[mp.currentTurnPos]];
+    clear(root).append(
+      el('div', { class: 'game-topbar' },
+        el('button', { class: 'btn-secondary game-exit', onClick: () => { if (confirm('Quit? Progress will be lost.')) { onExit && onExit(); } } }, '\u2190 Quit'),
+        el('div', { class: 'mp-topbar-info' },
+          el('div', { class: 'mp-round-badge', id: 'mp-round-badge' }, `Round ${mp.roundNum}`),
+          el('div', { class: 'mp-target-badge' }, `Win: ${mp.winTarget} pts`)),
+        el('div', { class: 'mp-pool-display' },
+          el('div', { class: 'points-number', id: 'mp-pool-pts' }, `${mp.pointPool} pts`),
+          el('div', { class: 'points-bar-track' }, el('div', { class: 'points-bar-fill', id: 'mp-pool-bar' })))),
+      el('div', { class: 'game-body' },
+        el('div', { class: 'clue-panel', id: 'mp-clue-panel' }),
+        el('div', { class: 'game-side' },
+          playerScoreboard(),
+          el('div', { class: 'guess-block', id: 'mp-action-block' }),
+          el('div', { class: 'revealed-summary', id: 'mp-revealed' }))),
+      el('div', { class: 'mp-overlay', id: 'mp-overlay' }));
+    renderCluePanel();
+    renderRevealed();
+    renderActionBlock();
+    updatePool();
+  }
+
+  function updatePool() {
+    const n = root.querySelector('#mp-pool-pts'); const b = root.querySelector('#mp-pool-bar');
+    if (n) n.textContent = `${mp.pointPool} pts`;
+    if (b) {
+      const pct = mp.poolStart > 0 ? mp.pointPool / mp.poolStart : 0;
+      b.style.width = `${Math.max(0, pct * 100)}%`;
+      b.style.background = pct > 0.5 ? '#29cc66' : pct > 0.25 ? '#f0c020' : '#e04040';
+    }
+  }
+
+  function playerScoreboard() {
+    return el('div', { class: 'mp-scoreboard' },
+      ...mp.players.map((p) => {
+        const isCur = p.id === mp.turnOrder[mp.currentTurnPos];
+        return el('div', { class: `mp-score-row${isCur ? ' active' : ''}`, style: { borderColor: isCur ? p.color : 'transparent' } },
+          el('span', { class: 'mp-score-name', style: { color: p.color } }, p.name),
+          el('span', { class: 'mp-score-pts' }, `${p.score} pts`));
+      }));
+  }
+
+  // ---- clue grid -----------------------------------------------------------
+  function renderCluePanel() {
+    const panel = root.querySelector('#mp-clue-panel'); if (!panel) return;
+    clear(panel);
+    const r = mp.round, s = r.state;
+    const cats = data.categories, clues = data.clues;
+    for (const cat of cats) {
+      const body = el('div', { class: 'cat-body' });
+      for (const c of clues.filter((cl) => cl.cat === cat.id)) body.appendChild(mpCard(c, cat));
+      if (body.children.length) panel.appendChild(el('div', { class: 'cat-section' },
+        el('div', { class: 'cat-header', style: { background: cat.bg } }, el('span', { class: 'cat-name', style: { color: cat.color } }, cat.name)),
+        body));
+    }
+  }
+
+  function mpCard(clue, cat) {
+    const r = mp.round, rv = r.revealedClues;
+    const isRevealed = clue.id in rv;
+    const isExcluded = mp.excludedIds.has(clue.id);
+    const isPhaseReveal = mp.phase === 'reveal';
+    const card = el('button', { class: 'clue-btn', dataset: { clue: clue.id } });
+
+    if (isRevealed) {
+      card.classList.add('revealed');
+      Object.assign(card.style, { background: cat.bg, borderColor: cat.color });
+      card.append(el('div', { class: 'clue-top' }, el('span', { class: 'clue-btn-name', style: { color: cat.color } }, clue.name)),
+        el('div', { class: 'clue-revealed-value' }, String(rv[clue.id])));
+      return card;
+    }
+    if (isExcluded || !r.clueAvailable(clue) || !isPhaseReveal) {
+      card.classList.add('unavailable');
+      card.append(el('div', { class: 'clue-top' }, el('span', { class: 'clue-btn-name' }, clue.name),
+        el('span', { class: 'clue-cost-badge', style: { background: '#555' } }, `${clue.cost}pt`)));
+      return card;
+    }
+    if (mp.pointPool < clue.cost) card.classList.add('cant-afford');
+    const costs = data.clues.map((c) => c.cost);
+    const lo = Math.min(...costs), hi = Math.max(...costs);
+    const t = hi > lo ? (clue.cost - lo) / (hi - lo) : 0;
+    const bg = `hsl(${Math.round(120 * (1 - t))},${62 + Math.round(18 * Math.abs(t - 0.5) * 2)}%,${40 + Math.round(6 * (1 - Math.abs(t - 0.5) * 2))}%)`;
+    card.append(el('div', { class: 'clue-top' },
+      el('span', { class: 'clue-btn-name' }, clue.name),
+      el('span', { class: 'clue-cost-badge', style: { background: bg } }, `${clue.cost}pt`)));
+    card.addEventListener('click', () => revealClue(clue.id));
+    return card;
+  }
+
+  // ---- reveal --------------------------------------------------------------
+  function revealClue(id) {
+    if (mp.phase !== 'reveal') return;
+    const clue = data.clues.find((c) => c.id === id);
+    if (!clue || mp.excludedIds.has(id)) return;
+    const r = mp.round;
+    if (!r.clueAvailable(clue)) return;
+    if (mp.pointPool < clue.cost) return;
+    const res = r.buyClue(id, { auto: true });
+    if (!res.ok) return;
+    mp.pointPool = Math.max(0, mp.pointPool - clue.cost);
+    const cur = mp.players[mp.turnOrder[mp.currentTurnPos]];
+    cur.clueCount++; cur.clueCostTotal += clue.cost;
+    mp.turnHasRevealed = true;
+    applyEvoDeductions();
+    if (mp.gameMode === 'rtg') mp.phase = 'guess';
+    updatePool();
+    renderCluePanel();
+    renderRevealed();
+    renderActionBlock();
+  }
+
+  function revealRandom() {
+    if (mp.phase !== 'reveal') return;
+    const r = mp.round;
+    const available = data.clues.filter((c) =>
+      !mp.excludedIds.has(c.id) && !(c.id in r.revealedClues) && r.clueAvailable(c) && mp.pointPool >= c.cost);
+    if (!available.length) { skipReveal(); return; }
+    const pen = data.multiClue?.randomRevealCategoryPenalty ?? 0.25;
+    const weights = available.map((c) => (1 / Math.max(1, c.cost)) * (c.cat === mp.lastRandomRevealCat ? pen : 1));
+    const total = weights.reduce((a, b) => a + b, 0);
+    let pick = available[available.length - 1];
+    let rr = rng() * (total || 1);
+    for (let i = 0; i < available.length; i++) { rr -= weights[i]; if (rr <= 0) { pick = available[i]; break; } }
+    mp.lastRandomRevealCat = pick.cat;
+    revealClue(pick.id);
+  }
+
+  function skipReveal() {
+    mp.turnHasRevealed = false;
+    nextTurn();
+  }
+
+  function applyEvoDeductions() {
+    // Auto-reveal cost-free evolution cross-inferences (ids 8–11: familySize, evoStage, canEvolve, evolvesFrom)
+    const EVO_FIELDS = [
+      { id: 8, field: 'familySize' }, { id: 9, field: 'evoStage' },
+      { id: 10, field: 'canEvolve' }, { id: 11, field: 'evolvesFrom' },
+    ];
+    const r = mp.round;
+    const rv = r.revealedClues;
+    for (let guard = 0; guard < 12; guard++) {
+      let did = false;
+      for (const { id, field } of EVO_FIELDS) {
+        if (id in rv) continue;
+        if (mp.excludedIds.has(id)) continue;
+        const clue = data.clues.find((c) => c.id === id); if (!clue) continue;
+        // Only auto-reveal if logically deducible from what's already shown
+        const fam = rv[8], stage = rv[9], canEvo = rv[10], evoFrom = rv[11];
+        let deducible = false;
+        if (id === 10 && fam != null && stage != null) {
+          deducible = true; // family+stage → can evolve deducible
+        } else if (id === 11 && stage != null) {
+          deducible = (String(stage).includes('1st') === false && String(stage) !== 'standalone'); // non-1st-stage → evolvesFrom = Yes
+        } else if ((id === 8 || id === 9) && (evoFrom != null || canEvo != null)) {
+          deducible = true;
+        }
+        if (!deducible) continue;
+        const res = r.buyClue(id, { auto: true });
+        if (res.ok) did = true;
+      }
+      if (!did) break;
+    }
+  }
+
+  // ---- action block (phase-dependent) -------------------------------------
+  function renderActionBlock() {
+    const block = root.querySelector('#mp-action-block'); if (!block) return;
+    clear(block);
+    const cur = mp.players[mp.turnOrder[mp.currentTurnPos]];
+    block.append(el('div', { class: 'mp-active-player', style: { color: cur.color } },
+      `${cur.name}\u2019s turn \u2014 `, el('span', { class: 'mp-phase-label' },
+        mp.phase === 'reveal' ? 'reveal a clue' : 'make a guess')));
+    if (mp.phase === 'reveal') {
+      if (mp.clueMode === 'random') {
+        block.append(
+          el('button', { class: 'btn-bait', style: { width: '100%' }, onClick: revealRandom }, '\uD83C\uDF6F Reveal a random clue'),
+          el('button', { class: 'btn-secondary', style: { width: '100%', marginTop: '8px', fontSize: '12px' }, onClick: skipReveal }, 'Skip reveal'));
+      } else {
+        block.append(el('p', { class: 'mp-phase-hint' }, '\u2191 Click a clue above to reveal it'));
+        if (mp.turnHasRevealed) {
+          block.append(el('button', { class: 'btn-secondary', style: { width: '100%', fontSize: '12px' }, onClick: () => { mp.phase = 'guess'; renderActionBlock(); renderCluePanel(); } }, 'Skip to guess \u25b6'));
+        }
+      }
+    } else {
+      // Guess phase
+      const inp = el('input', { class: 'guess-input', id: 'mp-guess', type: 'text',
+        placeholder: 'Which Pok\u00e9mon?', autocomplete: 'off',
+        onInput: (e) => renderAuto(e.target.value), onKeydown: onGuessKey });
+      block.append(
+        el('div', { class: 'guess-input-wrap' },
+          inp,
+          el('button', { class: 'guess-btn', onClick: submitFromInput }, 'Guess'),
+          el('div', { class: 'autocomplete-list', id: 'mp-ac' })),
+        el('div', { class: 'guess-feedback', id: 'mp-feedback' }),
+        mp.gameMode === 'gtr'
+          ? el('button', { class: 'btn-secondary', style: { width: '100%', marginTop: '8px', fontSize: '12px' },
+              onClick: () => { mp.phase = 'reveal'; renderActionBlock(); renderCluePanel(); } }, 'Skip guess / go to reveal')
+          : null);
+      setTimeout(() => inp.focus(), 30);
+    }
+  }
+
+  // ---- guessing -----------------------------------------------------------
+  function submitFromInput() { const i = root.querySelector('#mp-guess'); if (i) doGuess(i.value); }
+  function doGuess(name) {
+    if (mp.phase !== 'guess' || mp.gameOver) return;
+    closeAuto();
+    const val = String(name || '').trim(); if (!val) return;
+    const cur = mp.players[mp.turnOrder[mp.currentTurnPos]];
+    cur.guessesTotal++;
+    if (normalizeName(val) === normalizeName(mp.round.mystery.name)) {
+      cur.guessesCorrect++; cur.roundsWon++;
+      const earned = mp.pointPool;
+      cur.score += earned; cur.pointsEarned += earned;
+      roundEnd(cur.id, earned);
+    } else {
+      cur.guessesWrong++;
+      if (mp.guessCost > 0) mp.pointPool = Math.max(0, mp.pointPool - mp.guessCost);
+      const fb = root.querySelector('#mp-feedback');
+      if (fb) { fb.className = 'guess-feedback error'; fb.textContent = `Not ${val}! Try again next turn.`; setTimeout(() => { if (fb) fb.textContent = ''; }, 2500); }
+      const inp = root.querySelector('#mp-guess'); if (inp) { inp.value = ''; inp.classList.add('wrong-flash'); setTimeout(() => inp.classList.remove('wrong-flash'), 500); }
+      if (mp.gameMode === 'gtr') {
+        mp.phase = 'reveal';
+        renderActionBlock(); renderCluePanel(); updatePool();
+      } else {
+        nextTurn();
+      }
+    }
+  }
+
+  function nextTurn() {
+    mp.currentTurnPos = (mp.currentTurnPos + 1) % mp.turnOrder.length;
+    mp.phase = mp.gameMode === 'rtg' ? 'reveal' : 'guess';
+    mp.turnHasRevealed = false;
+    updatePool(); renderCluePanel(); renderRevealed(); renderActionBlock();
+    updateActivePlayer();
+  }
+
+  function updateActivePlayer() {
+    // re-render scoreboard in place
+    const side = root.querySelector('.game-side'); if (!side) return;
+    const old = side.querySelector('.mp-scoreboard');
+    if (old) old.replaceWith(playerScoreboard());
+  }
+
+  // ---- revealed summary ---------------------------------------------------
+  function renderRevealed() {
+    const box = root.querySelector('#mp-revealed'); if (!box) return;
+    clear(box);
+    const rv = mp.round.revealedClues;
+    const ids = Object.keys(rv).map(Number); if (!ids.length) { box.append(el('div', { class: 'rev-empty' }, 'No clues revealed yet.')); return; }
+    box.append(el('div', { class: 'rev-cat-label' }, 'Revealed'));
+    for (const id of ids) {
+      const c = data.clues.find((cl) => cl.id === id);
+      box.append(el('div', { class: 'rev-item' },
+        el('span', { class: 'rev-item-name' }, c ? c.name : `#${id}`),
+        el('span', { class: 'rev-item-value' }, String(rv[id]))));
+    }
+  }
+
+  // ---- autocomplete -------------------------------------------------------
+  function renderAuto(q) {
+    const list = root.querySelector('#mp-ac'); if (!list) return;
+    const query = normalizeName(q); if (!query) { closeAuto(); return; }
+    const matches = mp.round.allNames.filter((n) => n.toLowerCase().includes(query)).slice(0, 10);
+    if (!matches.length) { closeAuto(); return; }
+    acIndex = -1; clear(list);
+    matches.forEach((n) => list.appendChild(el('div', { class: 'ac-item', dataset: { name: n }, onClick: () => doGuess(n) }, n)));
+    list.classList.add('open');
+  }
+  function onGuessKey(e) {
+    const list = root.querySelector('#mp-ac'); const items = list ? [...list.querySelectorAll('.ac-item')] : [];
+    if (e.key === 'ArrowDown') { e.preventDefault(); acIndex = Math.min(acIndex + 1, items.length - 1); items.forEach((it, i) => it.classList.toggle('active', i === acIndex)); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); acIndex = Math.max(acIndex - 1, -1); items.forEach((it, i) => it.classList.toggle('active', i === acIndex)); }
+    else if (e.key === 'Enter') { e.preventDefault(); if (acIndex >= 0 && items[acIndex]) doGuess(items[acIndex].dataset.name); else submitFromInput(); }
+    else if (e.key === 'Escape') closeAuto();
+  }
+  function closeAuto() { const list = root.querySelector('#mp-ac'); if (list) { list.classList.remove('open'); clear(list); } acIndex = -1; }
+
+  // ---- round end overlay --------------------------------------------------
+  function roundEnd(winnerId, earned) {
+    const winner = mp.players[winnerId];
+    const poke = mp.round.mystery;
+    const cluesCount = Object.keys(mp.round.revealedClues).length;
+    mp.roundHistory.push({
+      round: mp.roundNum, pokemon: poke.name, type1: poke.type1, type2: poke.type2,
+      winnerId, winnerName: winner.name, pointsEarned: earned, cluesRevealed: cluesCount,
+    });
+    // winner rotates to end
+    mp.turnOrder.splice(mp.turnOrder.indexOf(winnerId), 1);
+    mp.turnOrder.push(winnerId);
+    mp.currentTurnPos = 0;
+    mp.roundNum++;
+    const isGameEnd = mp.players.some((p) => p.score >= mp.winTarget);
+    if (isGameEnd) mp.gameOver = true;
+    showRoundOverlay(winner, isGameEnd);
+  }
+
+  function showRoundOverlay(winner, isGameEnd) {
+    const overlay = root.querySelector('#mp-overlay'); if (!overlay) return;
+    const sorted = [...mp.players].sort((a, b) => b.score - a.score);
+    const types = [mp.round.mystery.type1, ...(mp.round.mystery.type2 && mp.round.mystery.type2 !== '\u2014' ? [mp.round.mystery.type2] : [])];
+    const typePills = types.map((t) => `<span class="type-pill type-${t.toLowerCase()}" style="font-size:10px;padding:2px 8px">${t}</span>`).join(' ');
+    const standings = sorted.map((p, i) =>
+      `<div class="rec-standing-row${p.id === winner.id ? ' leader' : ''}">
+        <span class="rs-rank">${PLACE_EMOJI[i]}</span>
+        <span style="flex:1;font-weight:${p.id === winner.id ? 800 : 600}">${p.name}</span>
+        <span class="rs-score" style="color:${p.color}">${p.score} pts</span>
+      </div>`).join('');
+    overlay.innerHTML = `
+      <div class="round-end-card">
+        <div class="rec-winner">${isGameEnd ? '\uD83C\uDFC6 Game Over!<br>' : ''}\uD83C\uDF89 ${winner.name} got it!</div>
+        <div class="rec-pokemon">The Pok\u00e9mon was: <strong>${mp.round.mystery.name}</strong></div>
+        <div style="display:flex;gap:6px;justify-content:center;margin-bottom:12px">${typePills}</div>
+        <div class="rec-earned">+${earned()} pts earned</div>
+        <div class="rec-standings"><div class="rec-standings-title">Standings</div>${standings}</div>
+        ${isGameEnd
+          ? `<button class="rec-next-btn" id="rec-go-summary">See Final Results \uD83C\uDFC6</button>`
+          : `<button class="rec-next-btn" id="rec-next-round">\u25b6 Round ${mp.roundNum}</button>`}
+      </div>`;
+    overlay.style.display = 'flex';
+    const btn = overlay.querySelector('#rec-go-summary') || overlay.querySelector('#rec-next-round');
+    if (btn) btn.addEventListener('click', () => {
+      overlay.style.display = 'none';
+      isGameEnd ? showSummary() : startRound();
+    });
+    function earned() { return mp.roundHistory[mp.roundHistory.length - 1].pointsEarned; }
+  }
+
+  // ===== FINAL SUMMARY ======================================================
+  function showSummary() {
+    const sorted = [...mp.players].sort((a, b) => b.score - a.score);
+    const podiumOrder = sorted.length === 2 ? [sorted[1], sorted[0]] :
+      sorted.length === 3 ? [sorted[1], sorted[0], sorted[2]] :
+      [sorted[1], sorted[0], sorted[2], sorted[3]];
+    const podiumClasses = ['p2', 'p1', 'p3', 'p4'];
+    const podiumLabels = ['2nd', '1st', '3rd', '4th'];
+
+    clear(root).append(
+      el('div', { class: 'summary-container' },
+        el('div', { class: 'summary-card' },
+          el('div', { class: 'summary-header win' },
+            el('div', { class: 'summary-result' }, '\uD83C\uDFC6 Game Over'),
+            el('div', { class: 'summary-mon' }, `${sorted[0].name} wins!`)),
+          el('div', { class: 'mp-podium' },
+            ...podiumOrder.filter(Boolean).map((p, i) => {
+              const rank = sorted.indexOf(p);
+              return el('div', { class: 'podium-slot' },
+                el('div', { class: `podium-block ${podiumClasses[i]}`, style: { borderColor: p.color + '55' } },
+                  el('div', { class: 'podium-place' }, PLACE_EMOJI[rank]),
+                  el('div', { class: 'podium-name', style: { color: p.color } }, p.name),
+                  el('div', { class: 'podium-score', style: { color: p.color } }, String(p.score)),
+                  el('div', { class: 'podium-wins' }, `${p.roundsWon} win${p.roundsWon !== 1 ? 's' : ''}`)));
+            })),
+          el('div', { class: 'mp-stat-grid' },
+            ...sorted.map((p) => playerStatCard(p))),
+          roundHistoryTable(),
+          el('div', { class: 'summary-actions' },
+            el('button', { class: 'btn-primary', onClick: showSetup }, 'Play again'),
+            el('button', { class: 'btn-secondary', onClick: () => onExit && onExit() }, 'Main menu')))));
+  }
+
+  function playerStatCard(p) {
+    const acc = p.guessesTotal > 0 ? Math.round(p.guessesCorrect / p.guessesTotal * 100) : 0;
+    const avg = p.roundsWon > 0 ? Math.round(p.pointsEarned / p.roundsWon) : 0;
+    return el('div', { class: 'mp-stat-card' },
+      el('h4', { style: { color: p.color, fontFamily: 'var(--font-pixel)', fontSize: '9px' } }, p.name),
+      ...[ ['Final Score', `${p.score} pts`], ['Rounds Won', p.roundsWon],
+           ['Guess Accuracy', `${acc}%`], ['Wrong Guesses', p.guessesWrong],
+           ['Clues Revealed', p.clueCount], ['Avg pts/win', avg] ]
+        .map(([l, v]) => el('div', { class: 'mp-stat-row' },
+          el('span', { class: 'mp-stat-label' }, l), el('span', { class: 'mp-stat-val' }, String(v)))));
+  }
+
+  function roundHistoryTable() {
+    const rows = mp.roundHistory;
+    let open = false;
+    const body = el('tbody', {},
+      ...rows.map((r) => el('tr', {},
+        el('td', {}, `R${r.round}`), el('td', {}, r.pokemon),
+        el('td', { style: { color: mp.players[r.winnerId]?.color } }, r.winnerName),
+        el('td', {}, `${r.pointsEarned} pts`),
+        el('td', {}, `${r.cluesRevealed} clues`))));
+    const table = el('div', { style: { display: 'none', overflowX: 'auto', marginTop: '8px' } },
+      el('table', { class: 'mp-history-table' },
+        el('thead', {}, el('tr', {}, ...['Rnd', 'Pokémon', 'Winner', 'Pts', 'Clues'].map((h) => el('th', {}, h)))),
+        body));
+    const tog = el('button', { class: 'mp-history-toggle', onClick: () => { open = !open; table.style.display = open ? '' : 'none'; tog.textContent = (open ? '\u25bc' : '\u25b6') + ` Round history (${rows.length} rounds)`; } },
+      `\u25b6 Round history (${rows.length} rounds)`);
+    return el('div', { style: { marginTop: '16px' } }, tog, table);
+  }
+
+  // ---- utils ---------------------------------------------------------------
+  function clampInt(v, lo, hi, d) { const n = parseInt(v, 10); return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : d; }
+  const onDocClick = (e) => { if (!e.target.closest('.guess-input-wrap')) closeAuto(); };
+  document.addEventListener('click', onDocClick);
+
+  return {
+    destroy() { document.removeEventListener('click', onDocClick); mp = null; clear(mount); },
+  };
+}
+
+export default createMultiplayer;
