@@ -14,7 +14,7 @@
  * Contract: createPokedex({ mount, config, data, params, onExit }) → { destroy }
  */
 
-import { el, clear } from '../lib/dom.js';
+import { el, clear, statSpreadEl } from '../lib/dom.js';
 
 const CATCH_KEY = 'pokeGuess_catchTracker';
 const SOURCE_ORDER = ['Level-up', 'TM / HM', 'Egg Move', 'Move Tutor', 'RBY TM (import)'];
@@ -186,6 +186,9 @@ export function createPokedex({ mount, config, data, params, onExit }) {
         statusBtn('unseen', '\u2753 Unseen'), statusBtn('seen', '\uD83D\uDC41 Seen'), statusBtn('caught', '\uD83C\uDFC6 Caught')),
       el('div', { html: infoHTML(poke) }),
     );
+    // Replace placeholder with actual statSpreadEl (since infoHTML uses innerHTML)
+    const placeholder = root.querySelector('#poke-stat-spread-placeholder');
+    if (placeholder && poke.fullStats) placeholder.replaceWith(statSpreadEl(poke.fullStats));
 
     const toggle = root.querySelector('.collapsible-toggle');
     if (toggle) toggle.addEventListener('click', () => {
@@ -236,7 +239,8 @@ export function createPokedex({ mount, config, data, params, onExit }) {
       + `<div class="stat-row"><span class="label">Family Size</span><span class="value">${escHtml(poke.familySize || '\u2014')}</span></div>`
       + (poke.npcObtain && poke.npcObtain !== '\u2014' ? `<div class="stat-row"><span class="label">Obtain</span><span class="value">${escHtml(poke.npcObtain)}</span></div>` : '')
       + animeInfo + '</div>'
-      + '<div style="margin-top:12px"><div class="info-subhead">Base Stats</div>' + statsHtml
+      + '<div style="margin-top:12px"><div class="info-subhead">Base Stats</div>'
+      + (poke.fullStats ? `<div id="poke-stat-spread-placeholder"></div>` : '')
       + (poke.fullStats ? `<div class="full-stat-string">${escHtml(poke.fullStats)}</div>` : '') + '</div></div>'
       + '<div class="summary-card"><h3>Type Matchups</h3>'
       + '<div class="info-subhead">Weaknesses</div><div class="weaknesses-list">' + (weakT || '<span style="color:var(--text-dim);font-size:11px">None</span>') + '</div>'

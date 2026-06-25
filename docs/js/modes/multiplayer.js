@@ -61,7 +61,7 @@ export function createMultiplayer({ mount, config, data, params = {}, onExit }) 
   function showSetup() {
     clear(root);
     root.append(
-      el('div', { class: 'sp-section-title' }, '\u2694\uFE0F Multiplayer Setup'),
+      el('div', { class: 'sp-section-title' }, `\u2694\uFE0F Multiplayer \u2014 ${data.id === 'gen1' ? 'Gen 1' : 'Gen 2'}`),
       el('div', { class: 'mp-setup-body' },
         playerSection(),
         modeSection(),
@@ -205,6 +205,7 @@ export function createMultiplayer({ mount, config, data, params = {}, onExit }) 
     mp.phase = mp.gameMode === 'rtg' ? 'reveal' : 'guess';
     mp.turnHasRevealed = false;
     mp.lastRandomRevealCat = null;
+    mp._roundGuesses = [];
     acIndex = -1;
     showGame();
   }
@@ -217,6 +218,7 @@ export function createMultiplayer({ mount, config, data, params = {}, onExit }) 
         el('button', { class: 'btn-secondary game-exit', onClick: () => { if (confirm('Quit? Progress will be lost.')) { onExit && onExit(); } } }, '\u2190 Quit'),
         el('div', { class: 'mp-topbar-info' },
           el('div', { class: 'mp-round-badge', id: 'mp-round-badge' }, `Round ${mp.roundNum}`),
+          el('div', { class: 'mp-target-badge' }, data.id === 'gen1' ? 'Gen 1' : 'Gen 2'),
           el('div', { class: 'mp-target-badge' }, `Win: ${mp.winTarget} pts`)),
         el('div', { class: 'mp-pool-display' },
           el('div', { class: 'points-number', id: 'mp-pool-pts' }, `${mp.pointPool} pts`),
@@ -226,6 +228,7 @@ export function createMultiplayer({ mount, config, data, params = {}, onExit }) 
         el('div', { class: 'game-side' },
           playerScoreboard(),
           el('div', { class: 'guess-block', id: 'mp-action-block' }),
+          el('div', { class: 'mp-guess-log', id: 'mp-guess-log' }),
           el('div', { class: 'revealed-summary', id: 'mp-revealed' }))),
       el('div', { class: 'mp-overlay', id: 'mp-overlay' }));
     renderCluePanel();
@@ -406,10 +409,8 @@ export function createMultiplayer({ mount, config, data, params = {}, onExit }) 
           el('button', { class: 'guess-btn', onClick: submitFromInput }, 'Guess'),
           el('div', { class: 'autocomplete-list', id: 'mp-ac' })),
         el('div', { class: 'guess-feedback', id: 'mp-feedback' }),
-        mp.gameMode === 'gtr'
-          ? el('button', { class: 'btn-secondary', style: { width: '100%', marginTop: '8px', fontSize: '12px' },
-              onClick: () => { mp.phase = 'reveal'; renderActionBlock(); renderCluePanel(); } }, 'Skip guess / go to reveal')
-          : null);
+        ...(mp.gameMode === 'gtr' ? [el('button', { class: 'btn-secondary', style: { width: '100%', marginTop: '8px', fontSize: '12px' },
+          onClick: () => { mp.phase = 'reveal'; renderActionBlock(); renderCluePanel(); } }, 'Skip guess / go to reveal')] : []));
       setTimeout(() => inp.focus(), 30);
     }
   }
@@ -422,6 +423,7 @@ export function createMultiplayer({ mount, config, data, params = {}, onExit }) 
     const val = String(name || '').trim(); if (!val) return;
     const cur = mp.players[mp.turnOrder[mp.currentTurnPos]];
     cur.guessesTotal++;
+    (mp._roundGuesses ||= []).push({ pid: cur.id, name: val, correct: normalizeName(val) === normalizeName(mp.round.mystery.name) });
     if (normalizeName(val) === normalizeName(mp.round.mystery.name)) {
       cur.guessesCorrect++; cur.roundsWon++;
       const earned = mp.pointPool;
@@ -433,6 +435,7 @@ export function createMultiplayer({ mount, config, data, params = {}, onExit }) 
       const fb = root.querySelector('#mp-feedback');
       if (fb) { fb.className = 'guess-feedback error'; fb.textContent = `Not ${val}! Try again next turn.`; setTimeout(() => { if (fb) fb.textContent = ''; }, 2500); }
       const inp = root.querySelector('#mp-guess'); if (inp) { inp.value = ''; inp.classList.add('wrong-flash'); setTimeout(() => inp.classList.remove('wrong-flash'), 500); }
+      renderGuessLog();
       if (mp.gameMode === 'gtr') {
         mp.phase = 'reveal';
         renderActionBlock(); renderCluePanel(); updatePool();
@@ -446,8 +449,21 @@ export function createMultiplayer({ mount, config, data, params = {}, onExit }) 
     mp.currentTurnPos = (mp.currentTurnPos + 1) % mp.turnOrder.length;
     mp.phase = mp.gameMode === 'rtg' ? 'reveal' : 'guess';
     mp.turnHasRevealed = false;
-    updatePool(); renderCluePanel(); renderRevealed(); renderActionBlock();
+    updatePool(); renderCluePanel(); renderRevealed(); renderActionBlock(); renderGuessLog();
     updateActivePlayer();
+  }
+  function renderGuessLog() {
+    const log = root.querySelector('#mp-guess-log'); if (!log) return;
+    // collect all guesses for this round from all players
+    const guesses = mp.players.flatMap((p) =>
+      (mp._roundGuesses || []).filter((g) => g.pid === p.id).map((g) => ({ ...g, color: p.color, pname: p.name })));
+    if (!guesses.length) { log.textContent = ''; return; }
+    log.textContent = '';
+    log.append(el('div', { style: { fontSize: '10px', color: 'var(--text-dim)', fontFamily: 'var(--font-pixel)', marginBottom: '4px' } }, 'Guesses this round:'));
+    guesses.forEach((g) => log.append(
+      el('div', { class: 'mp-guess-log-item ' + (g.correct ? 'correct' : 'wrong') },
+        el('span', { style: { color: g.color, fontWeight: 700 } }, g.pname + ': '),
+        g.name)));
   }
 
   function updateActivePlayer() {

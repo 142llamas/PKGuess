@@ -15,7 +15,7 @@
  * Contract: createVictoryRoad({ mount, config, data, params, onExit }) → { destroy }
  */
 
-import { el, clear } from '../lib/dom.js';
+import { el, clear, statSpreadEl } from '../lib/dom.js';
 import { PokeGuessRound, normalizeName } from '../lib/engine.js';
 import { submitScore } from '../lib/leaderboard-data.js';
 
@@ -116,14 +116,14 @@ export function createVictoryRoad({ mount, config, data, params = {}, onExit }) 
     });
 
     clear(root).append(
-      el('div', { class: 'sp-section-title' }, '\uD83C\uDFCE\uFE0F Victory Road'),
+      el('div', { class: 'sp-section-title' }, '\uD83D\uDDFB Victory Road'),
       el('p', { class: 'sf-intro' },
         'One guess per Pok\u00e9mon. Wrong answer = game over. Fewer clues as your streak grows. '
         + 'Name all 251 for a perfect sweep!'),
       el('div', { class: 'vr-tier-preview' }, ...tierRows),
       el('div', { class: 'sp-start-row' },
         el('button', { class: 'btn-secondary', onClick: () => onExit && onExit() }, '\u2190 Back'),
-        el('button', { class: 'btn-primary', onClick: begin }, '\uD83C\uDFCE\uFE0F Begin \u25b6')));
+        el('button', { class: 'btn-primary', onClick: begin }, '\uD83D\uDDFB Begin \u25b6')));
   }
 
   // ---- BEGIN ---------------------------------------------------------------
@@ -314,9 +314,15 @@ export function createVictoryRoad({ mount, config, data, params = {}, onExit }) 
       const label = clue.name || clue.field || '';
       const isCore = ['generation', 'evoStage', 'compMovesetMulti'].includes(clue.special)
         || ['evoStage', 'generation'].includes(clue.field);
-      ribbon.append(el('div', { class: `vr-clue-chip${isCore ? ' core' : ''}` },
-        el('div', { class: 'vr-chip-label' }, label),
-        el('div', {}, String(rv[id]))));
+      const isFullStats = clue.field === 'fullStats';
+      const chip = el('div', { class: `vr-clue-chip${isCore ? ' core' : ''}` },
+        el('div', { class: 'vr-chip-label' }, label));
+      if (isFullStats) {
+        chip.appendChild(statSpreadEl(String(rv[id])));
+      } else {
+        chip.appendChild(document.createTextNode(String(rv[id])));
+      }
+      ribbon.append(chip);
     });
   }
 

@@ -16,6 +16,7 @@
  */
 
 import { el, clear } from '../lib/dom.js';
+import { statSpreadEl } from '../lib/dom.js';
 import { PokeGuessRound, normalizeName } from '../lib/engine.js';
 import { submitScore } from '../lib/leaderboard-data.js';
 
@@ -426,8 +427,6 @@ export function createSingle({ mount, config, data, params = {}, onExit }) {
     const m = round.mystery;
     const win = round.gameResult === 'win';
     const types = [m.type1, ...(m.type2 && m.type2 !== '\u2014' ? [m.type2] : [])];
-    const statNames = ['HP', 'Atk', 'Def', 'SpA', 'SpD', 'Spe'];
-    const statVals = (m.fullStats || '').split('/').map((x) => x.trim());
 
     clear(root).append(
       el('div', { class: 'summary-container' },
@@ -438,8 +437,7 @@ export function createSingle({ mount, config, data, params = {}, onExit }) {
             win ? el('div', { class: 'summary-score' }, `Score: ${round.pointsRemaining} pts`) : null),
           el('div', { class: 'type-pills' }, ...types.map((t) =>
             el('span', { class: `type-pill type-${t.toLowerCase()}` }, t))),
-          statVals.length >= 6 ? el('div', { class: 'stats-grid' }, ...statVals.slice(0, 6).map((v, i) =>
-            el('div', { class: 'stat-box' }, el('div', { class: 'sname' }, statNames[i]), el('div', { class: 'sval' }, v)))) : null,
+          m.fullStats ? statSpreadEl(m.fullStats) : null,
           el('div', { class: 'summary-meta' },
             el('div', {}, `Wrong guesses: ${round.wrongGuesses.length}`),
             el('div', {}, `Clues revealed: ${Object.keys(round.revealedClues).length}`)),

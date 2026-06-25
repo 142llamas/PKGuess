@@ -112,7 +112,8 @@ export function createSafari({ mount, config, data, params = {}, onExit }) {
               el('button', { class: 'guess-btn', onClick: submitFromInput }, 'Catch'),
               el('div', { class: 'autocomplete-list', id: 'sf-ac' })),
             el('div', { class: 'sf-actions' },
-              el('button', { class: 'btn-bait', onClick: throwBait }, '\uD83C\uDF6F Bait (reveal a random clue)'),
+              el('button', { class: 'btn-bait', onClick: throwBait }, '\uD83C\uDF6F Bait (cheap clue, <4pts)'),
+              el('button', { class: 'btn-rock', onClick: throwRock }, '\uD83E\uDEA8 Rock (costly clue, \u22654pts)'),
               el('button', { class: 'btn-run', onClick: run }, '\uD83D\uDC5F Run')),
             el('div', { class: 'guess-feedback', id: 'sf-feedback' })))),
     );
@@ -197,10 +198,18 @@ export function createSafari({ mount, config, data, params = {}, onExit }) {
     if (!res.ok) return;
     afterSpend();
   }
+  // Bait = reveal a random cheap clue (base cost < 4)
   function throwBait() {
-    const affordable = clues.filter((c) => round.clueAvailable(c) && round.clueCurrentCost(c.id) > 0 && round.pointsRemaining >= round.clueCurrentCost(c.id));
-    if (!affordable.length) { feedback('No clues you can afford right now.', '#e06060'); return; }
-    const c = affordable[Math.floor(rng() * affordable.length)];
+    const pool = clues.filter((c) => c.cost < 4 && round.clueAvailable(c) && round.pointsRemaining >= round.clueCurrentCost(c.id));
+    if (!pool.length) { feedback('No cheap clues available!', '#e06060'); return; }
+    const c = pool[Math.floor(rng() * pool.length)];
+    if (round.buyClue(c.id).ok) afterSpend();
+  }
+  // Rock = reveal a random costly clue (base cost >= 4)
+  function throwRock() {
+    const pool = clues.filter((c) => c.cost >= 4 && round.clueAvailable(c) && round.pointsRemaining >= round.clueCurrentCost(c.id));
+    if (!pool.length) { feedback('No costly clues available!', '#e04040'); return; }
+    const c = pool[Math.floor(rng() * pool.length)];
     if (round.buyClue(c.id).ok) afterSpend();
   }
   function afterSpend() {
