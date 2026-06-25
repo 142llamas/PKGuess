@@ -13,13 +13,13 @@ export const MODES = [
   {
     id: 'draftbattle', label: 'Draft Battle', icon: '⚔️', group: 'Draft',
     blurb: 'Free play: a fresh random draft each time. Battle the thrones. (Gen 2)',
-    enabled: false, gens: [2], params: { variant: 'freeplay' },
+    enabled: true, gens: [2], params: { variant: 'freeplay' },
     load: () => import('./modes/draftbattle.js'),
   },
   {
     id: 'dailychallenge', label: 'Daily Challenge', icon: '📅', group: 'Draft',
     blurb: 'Everyone drafts from the same seeded Pokémon. One attempt a day. (Gen 2)',
-    enabled: false, gens: [2], params: { variant: 'daily' },
+    enabled: true, gens: [2], params: { variant: 'daily' },
     load: () => import('./modes/draftbattle.js'),
   },
   {
@@ -35,7 +35,7 @@ export const MODES = [
     load: () => import('./modes/safari.js'),
   },
   {
-    id: 'victoryroad', label: 'Victory Road', icon: '🏔️', group: 'Guess',
+    id: 'victoryroad', label: 'Victory Road', icon: '🗻', group: 'Guess',
     blurb: 'Endless streak gauntlet — higher tiers reveal fewer clues.',
     enabled: true, gens: [1, 2],
     load: () => import('./modes/victoryroad.js'),

@@ -159,11 +159,14 @@ function renderMenu() {
 }
 
 function modeCard(mode) {
+  // Leaderboard: gen buttons navigate to the leaderboard but pass gen as context
+  // (the leaderboard shows all boards; gen sets the default tab)
+  const targetId = mode.id === 'leaderboard' ? 'leaderboard' : mode.id;
   const genButtons = mode.gens.map((g) =>
     el('button', {
       class: 'gen-btn',
       disabled: !mode.enabled,
-      onClick: () => navigate(`#/${mode.id}/${g}`),
+      onClick: () => navigate(`#/${targetId}/${g}`),
     }, CONFIG.genLabels?.[g] || `Gen ${g}`),
   );
 
