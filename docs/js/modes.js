@@ -59,13 +59,13 @@ export const MODES = [
   {
     id: 'victoryroad', label: 'Victory Road', icon: '🏔️', group: 'Guess',
     blurb: 'Endless streak gauntlet — higher tiers reveal fewer clues.',
-    enabled: false, gens: [1, 2],
+    enabled: true, gens: [1, 2],
     load: () => import('./modes/victoryroad.js'),
   },
   {
     id: 'multiplayer', label: 'Multiplayer', icon: '👥', group: 'Guess',
     blurb: 'Pass-and-play hot seat, or take it online with timed turns.',
-    enabled: false, gens: [1, 2],
+    enabled: true, gens: [1, 2],
     load: () => import('./modes/multiplayer.js'),
   },
   {
