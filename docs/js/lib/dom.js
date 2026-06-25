@@ -88,3 +88,23 @@ export function on(target, type, handler, opts) {
   target.addEventListener(type, handler, opts);
   return () => target.removeEventListener(type, handler, opts);
 }
+
+/**
+ * Render a full-stat-spread string as a labeled grid.
+ * Detects gen from value count: 5 values = Gen 1, 6 = Gen 2.
+ * @param {string} spreadStr  e.g. "45/49/49/65/45" or "45/49/49/65/65/45"
+ * @returns {HTMLElement}
+ */
+export function statSpreadEl(spreadStr) {
+  const vals = String(spreadStr || '').split('/').map((v) => v.trim()).filter(Boolean);
+  const gen1Names = ['HP', 'Atk', 'Def', 'Spc', 'Spe'];
+  const gen2Names = ['HP', 'Atk', 'Def', 'SpA', 'SpD', 'Spe'];
+  const names = vals.length === 5 ? gen1Names : gen2Names;
+  const grid = el('div', { class: `stat-spread-grid ${vals.length === 5 ? 'gen1' : 'gen2'}` });
+  vals.forEach((v, i) => {
+    const cell = el('div', { class: 'stat-cell' });
+    cell.innerHTML = `<span class="sname">${names[i] || '?'}</span><span class="sval">${v}</span>`;
+    grid.appendChild(cell);
+  });
+  return grid;
+}
