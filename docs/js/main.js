@@ -22,6 +22,40 @@ import { MODES, getMode, resolveFactory } from './modes.js';
 
 const APP_VERSION = '1.0.0';
 
+// Kick off anonymous auth in the background — never blocks the UI.
+// If it fails (offline), the app still works; scores just won't submit.
+let _identityReady = false;
+import('./lib/identity.js')
+  .then(({ getIdentity }) => getIdentity())
+  .then((id) => {
+    _identityReady = true;
+    // First-time user: show a name prompt after the menu renders
+    if (!id.name) showNamePrompt(id);
+  })
+  .catch(() => { /* offline or blocked — silent */ });
+
+function showNamePrompt(id) {
+  // Small non-blocking toast at the bottom of the screen
+  const existing = document.getElementById('name-prompt-toast');
+  if (existing) return;
+  const inp = el('input', { type: 'text', placeholder: 'Enter your display name', maxlength: '16',
+    class: 'mp-name-input', style: { flex: '1', minWidth: '0' } });
+  const toast = el('div', { id: 'name-prompt-toast', class: 'name-prompt-toast' },
+    el('span', { style: { fontSize: '12px', color: 'var(--text-secondary)' } }, '\uD83C\uDFAE Set your display name for the leaderboard:'),
+    el('div', { style: { display: 'flex', gap: '8px', marginTop: '6px' } },
+      inp,
+      el('button', { class: 'btn-primary', style: { padding: '8px 14px', fontSize: '12px' },
+        onClick: async () => {
+          const n = inp.value.trim();
+          if (!n) return;
+          try { await id.setName(n); toast.remove(); } catch { /* ignore */ }
+        },
+      }, 'Save'),
+      el('button', { class: 'btn-secondary', style: { padding: '8px 10px', fontSize: '12px' },
+        onClick: () => toast.remove() }, 'Skip')));
+  document.body.appendChild(toast);
+}
+
 // Minimal config the shell can run on before data/config.json exists (Phase 2).
 const DEFAULT_CONFIG = {
   title: 'PokéGuess',
