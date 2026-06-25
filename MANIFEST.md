@@ -10,9 +10,9 @@ table is the index. Status: ✅ done & tested · 🟡 in progress · ⬜ not sta
 |------|--------:|--------|-------|
 | docs/index.html | 1.0.0 | ✅ | Loads fonts + styles.css + main.js (module). Relative paths for Pages subpath. |
 | docs/.nojekyll | — | ✅ | Empty; keeps Pages from stripping `js/`-prefixed paths. |
-| docs/css/styles.css | 1.2.0 | ✅ | Sections A–G: shell + canonical game CSS + single-player + Pokédex + Safari + Victory Road + Multiplayer. |
+| docs/css/styles.css | 1.2.0 | ✅ | Sections A–H: shell, canonical game CSS, single-player, Pokédex, Safari, VR, Multiplayer, Firebase/Leaderboard. |
 | docs/js/lib/dom.js | 1.0.0 | ✅ | `el()`, `clear`, `mount`, `on`. No global state. |
-| docs/js/modes.js | 1.1.0 | ✅ | Registry (8 entries). Draft split: **Draft Battle** (free-play, random) + **Daily Challenge** (same seeded draft); both lazy-load draftbattle.js, differ by `params.variant`. All `enabled:false` until ported. |
+| docs/js/modes.js | 1.2.0 | ✅ | Registry (8 entries). Draft split: **Draft Battle** (free-play, random) + **Daily Challenge** (same seeded draft); both lazy-load draftbattle.js, differ by `params.variant`. All `enabled:false` until ported. |
 | docs/js/main.js | 1.2.0 | ✅ | (controller try/catch added)  Config load, menu render, hash router `#/<mode>/<gen>`, lazy launch, friendly fallbacks. Now passes `mode.params` to the controller. Tested under jsdom (8 cards, real config load). |
 
 ## Data pipeline & data (Phase 2 — DONE this pass, except 2b below)
@@ -37,6 +37,16 @@ table is the index. Status: ✅ done & tested · 🟡 in progress · ⬜ not sta
 | docs/data/movelist-gen{1,2}.json | gen | ✅ | **Full real-move learnsets** (kept for the guess game's moveset clues). Junk like the bled "Gyarados" is dropped (species-name = not a move); real moves without movestats (Counter, Bide…) stay here and are simply excluded from Draft at draft time. |
 | docs/data/movestats-gen{1,2}.review.csv | curated | ✅ | Your edited CSVs — the source of record for apply-movestats. |
 | docs/data/typechart-gen1.json | gen | ✅ | 15 types, **derived** from the Gen 2 chart (Dark/Steel removed; Bug↔Poison 2×, Ghost→Psychic 0). Please verify edge matchups. |
+
+## Firebase + Identity + Leaderboards (Phase 4 — DONE)
+| File | Version | Status | Notes |
+|------|--------:|--------|-------|
+| docs/js/lib/firebase.js | 1.0.0 | ✅ | Lazy Firebase SDK loader (CDN, v10.12.2). Returns thin helpers: set/update/get/push/onValue/onDisconnectSet. Cached after first load; modes that don't need the network never fetch the SDK. |
+| docs/js/lib/identity.js | 1.0.0 | ✅ | Anonymous Firebase Auth + display name + optional 4-digit PIN claim for cross-device re-linking. Name stored at /players/{uid}. Claim at /nameclaims/{nameLower}. |
+| docs/js/lib/leaderboard-data.js | 1.0.0 | ✅ | submitScore/topEntries/rankEntries (no DOM). Boards: gen1/gen2 × single/victoryroad/safari under /leaderboard/{gen}/{mode}. |
+| docs/js/modes/leaderboard.js | 1.0.0 | ✅ | Browse screen: 6 tabs (gen × mode), top-10 per board, your rank highlighted, refresh button. **Enabled.** |
+| database.rules.json | 1.0.0 | ✅ | Firebase Realtime DB security rules. players/nameclaims/leaderboard/rooms/draft all validated. Daily entries immutable once written. Throne writes validated. |
+| docs/js/main.js | 1.2.0 | ✅ | Added lazy identity init + first-launch name-prompt toast. |
 
 ## Guess modes (Phase 3 — IN PROGRESS)
 | File | Version | Status | Notes |
