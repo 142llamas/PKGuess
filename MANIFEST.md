@@ -10,7 +10,7 @@ table is the index. Status: ✅ done & tested · 🟡 in progress · ⬜ not sta
 |------|--------:|--------|-------|
 | docs/index.html | 1.0.0 | ✅ | Loads fonts + styles.css + main.js (module). Relative paths for Pages subpath. |
 | docs/.nojekyll | — | ✅ | Empty; keeps Pages from stripping `js/`-prefixed paths. |
-| docs/css/styles.css | 1.2.0 | ✅ | Sections A–E: shell, canonical game CSS, single-player, Pokédex, Safari. |
+| docs/css/styles.css | 1.2.0 | ✅ | Sections A–G: shell + canonical game CSS + single-player + Pokédex + Safari + Victory Road + Multiplayer. |
 | docs/js/lib/dom.js | 1.0.0 | ✅ | `el()`, `clear`, `mount`, `on`. No global state. |
 | docs/js/modes.js | 1.1.0 | ✅ | Registry (8 entries). Draft split: **Draft Battle** (free-play, random) + **Daily Challenge** (same seeded draft); both lazy-load draftbattle.js, differ by `params.variant`. All `enabled:false` until ported. |
 | docs/js/main.js | 1.2.0 | ✅ | (controller try/catch added)  Config load, menu render, hash router `#/<mode>/<gen>`, lazy launch, friendly fallbacks. Now passes `mode.params` to the controller. Tested under jsdom (8 cards, real config load). |
@@ -45,8 +45,8 @@ table is the index. Status: ✅ done & tested · 🟡 in progress · ⬜ not sta
 | docs/js/modes/single.js | 1.1.0 | ✅ | Single-player on engine.js (config → game → summary). **1.1.0:** guards stale/missing clue-difficulty data with a message instead of a blank screen; main.js now also try/catches controllers. Tested under jsdom. **Enabled.** |
 | docs/js/modes/pokedex.js | 1.0.0 | ✅ | Pokédex/study reference: searchable, sortable (#/A–Z) list; catch tracker (localStorage); detail view (info, type matchups, comp movesets, full move list). Reads movelist. Tested under jsdom (11 assertions). **Mode enabled.** |
 | docs/js/modes/safari.js | 1.0.0 | ✅ | Safari Zone: shared budget across a shuffled pool; 2 free start clues (Generation + BST Range); bait (random reveal), run (skip), wrong −1; ends on 0 pts / pool exhausted; score = caught; catch tracker shared w/ Pokédex. Tested under jsdom (14 assertions). **Enabled.** |
-| docs/js/modes/victoryroad.js | — | ⬜ | Endless streak gauntlet (next). |
-| docs/js/lib/mp-rules.js + docs/js/modes/multiplayer.js | ⬜ | Hot-seat first. |
+| docs/js/modes/victoryroad.js | 1.0.0 | ✅ | Endless streak gauntlet: one guess per Pokémon, wrong = game over, 8 tiers reduce pre-revealed clues as streak grows (Tier 1: 12 clues → Tier 8: 3 clues). Perfect sweep overlay at 251. Tier slot IDs resolved by special/field so both gens work. Live timer. Tested (13 assertions). **Enabled.** |
+| docs/js/modes/multiplayer.js | 1.0.0 | ✅ | Hot-seat multiplayer: 2–4 players, RTG/GTR modes, choose/random clues, clue exclusion panel, shared point pool, evo cross-inference deductions, round-end overlay with standings, podium + per-player stats, round history table. Tested (12 assertions in isolated JSDOM). **Enabled.** |
 
 ### Draft structure (Phase 5) — DECIDED: 6×2
 Draft shows **6 Pokémon; the player takes ~2 aspects from each** to assemble the 12
