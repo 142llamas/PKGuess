@@ -7,10 +7,7 @@
       "$uid": {
         ".read": "auth !== null",
         ".write": "auth !== null && auth.uid === $uid",
-        ".validate": "newData.hasChildren(['name', 'createdAt'])
-                   && newData.child('name').isString()
-                   && newData.child('name').val().length <= 16
-                   && newData.child('createdAt').isNumber()"
+        ".validate": "newData.hasChildren(['name', 'createdAt']) && newData.child('name').isString() && newData.child('name').val().length <= 16 && newData.child('createdAt').isNumber()"
       }
     },
 
@@ -18,10 +15,7 @@
       "$nameKey": {
         ".read": "auth !== null",
         ".write": "auth !== null",
-        ".validate": "newData.hasChildren(['uid', 'pinHash'])
-                   && newData.child('uid').isString()
-                   && newData.child('pinHash').isString()
-                   && $nameKey.length >= 1 && $nameKey.length <= 20"
+        ".validate": "newData.hasChildren(['uid', 'pinHash']) && newData.child('uid').isString() && newData.child('pinHash').isString() && $nameKey.length >= 1 && $nameKey.length <= 20"
       }
     },
 
@@ -33,14 +27,7 @@
           ".validate": "$mode === 'single' || $mode === 'victoryroad' || $mode === 'safari'",
           "$entryId": {
             ".write": "auth !== null && (!data.exists() || data.child('uid').val() === auth.uid)",
-            ".validate": "newData.hasChildren(['uid', 'name', 'score', 'at'])
-                       && newData.child('uid').val() === auth.uid
-                       && newData.child('name').isString()
-                       && newData.child('name').val().length <= 16
-                       && newData.child('score').isNumber()
-                       && newData.child('score').val() >= 0
-                       && newData.child('score').val() <= 10000
-                       && newData.child('at').isNumber()"
+            ".validate": "newData.hasChildren(['uid', 'name', 'score', 'at']) && newData.child('uid').val() === auth.uid && newData.child('name').isString() && newData.child('name').val().length <= 16 && newData.child('score').isNumber() && newData.child('score').val() >= 0 && newData.child('score').val() <= 10000 && newData.child('at').isNumber()"
           }
         }
       }
@@ -59,9 +46,7 @@
         "$tier": {
           ".read": "auth !== null",
           ".write": "auth !== null",
-          ".validate": "($tier === 'day' || $tier === 'week' || $tier === 'month'
-                        || $tier === 'year' || $tier === 'all')
-                     && newData.hasChildren(['holderUid', 'holderName', 'takenAt'])"
+          ".validate": "($tier === 'day' || $tier === 'week' || $tier === 'month' || $tier === 'year' || $tier === 'all') && newData.hasChildren(['holderUid', 'holderName', 'takenAt'])"
         }
       },
       "daily": {
@@ -74,10 +59,7 @@
             "$uid": {
               ".read": "auth !== null",
               ".write": "auth !== null && auth.uid === $uid && !data.exists()",
-              ".validate": "newData.hasChildren(['name', 'at'])
-                         && newData.child('name').isString()
-                         && newData.child('name').val().length <= 16
-                         && newData.child('at').isNumber()"
+              ".validate": "newData.hasChildren(['name', 'at']) && newData.child('name').isString() && newData.child('name').val().length <= 16 && newData.child('at').isNumber()"
             }
           }
         }
