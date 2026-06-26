@@ -60,8 +60,9 @@ table is the index. Status: ✅ done & tested · 🟡 in progress · ⬜ not sta
 | docs/js/sim.js | vetted | ✅ | Copied verbatim from provided sim__1_.js. runMatch/simulateBattle/toRealStats/moveId. |
 | docs/js/draft.js | v0.4.1 | ✅ | Copied verbatim from provided draft__1_.js. DraftSession/autoDraft/buildSpeciesList/buildLearnsetMap/normalizeSpecies. |
 | docs/js/lib/draft-adapter.js | 1.0.0 | ✅ | Thin re-export shim so mode controllers import cleanly from lib/. |
-| docs/js/modes/draftbattle.js | 1.0.0 | ✅ | 6×2 draft UI: one card at a time, pick 0–2 attributes, advance. Stats/types/moves all interactive. Reroll buttons. Drafted-summary sidebar. Skip advances. Complete screen. Battle phase wired as Phase 5b stub. **Enabled (Draft Battle + Daily Challenge).** |
-| docs/data/movelist-gen2.json | gen | ✅ | **Smeargle**: expanded to all 242 draftable moves via Sketch (no Sketch itself). **Mew**: expanded to 95 moves including 93 TM/HMs via "All of them" sentinel. |
+| docs/js/modes/draftbattle.js | 1.1.0 | ✅ | 6×2 draft UI: one card at a time, pick 0–2 attributes, advance. Stats/types/moves all interactive. Reroll buttons. Drafted-summary sidebar. Skip advances. Complete screen. Battle phase wired as Phase 5b stub. **Enabled (Draft Battle + Daily Challenge).** |
+| docs/data/movelist-gen2.json | gen | ✅ | Mew: 102 moves incl. 93 TM/HMs. Smeargle: Sketch only (correct for guess game). |
+| docs/data/draftpool-gen2.json | gen | ✅ | **New file.** Draft-specific pool overrides. Smeargle: 257 moves (all minus Sketch) for draft. Mew not overridden (movelist already correct). |
 
 ### Sanity check results
 - Smeargle: 242 draftable moves, Sketch excluded ✓
@@ -92,7 +93,7 @@ table is the index. Status: ✅ done & tested · 🟡 in progress · ⬜ not sta
 | docs/js/lib/sim.js | vetted | ✅ | Verbatim copy of vetted sim.js (runMatch/simulateBattle/toRealStats/moveId). Do not edit. |
 | docs/js/lib/draft.js | 0.4.1 | ✅ | Verbatim copy of vetted draft.js. Import path updated to ./sim.js. Do not rewrite. |
 | docs/js/lib/share.js | 1.0.0 | ✅ | buildSummaryText, copyToClipboard, shareWhatsApp, centralDateStr (CT-aware), seedFromDate. |
-| docs/js/modes/draftbattle.js | 1.0.0 | ✅ | Draft Battle + Daily Challenge controller. 6-card queue UI, pick stats/types/moves, rerolls, throne challenge (Firebase), daily submit+rank, battle playback, share. Tested: 14-assertion engine test + smoke test. Both modes enabled. |
+| docs/js/modes/draftbattle.js | 1.1.0 | ✅ | Draft Battle + Daily Challenge controller. 6-card queue UI, pick stats/types/moves, rerolls, throne challenge (Firebase), daily submit+rank, battle playback, share. Tested: 14-assertion engine test + smoke test. Both modes enabled. |
 | docs/css/styles.css | 1.4.0 | ✅ | Section I: draft layout, stat/type/move pick buttons, queue chips, throne grid, battle result, sidebar progress. |
 
 ## Guess modes (Phase 3 — IN PROGRESS)
