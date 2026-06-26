@@ -1,13 +1,13 @@
 /**
  * @file        js/modes/draftbattle.js
- * @version     1.0.0
- * @updated     2026-06-24
+ * @version     1.1.0
+ * @updated     2026-06-25
  * @changelog
- *   1.0.0 — Draft Battle + Daily Challenge controller. 6×2 model: one Pokémon
- *           shown at a time, player picks 0–2 attributes per card, card advances.
- *           Targets 6 cards × 2 picks = 12 attributes (6 stats, 2 types, 4 moves).
- *           If only 1 pick taken from a card, you naturally see more cards.
- *           Uses the vetted DraftSession engine from draft.js via draft-adapter.js.
+ *   1.1.0 — Must pick exactly 2 per card (no skip, no 1-pick advance).
+ *           Unselect pending picks before confirming. Soft confirmation on
+ *           reroll when picks are pending. Types: commutative-property note
+ *           removed. Battle phase is Phase 5b (stubbed with info screen).
+ *   1.0.0 — Initial 6×2 draft UI.
  *
  * Contract: createDraftBattle({ mount, config, data, params, onExit }) → { destroy }
  *   params.variant = 'freeplay' | 'daily'
@@ -21,17 +21,20 @@ const STAT_LABELS = { hp: 'HP', atk: 'Atk', def: 'Def', spc: 'Spc', spa: 'SpA', 
 export function createDraftBattle({ mount, config, data, params = {}, onExit }) {
   const root = el('div', { class: 'draft-root' });
   clear(mount).appendChild(root);
+  root.append(el('div', { class: 'draft-loading' }, 'Loading draft data\u2026'));
 
   const variant = params.variant || 'freeplay';
   const isDaily = variant === 'daily';
-
-  root.append(el('div', { class: 'draft-loading' }, 'Loading draft data\u2026'));
+  let pendingPicks = []; // [{type,key?,value?}]  — cleared on confirm or reroll
+  let toast = null;
 
   Promise.all([
     fetch('data/movelist-gen2.json').then((r) => r.ok ? r.json() : {}),
     fetch('data/movestats-gen2.json').then((r) => r.ok ? r.json() : {}),
-  ]).then(([movelist, movestats]) => {
-    const learnsetMap = buildLearnsetMap(movelist, movestats);
+    fetch('data/draftpool-gen2.json').then((r) => r.ok ? r.json() : {}).catch(() => ({})),
+  ]).then(([movelist, movestats, draftpoolExtra]) => {
+    const draftMovelist = { ...movelist, ...draftpoolExtra };
+    const learnsetMap = buildLearnsetMap(draftMovelist, movestats);
     const species = buildSpeciesList(data, learnsetMap, 2);
     if (!species.length) throw new Error('No draftable species found.');
     const seed = isDaily ? dailySeed() : ((Math.random() * 2 ** 31) | 0);
@@ -45,8 +48,6 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
       el('button', { class: 'btn-secondary', onClick: () => onExit && onExit() }, '\u2190 Back'));
   });
 
-  let pendingPicks = [];
-
   function dailySeed() {
     const ctMs = Date.now() + (new Date().getTimezoneOffset() + (-6 * 60)) * 60000;
     const ct = new Date(ctMs);
@@ -56,16 +57,30 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
     return (h ^ (h >>> 16)) >>> 0;
   }
 
+  // ---- soft toast ----------------------------------------------------------
+  function showToast(msg, onConfirm) {
+    if (toast) toast.remove();
+    toast = el('div', { class: 'draft-toast' },
+      el('span', {}, msg),
+      el('div', { class: 'draft-toast-btns' },
+        el('button', { class: 'btn-primary', style: { padding: '6px 14px', fontSize: '12px' },
+          onClick: () => { toast.remove(); toast = null; onConfirm(); } }, 'Continue'),
+        el('button', { class: 'btn-secondary', style: { padding: '6px 14px', fontSize: '12px' },
+          onClick: () => { toast.remove(); toast = null; } }, 'Cancel')));
+    root.append(toast);
+  }
+
   // ===== RENDER CARD ========================================================
   function renderCard(session) {
+    if (toast) { toast.remove(); toast = null; }
     if (session.isComplete()) { showComplete(session); return; }
     const card = session.current;
     const avail = session.availablePicks();
     const canPickMore = pendingPicks.length < 2;
     const totalDone = session.statKeys.length - session.openStatSlots().length
       + session.typeSlotsFilled() + session.moves.length;
-    const totalSlots = session.statKeys.length + 2 + 4;
-    const remaining = totalSlots - totalDone;
+    const remaining = (session.statKeys.length + 2 + 4) - totalDone;
+    const readyToConfirm = pendingPicks.length === 2;
 
     clear(root).append(
       topBar(session),
@@ -81,13 +96,12 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
           movesSection(session, avail, canPickMore)),
         el('div', { class: 'draft-side-panel' },
           draftedSummary(session))),
-      bottomBar(session, remaining));
+      bottomBar(session, remaining, readyToConfirm));
   }
 
-  // ---- Top bar ---------------------------------------------------------------
+  // ---- Top bar -------------------------------------------------------------
   function topBar(session) {
     const { pokemon: pr, moves: mr } = session.rerolls;
-    const noPending = pendingPicks.length === 0;
     return el('div', { class: 'draft-topbar' },
       el('button', { class: 'btn-secondary game-exit',
         onClick: () => { if (confirm('Quit draft? Progress will be lost.')) onExit && onExit(); } },
@@ -96,96 +110,116 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
         el('div', { class: 'draft-progress' }, `Card #${session.position + 1}`),
         el('div', { class: 'draft-reroll-btns' },
           el('button', {
-            class: `btn-secondary draft-reroll${pr <= 0 || !noPending ? ' cant-afford' : ''}`,
-            disabled: pr <= 0 || !noPending,
-            onClick: () => { if (session.rerollPokemon()) { pendingPicks = []; renderCard(session); } },
+            class: `btn-secondary draft-reroll${pr <= 0 ? ' cant-afford' : ''}`,
+            disabled: pr <= 0,
+            onClick: () => {
+              const doReroll = () => { if (session.rerollPokemon()) { pendingPicks = []; renderCard(session); } };
+              if (pendingPicks.length > 0) {
+                showToast('\uD83D\uDD04 Rerolling the Pok\u00e9mon will clear your current selection.', doReroll);
+              } else { doReroll(); }
+            },
           }, `\uD83D\uDD04 New Pok\u00e9mon (${pr})`),
           el('button', {
             class: `btn-secondary draft-reroll${mr <= 0 ? ' cant-afford' : ''}`,
             disabled: mr <= 0,
-            onClick: () => { if (session.rerollMoves()) renderCard(session); },
+            onClick: () => {
+              const hasMoveSelected = pendingPicks.some((p) => p.type === 'move');
+              const doReroll = () => {
+                if (session.rerollMoves()) {
+                  // Only clear move picks; stat/type picks survive a move reroll
+                  pendingPicks = pendingPicks.filter((p) => p.type !== 'move');
+                  renderCard(session);
+                }
+              };
+              if (hasMoveSelected) {
+                showToast('\uD83D\uDD04 Rerolling moves will clear your selected move.', doReroll);
+              } else { doReroll(); }
+            },
           }, `\uD83D\uDD04 New Moves (${mr})`))));
   }
 
-  // ---- Bottom bar ------------------------------------------------------------
-  function bottomBar(session, remaining) {
+  // ---- Bottom bar ----------------------------------------------------------
+  function bottomBar(session, remaining, readyToConfirm) {
     return el('div', { class: 'draft-bottombar' },
       el('div', { class: 'draft-pending-info' },
-        pendingPicks.length > 0
-          ? `${pendingPicks.length} pick${pendingPicks.length !== 1 ? 's' : ''} selected \u2014`
-          : `Pick 0\u20132 attributes, then advance. `,
-        el('span', { style: { color: 'var(--text-dim)' } }, ` ${remaining} remaining`)),
+        readyToConfirm
+          ? el('span', { style: { color: 'var(--accent-gold)', fontWeight: 700 } }, '2 picks ready \u2014 confirm to advance')
+          : el('span', {}, `${pendingPicks.length}/2 picked \u2014 pick ${2 - pendingPicks.length} more`),
+        el('span', { style: { color: 'var(--text-dim)', marginLeft: '10px' } }, `${remaining} attributes remaining`)),
       el('div', { class: 'draft-advance-btns' },
-        el('button', {
-          class: 'btn-primary',
-          onClick: () => advanceCard(session),
-        }, pendingPicks.length > 0 ? `Confirm & Next \u25b6` : 'Skip \u25b6')));
+        readyToConfirm
+          ? el('button', { class: 'btn-primary', onClick: () => advanceCard(session) }, 'Confirm & Next \u25b6')
+          : el('button', { class: 'btn-primary', disabled: true, style: { opacity: 0.4 } }, 'Confirm & Next \u25b6')));
   }
 
-  // ---- Stats section ---------------------------------------------------------
+  // ---- Stats section -------------------------------------------------------
   function statsSection(session, avail, canPickMore) {
     return el('div', { class: 'draft-section' },
-      el('div', { class: 'draft-section-title' }, 'Stats — pick any 2 you want'),
+      el('div', { class: 'draft-section-title' }, 'Stats'),
       el('div', { class: 'draft-stat-chips' },
         ...session.statKeys.map((k) => {
           const drafted = k in session.stats;
           const pending = pendingPicks.some((p) => p.type === 'stat' && p.key === k);
           const available = !drafted && !pending && canPickMore && avail.stats.some((s) => s.stat === k);
           const state = drafted ? 'drafted' : pending ? 'pending' : available ? 'available' : 'unavailable';
-          return el('div', {
-            class: `draft-stat-chip ${state}`,
-            onClick: available ? () => { pendingPicks.push({ type: 'stat', key: k }); renderCard(session); } : undefined,
-          },
+          const onClick = pending
+            ? () => { pendingPicks = pendingPicks.filter((p) => !(p.type === 'stat' && p.key === k)); renderCard(session); }
+            : available
+            ? () => { pendingPicks.push({ type: 'stat', key: k }); renderCard(session); }
+            : undefined;
+          return el('div', { class: `draft-stat-chip ${state}`, onClick },
             el('span', { class: 'draft-chip-label' }, STAT_LABELS[k] || k.toUpperCase()),
             el('span', { class: 'draft-chip-state' },
-              drafted ? '\u2713' : pending ? '\u25cb' : available ? '+' : '\u2014'));
+              drafted ? '\u2713' : pending ? '\u00d7' : available ? '+' : '\u2014'));
         })));
   }
 
-  // ---- Types section ---------------------------------------------------------
+  // ---- Types section -------------------------------------------------------
   function typesSection(session, avail, canPickMore) {
     const cardTypes = [...session.current.types];
     if (session.cardIsMono()) cardTypes.push('\u2014');
     const slotsLeft = session.typeSlotsOpen();
     return el('div', { class: 'draft-section' },
-      el('div', { class: 'draft-section-title' },
-        `Types (${session.typeSlotsFilled()}/2) \u2014 types have the commutative property`),
+      el('div', { class: 'draft-section-title' }, `Types (${session.typeSlotsFilled()}/2 filled)`),
       el('div', { class: 'draft-type-chips' },
         ...cardTypes.map((t) => {
           const isDash = t === '\u2014';
           const drafted = isDash ? session.typeNone : session.types.includes(t);
           const pending = pendingPicks.some((p) => p.type === 'type' && p.value === t);
-          // Types can be drafted twice (becomes monotyped), so don't block on already having the type
           const available = !drafted && !pending && canPickMore && slotsLeft > 0
             && (isDash ? session.canPickNoType() : session.current.types.includes(t));
           const state = drafted ? 'drafted' : pending ? 'pending' : available ? 'available' : 'unavailable';
-          return el('div', {
-            class: `draft-type-chip ${state} type-${isDash ? 'none' : t.toLowerCase()}`,
-            onClick: available ? () => { pendingPicks.push({ type: 'type', value: t }); renderCard(session); } : undefined,
-          }, isDash ? '\u2014 (mono)' : t);
+          const onClick = pending
+            ? () => { pendingPicks = pendingPicks.filter((p) => !(p.type === 'type' && p.value === t)); renderCard(session); }
+            : available
+            ? () => { pendingPicks.push({ type: 'type', value: t }); renderCard(session); }
+            : undefined;
+          return el('div', { class: `draft-type-chip ${state} type-${isDash ? 'none' : t.toLowerCase()}`, onClick },
+            isDash ? '\u2014 (mono)' : t);
         })));
   }
 
-  // ---- Moves section ---------------------------------------------------------
+  // ---- Moves section -------------------------------------------------------
   function movesSection(session, avail, canPickMore) {
     const choices = session.moveChoices;
     return el('div', { class: 'draft-section' },
-      el('div', { class: 'draft-section-title' },
-        `Moves (${session.moves.length}/4) \u2014 ${choices.length} shown from full pool`),
+      el('div', { class: 'draft-section-title' }, `Moves (${session.moves.length}/4 drafted)`),
       el('div', { class: 'draft-move-grid' },
         ...choices.map((m) => {
           const drafted = session.moves.includes(m);
           const pending = pendingPicks.some((p) => p.type === 'move' && p.value === m);
           const available = !drafted && !pending && canPickMore && session.moveSlotsOpen() > 0 && avail.moves.includes(m);
           const state = drafted ? 'drafted' : pending ? 'pending' : available ? 'available' : 'unavailable';
-          return el('div', {
-            class: `draft-move-chip ${state}`,
-            onClick: available ? () => { pendingPicks.push({ type: 'move', value: m }); renderCard(session); } : undefined,
-          }, m);
+          const onClick = pending
+            ? () => { pendingPicks = pendingPicks.filter((p) => !(p.type === 'move' && p.value === m)); renderCard(session); }
+            : available
+            ? () => { pendingPicks.push({ type: 'move', value: m }); renderCard(session); }
+            : undefined;
+          return el('div', { class: `draft-move-chip ${state}`, onClick }, m);
         })));
   }
 
-  // ---- Drafted summary sidebar -----------------------------------------------
+  // ---- Drafted summary sidebar --------------------------------------------
   function draftedSummary(session) {
     const typeDisplay = [];
     if (session.types[0]) typeDisplay.push(session.types[0]);
@@ -198,7 +232,7 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
         el('div', { class: 'draft-chip-label' }, 'Types'),
         el('div', { class: 'draft-type-pills' },
           ...typeDisplay.map((t) =>
-            el('span', { class: `type-pill type-${t === '?' ? 'none' : t === '\u2014' ? 'none' : t.toLowerCase()}` }, t)))),
+            el('span', { class: `type-pill type-${t === '?' || t === '\u2014' ? 'none' : t.toLowerCase()}` }, t)))),
       el('div', { class: 'draft-summary-section' },
         el('div', { class: 'draft-chip-label' }, 'Stats'),
         el('div', { class: 'draft-stat-mini' },
@@ -213,8 +247,9 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
             session.moves[i] || `\u2014 slot ${i + 1}`))));
   }
 
-  // ---- Advance card ----------------------------------------------------------
+  // ---- Advance (requires exactly 2 picks) ----------------------------------
   function advanceCard(session) {
+    if (pendingPicks.length !== 2) return; // button is disabled if not 2
     for (const pick of pendingPicks) {
       if (pick.type === 'stat') session.pickStat(pick.key);
       else if (pick.type === 'type') {
@@ -223,29 +258,17 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
       } else if (pick.type === 'move') session.pickMove(pick.value);
     }
     pendingPicks = [];
-    // If 0 picks, force-advance. DraftSession.skipIfStuck() only works when
-    // there are literally no picks — if picks exist but we just didn't take
-    // any, we override the position counter via a temporary unlock.
-    if (!session.isComplete() && session.hasLegalPick()) {
-      // Inject a zero-pick advance by leveraging the internal _advance.
-      // Since _advance is private, we push a no-op pick on a non-existent stat
-      // or just use the built-in skipIfStuck with a hacky override:
-      // Simplest safe approach — skipIfStuck only advances when stuck, so for
-      // a true skip we need to use the duck-typed JS object directly.
-      session._advance();
-    }
     renderCard(session);
   }
 
-  // ===== COMPLETE ============================================================
+  // ===== COMPLETE ===========================================================
   function showComplete(session) {
     let result;
-    try { result = session.result(); }
-    catch (e) { 
+    try { result = session.result(); } catch (e) {
       clear(root).append(el('p', { class: 'placeholder-text' }, 'Error: ' + e.message));
       return;
     }
-    const statValues = session.statKeys.map((k) => result.baseStats[k] || 0);
+    const statVals = session.statKeys.map((k) => result.baseStats[k] || 0);
     clear(root).append(
       el('div', { class: 'summary-container' },
         el('div', { class: 'summary-card' },
@@ -255,20 +278,35 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
           el('div', { class: 'type-pills' },
             ...result.types.filter(Boolean).map((t) =>
               el('span', { class: `type-pill type-${t.toLowerCase()}` }, t))),
-          statSpreadEl(statValues.join('/')),
+          statSpreadEl(statVals.join('/')),
           el('div', { class: 'draft-complete-moves' },
             el('div', { class: 'draft-section-title', style: { marginTop: '12px' } }, 'Moves'),
             el('div', { class: 'draft-move-grid' },
               ...result.moves.map((m) => el('div', { class: 'draft-move-chip drafted' }, m)))),
           el('div', { class: 'summary-meta' },
-            el('div', {}, `Source: ${result.silhouetteSpecies || result.name}`)),
+            el('div', {}, `Based on: ${result.silhouetteSpecies || result.name}`)),
           el('div', { class: 'summary-actions' },
-            el('button', { class: 'btn-primary',
-              onClick: () => alert('Battle phase coming in Phase 5b!') }, '\u2694\uFE0F Go to Battle!'),
+            el('button', { class: 'btn-primary', onClick: showBattleStub }, '\u2694\uFE0F Go to Battle!'),
             el('button', { class: 'btn-secondary', onClick: () => onExit && onExit() }, '\u2190 Main Menu')))));
   }
 
-  return { destroy() { clear(mount); } };
+  function showBattleStub() {
+    // Battle is Phase 5b — runMatch + playback + throne system
+    clear(root).append(
+      el('div', { class: 'summary-container' },
+        el('div', { class: 'summary-card' },
+          el('div', { class: 'summary-header' },
+            el('div', { class: 'summary-result' }, '\u2694\uFE0F Battle — Coming Soon'),
+            el('div', { class: 'summary-mon' }, 'Phase 5b')),
+          el('p', { class: 'sf-intro' },
+            'The battle simulation, playback, and throne system are the next phase of development. '
+            + 'Your draft is complete and valid \u2014 the battle engine (runMatch from sim.js) is already integrated; '
+            + 'the UI to display results and the throne/daily systems are what\u2019s still being built.'),
+          el('div', { class: 'summary-actions' },
+            el('button', { class: 'btn-secondary', onClick: () => onExit && onExit() }, '\u2190 Main Menu')))));
+  }
+
+  return { destroy() { if (toast) { toast.remove(); toast = null; } clear(mount); } };
 }
 
 export default createDraftBattle;
