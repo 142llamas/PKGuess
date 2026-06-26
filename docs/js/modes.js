@@ -1,8 +1,9 @@
 /**
  * @file        docs/js/modes.js
- * @version     1.2.0
+ * @version     1.3.0
  * @updated     2026-06-24
  * @changelog
+ *   1.3.0 — Added Online multiplayer mode (Firebase rooms, timed turns).
  *   1.2.0 — Reordered groups: Draft first, Guess second, Reference last.
  *   1.1.0 — Split Draft into Draft Battle + Daily Challenge.
  *   1.0.0 — Initial registry.
@@ -42,9 +43,15 @@ export const MODES = [
   },
   {
     id: 'multiplayer', label: 'Multiplayer', icon: '👥', group: 'Guess',
-    blurb: 'Pass-and-play hot seat, or take it online with timed turns.',
+    blurb: 'Pass-and-play hot seat on one device.',
     enabled: true, gens: [1, 2],
     load: () => import('./modes/multiplayer.js'),
+  },
+  {
+    id: 'online', label: 'Online', icon: '🌐', group: 'Guess',
+    blurb: 'Play across devices: create a room, share the 6-char code, take timed turns.',
+    enabled: true, gens: [1, 2],
+    load: () => import('./modes/online.js'),
   },
   {
     id: 'pokedex', label: 'Pokédex', icon: '📖', group: 'Reference',
