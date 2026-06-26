@@ -262,6 +262,47 @@ function buildGen(gen, path, fm) {
     }
   }
 
+  // --- special-case expansions ---------------------------------------------
+  // Smeargle: the MOVELIST (used by the guess game) keeps only Sketch, as it
+  // appears in the Excel. The draft game gets access to all moves via a separate
+  // draftpool-genN.json file built below. This preserves correct guess-game
+  // behavior (Smeargle's example moveset clue reveals only Sketch).
+  //
+  // Mew: "All of them" TM/HM sentinel — expand to all TM/HMs. Correct for BOTH
+  // the guess game (TM/HM clue reveals any TM) and the draft (full TM/HM pool).
+  const mewKey = dexByNorm.get(normKey('Mew'))?.toLowerCase();
+  if (mewKey) {
+    const tmhmMoves = new Set();
+    for (const arr of Object.values(movelist)) {
+      for (const m of arr) {
+        if (/TM\s*\/\s*HM|TM|HM/i.test(m.source)) tmhmMoves.add(m.move);
+      }
+    }
+    const existing = movelist[mewKey] || [];
+    const existingNames = new Set(existing.map((m) => m.move));
+    const toAdd = [...tmhmMoves].filter((m) => !existingNames.has(m)).map((m) => ({ move: m, source: 'TM / HM' }));
+    movelist[mewKey] = [...existing, ...toAdd];
+    if (toAdd.length) report.supplemented = (report.supplemented || []).concat([{ species: mewKey, added: toAdd.length, note: 'Expanded: all TM/HMs via "All of them" sentinel' }]);
+  }
+
+  // --- draft pool (separate from movelist) ----------------------------------
+  // Build draftpool-genN.json: like the movelist but Smeargle gets ALL moves
+  // (everything with movestats, minus Sketch). Keyed dexNameLower → [moveName].
+  // The draft controller uses this file; the guess game uses movelist only.
+  const draftpoolExtra = {};
+  const smeargleKey = dexByNorm.get(normKey('Smeargle'))?.toLowerCase();
+  if (smeargleKey) {
+    // Collect all move names present in movelist (any source, any species)
+    const allMoveNames = new Set();
+    for (const arr of Object.values(movelist)) for (const m of arr) allMoveNames.add(m.move);
+    // Smeargle draft pool = all moves except Sketch
+    draftpoolExtra[smeargleKey] = [...allMoveNames]
+      .filter((m) => String(m).toLowerCase().replace(/[^a-z0-9]/g, '') !== 'sketch')
+      .map((m) => ({ move: m, source: 'Sketch' }));
+  }
+  // For all other species, draftpool is identical to movelist.
+  // We only need to store overrides — the draft controller merges at load time.
+
   // dex species that ended up with no moves at all (genuine data gaps)
   for (const p of pokedex) if (!movelist[p.name.toLowerCase()] || !movelist[p.name.toLowerCase()].length) report.dexWithoutMoves.push(`${p.num} ${p.name}`);
 
@@ -276,7 +317,7 @@ function buildGen(gen, path, fm) {
     multiClue: rules.multiClue,
   };
 
-  return { genData, movelist, report };
+  return { genData, movelist, draftpoolExtra, report };
 }
 
 // ---- Gen 2 (GSC-era) type chart: attacker -> { defender: multiplier } ------
@@ -366,9 +407,13 @@ function main() {
 
   const reports = [];
   for (const [gen, path, fm] of [[1, PATHS.gen1, FM_GEN1], [2, PATHS.gen2, FM_GEN2]]) {
-    const { genData, movelist, report } = buildGen(gen, path, fm);
+    const { genData, movelist, draftpoolExtra, report } = buildGen(gen, path, fm);
     writeJson(`gen${gen}.json`, genData);
     writeJson(`movelist-gen${gen}.json`, movelist);
+    if (Object.keys(draftpoolExtra).length) {
+      writeJson(`draftpool-gen${gen}.json`, draftpoolExtra);
+      console.log(`  draftpool-gen${gen}.json: ${Object.keys(draftpoolExtra).length} override(s).`);
+    }
     reports.push(report);
     console.log(`\nGEN${gen}: ${report.pokedexRows} Pokémon, ` +
       `${Object.keys(movelist).length} species with moves, ` +
