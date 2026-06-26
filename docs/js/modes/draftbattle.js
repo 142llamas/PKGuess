@@ -1,12 +1,28 @@
 /**
  * @file        js/modes/draftbattle.js
- * @version     1.1.0
+ * @version     1.3.0
  * @updated     2026-06-25
  * @changelog
- *   1.1.0 — Must pick exactly 2 per card (no skip, no 1-pick advance).
- *           Unselect pending picks before confirming. Soft confirmation on
- *           reroll when picks are pending. Types: commutative-property note
- *           removed. Battle phase is Phase 5b (stubbed with info screen).
+ *   1.3.0 — Wired to draft.js v0.5.0 (per-card commit). Draft picks are now
+ *           buffered in the UI and applied atomically via session.commitCard()
+ *           so BOTH of a card's picks read that card's data. Type chips are
+ *           pickable even when already owned (→ mono); "—" labelled "no 2nd
+ *           type"; drafted stats grey out on all later cards; dynamic "N picks"
+ *           prompt; Skip button when a card offers no valid pick. Requires
+ *           draft.js ≥ 0.5.0 and lib/share.js.
+ *   1.2.0 — PHASE 5b. Replaced the battle stub with the full post-draft flow:
+ *           • Battle playback — runMatch(N=501) verdict (win% + strict-majority
+ *             "beat") plus a step-through of one sample log with live HP bars.
+ *           • Throne Challenge (free-play) — 5 thrones (Day/Week/Month/Year/
+ *             All-Time). Each holds the reigning mon; a throne whose stored
+ *             period has rolled over (midnight CT, etc.) shows a deterministic
+ *             NPC champion. Beat the champion to claim the throne (Firebase).
+ *           • Daily Challenge — one seeded draft + one attempt per identity,
+ *             all-pairs ranking by average win%, results page + share card.
+ *           • Central-Time date/seed/period now come from lib/share.js (DST-
+ *             correct); the local fixed-offset dailySeed() was removed.
+ *           Draft UI (the 6×2 card loop) is unchanged from 1.1.0.
+ *   1.1.0 — Must pick exactly 2 per card; soft confirmations; battle stub.
  *   1.0.0 — Initial 6×2 draft UI.
  *
  * Contract: createDraftBattle({ mount, config, data, params, onExit }) → { destroy }
@@ -14,9 +30,23 @@
  */
 
 import { el, clear, statSpreadEl } from '../lib/dom.js';
-import { DraftSession, buildSpeciesList, buildLearnsetMap } from '../lib/draft-adapter.js';
+import {
+  DraftSession, autoDraft, buildSpeciesList, buildLearnsetMap, runMatch, toRealStats,
+} from '../lib/draft-adapter.js';
+import {
+  centralDateStr, centralPeriodKey, seedFromDate, seedFromString, buildSummaryText,
+  copyToClipboard, shareWhatsApp,
+} from '../lib/share.js';
 
 const STAT_LABELS = { hp: 'HP', atk: 'Atk', def: 'Def', spc: 'Spc', spa: 'SpA', spd: 'SpD', spe: 'Spe' };
+const STATUS_LABELS = { par: 'paralyzed', brn: 'burned', psn: 'poisoned', tox: 'badly poisoned', slp: 'asleep', frz: 'frozen' };
+const TIERS = [
+  { key: 'day', label: 'Day' }, { key: 'week', label: 'Week' }, { key: 'month', label: 'Month' },
+  { key: 'year', label: 'Year' }, { key: 'all', label: 'All-Time' },
+];
+const BATTLE_N = 501;          // SPEC-locked sample count
+const lazyIdentity = () => import('../lib/identity.js').then((m) => m.getIdentity());
+const lazyFirebase = () => import('../lib/firebase.js').then((m) => m.getFirebase());
 
 export function createDraftBattle({ mount, config, data, params = {}, onExit }) {
   const root = el('div', { class: 'draft-root' });
@@ -25,39 +55,61 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
 
   const variant = params.variant || 'freeplay';
   const isDaily = variant === 'daily';
-  let pendingPicks = []; // [{type,key?,value?}]  — cleared on confirm or reroll
+
+  let pendingPicks = [];   // [{type,key?,value?}] — cleared on confirm or reroll
   let toast = null;
+  let playTimer = null;    // battle auto-play interval
+  let ctx = null;          // { species, movestats, chart }
+  let lastResult = null;   // completed draft result()
+  let identity = null;     // resolved lazily for daily / throne
+  let firebase = null;
 
   Promise.all([
-    fetch('data/movelist-gen2.json').then((r) => r.ok ? r.json() : {}),
-    fetch('data/movestats-gen2.json').then((r) => r.ok ? r.json() : {}),
-    fetch('data/draftpool-gen2.json').then((r) => r.ok ? r.json() : {}).catch(() => ({})),
-  ]).then(([movelist, movestats, draftpoolExtra]) => {
-    const draftMovelist = { ...movelist, ...draftpoolExtra };
-    const learnsetMap = buildLearnsetMap(draftMovelist, movestats);
+    fetch('data/movelist-gen2.json').then((r) => (r.ok ? r.json() : {})),
+    fetch('data/movestats-gen2.json').then((r) => (r.ok ? r.json() : {})),
+    fetch('data/draftpool-gen2.json').then((r) => (r.ok ? r.json() : {})).catch(() => ({})),
+    fetch('data/typechart-gen2.json').then((r) => (r.ok ? r.json() : {})),
+  ]).then(([movelist, movestats, draftpoolExtra, chart]) => {
+    const learnsetMap = buildLearnsetMap({ ...movelist, ...draftpoolExtra }, movestats);
     const species = buildSpeciesList(data, learnsetMap, 2);
     if (!species.length) throw new Error('No draftable species found.');
-    const seed = isDaily ? dailySeed() : ((Math.random() * 2 ** 31) | 0);
-    const rerolls = isDaily ? { pokemon: 1, moves: 1 } : { pokemon: 3, moves: 3 };
-    const session = new DraftSession({ species, gen: 2, seed, rerolls });
-    pendingPicks = [];
-    renderCard(session);
-  }).catch((err) => {
-    clear(root).append(
-      el('p', { class: 'placeholder-text' }, 'Could not load draft: ' + (err.message || err)),
-      el('button', { class: 'btn-secondary', onClick: () => onExit && onExit() }, '\u2190 Back'));
-  });
+    ctx = { species, movestats, chart };
+    if (isDaily) startDaily();
+    else startDraft(((Math.random() * 2 ** 31) | 0), { pokemon: 3, moves: 3 });
+  }).catch((err) => showError(err));
 
-  function dailySeed() {
-    const ctMs = Date.now() + (new Date().getTimezoneOffset() + (-6 * 60)) * 60000;
-    const ct = new Date(ctMs);
-    let h = (ct.getFullYear() * 10000 + (ct.getMonth() + 1) * 100 + ct.getDate()) >>> 0;
-    h = (Math.imul(h ^ (h >>> 16), 0x45d9f3b)) >>> 0;
-    h = (Math.imul(h ^ (h >>> 16), 0x45d9f3b)) >>> 0;
-    return (h ^ (h >>> 16)) >>> 0;
+  function showError(err) {
+    stopPlay();
+    clear(root).append(
+      el('p', { class: 'placeholder-text' }, 'Could not load: ' + (err && err.message || err)),
+      el('button', { class: 'btn-secondary', onClick: () => onExit && onExit() }, '\u2190 Back'));
   }
 
-  // ---- soft toast ----------------------------------------------------------
+  function startDraft(seed, rerolls) {
+    const session = new DraftSession({ species: ctx.species, gen: 2, seed, rerolls });
+    pendingPicks = [];
+    renderCard(session);
+  }
+
+  // ===== DAILY ENTRY GATE ===================================================
+  async function startDaily() {
+    clear(root).append(spinner('Loading today\u2019s challenge\u2026'));
+    ctx.dateStr = centralDateStr();
+    try { identity = await lazyIdentity(); firebase = await lazyFirebase(); } catch { /* offline */ }
+    if (identity && firebase) {
+      try {
+        const existing = await firebase.get(`/draft/daily/${ctx.dateStr}/entries/${identity.uid}`);
+        if (existing) { showDailyResults(); return; }      // one attempt per identity
+      } catch { /* read failed — let them play, submit may still work */ }
+    }
+    startDraft(seedFromDate(ctx.dateStr), { pokemon: 1, moves: 1 });
+  }
+
+  // ===== shared bits ========================================================
+  function spinner(msg) {
+    return el('div', { class: 'draft-loading' },
+      el('div', { class: 'battle-spinner' }), el('div', { style: { marginTop: '10px' } }, msg));
+  }
   function showToast(msg, onConfirm) {
     if (toast) toast.remove();
     toast = el('div', { class: 'draft-toast' },
@@ -69,18 +121,69 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
           onClick: () => { toast.remove(); toast = null; } }, 'Cancel')));
     root.append(toast);
   }
+  function flash(msg) {
+    if (toast) toast.remove();
+    toast = el('div', { class: 'draft-toast' },
+      el('span', {}, msg),
+      el('div', { class: 'draft-toast-btns' },
+        el('button', { class: 'btn-secondary', style: { padding: '6px 14px', fontSize: '12px' },
+          onClick: () => { toast.remove(); toast = null; } }, 'OK')));
+    root.append(toast);
+    setTimeout(() => { if (toast) { toast.remove(); toast = null; } }, 4000);
+  }
+  function stopPlay() { if (playTimer) { clearInterval(playTimer); playTimer = null; } }
 
-  // ===== RENDER CARD ========================================================
+  // mon (storage) <-> battle spec helpers
+  function storedFromResult(res) {
+    const o = { name: res.name, types: res.types.filter(Boolean), baseStats: res.baseStats, moves: res.moves };
+    if (res.silhouetteSpecies) o.species = res.silhouetteSpecies;
+    if (res.silhouetteSpriteId != null) o.sprite = res.silhouetteSpriteId;
+    return o;
+  }
+  function specFromResult(res) { return { name: res.name, types: res.types.filter(Boolean), stats: res.stats, moves: res.moves }; }
+  function specFromStored(m) {
+    return { name: m.name, types: (m.types || []).filter(Boolean), stats: toRealStats(m.baseStats, 2), moves: m.moves || [] };
+  }
+
+  // ===== RENDER CARD (draft) ===============================================
+  // Pending picks (UI buffer) are applied to the engine atomically on confirm via
+  // session.commitCard(...), so both picks read the SAME (current) card's data.
   function renderCard(session) {
     if (toast) { toast.remove(); toast = null; }
     if (session.isComplete()) { showComplete(session); return; }
-    const card = session.current;
     const avail = session.availablePicks();
-    const canPickMore = pendingPicks.length < 2;
-    const totalDone = session.statKeys.length - session.openStatSlots().length
-      + session.typeSlotsFilled() + session.moves.length;
-    const remaining = (session.statKeys.length + 2 + 4) - totalDone;
-    const readyToConfirm = pendingPicks.length === 2;
+    const card = session.current;
+
+    // slot bookkeeping (accounting for what is pending this card)
+    const pendStat = pendingPicks.filter((p) => p.type === 'stat').length;
+    const pendType = pendingPicks.filter((p) => p.type === 'type').length;   // includes "—"
+    const pendMove = pendingPicks.filter((p) => p.type === 'move').length;
+    const statLeft = session.openStatSlots().length - pendStat;
+    const typeLeft = session.typeSlotsOpen() - pendType;
+    const moveLeft = session.moveSlotsOpen() - pendMove;
+    const slotsRemaining = session.openStatSlots().length + session.typeSlotsOpen() + session.moveSlotsOpen();
+
+    // how many distinct attributes this card can offer at all (independent of pending)
+    const cardTypeCount = avail.types.length + (avail.canPickNoType ? 1 : 0);
+    const cardAttrTotal = session.openStatSlots().length
+      + (session.typeSlotsOpen() > 0 ? cardTypeCount : 0)
+      + (session.moveSlotsOpen() > 0 ? avail.moves.length : 0);
+
+    const maxPick = Math.min(2, slotsRemaining, cardAttrTotal);   // picks wanted from this card
+    const canPickMore = pendingPicks.length < maxPick;
+
+    // anything still selectable after the current pending set?
+    const dashTaken = session.typeNone || pendingPicks.some((p) => p.type === 'type' && p.value === '\u2014');
+    const moreStat = statLeft > 0;
+    const moreType = typeLeft > 0 && (avail.types.some((t) => !pendingPicks.some((p) => p.type === 'type' && p.value === t))
+      || (avail.canPickNoType && !dashTaken));
+    const moreMove = moveLeft > 0 && avail.moves.some((m) => !pendingPicks.some((p) => p.type === 'move' && p.value === m));
+    const moreAvailable = canPickMore && (moreStat || moreType || moreMove);
+
+    const readyToConfirm = pendingPicks.length > 0 && (pendingPicks.length === maxPick || !moreAvailable);
+    const stuck = maxPick === 0;   // card offers nothing useful → reroll or skip
+
+    const remaining = slotsRemaining;
 
     clear(root).append(
       topBar(session),
@@ -91,76 +194,64 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
             el('div', { class: 'draft-type-pills' },
               ...card.types.map((t) => el('span', { class: `type-pill type-${t.toLowerCase()}` }, t)),
               session.cardIsMono() ? el('span', { class: 'type-pill type-none' }, '\u2014') : null)),
-          statsSection(session, avail, canPickMore),
-          typesSection(session, avail, canPickMore),
-          movesSection(session, avail, canPickMore)),
-        el('div', { class: 'draft-side-panel' },
-          draftedSummary(session))),
-      bottomBar(session, remaining, readyToConfirm));
+          statsSection(session, avail, canPickMore, statLeft),
+          typesSection(session, avail, canPickMore, typeLeft),
+          movesSection(session, avail, canPickMore, moveLeft)),
+        el('div', { class: 'draft-side-panel' }, draftedSummary(session))),
+      bottomBar(session, remaining, readyToConfirm, maxPick, stuck));
   }
 
-  // ---- Top bar -------------------------------------------------------------
   function topBar(session) {
     const { pokemon: pr, moves: mr } = session.rerolls;
     return el('div', { class: 'draft-topbar' },
       el('button', { class: 'btn-secondary game-exit',
-        onClick: () => { if (confirm('Quit draft? Progress will be lost.')) onExit && onExit(); } },
-        '\u2190 Quit'),
+        onClick: () => { if (confirm('Quit draft? Progress will be lost.')) onExit && onExit(); } }, '\u2190 Quit'),
       el('div', { class: 'draft-topbar-center' },
-        el('div', { class: 'draft-progress' }, `Card #${session.position + 1}`),
+        el('div', { class: 'draft-progress' }, `${isDaily ? 'Daily \u00b7 ' : ''}Card #${session.position + 1}`),
         el('div', { class: 'draft-reroll-btns' },
-          el('button', {
-            class: `btn-secondary draft-reroll${pr <= 0 ? ' cant-afford' : ''}`,
-            disabled: pr <= 0,
+          el('button', { class: `btn-secondary draft-reroll${pr <= 0 ? ' cant-afford' : ''}`, disabled: pr <= 0,
             onClick: () => {
               const doReroll = () => { if (session.rerollPokemon()) { pendingPicks = []; renderCard(session); } };
-              if (pendingPicks.length > 0) {
-                showToast('\uD83D\uDD04 Rerolling the Pok\u00e9mon will clear your current selection.', doReroll);
-              } else { doReroll(); }
-            },
-          }, `\uD83D\uDD04 New Pok\u00e9mon (${pr})`),
-          el('button', {
-            class: `btn-secondary draft-reroll${mr <= 0 ? ' cant-afford' : ''}`,
-            disabled: mr <= 0,
+              if (pendingPicks.length > 0) showToast('\uD83D\uDD04 Rerolling the Pok\u00e9mon will clear your current selection.', doReroll);
+              else doReroll();
+            } }, `\uD83D\uDD04 New Pok\u00e9mon (${pr})`),
+          el('button', { class: `btn-secondary draft-reroll${mr <= 0 ? ' cant-afford' : ''}`, disabled: mr <= 0,
             onClick: () => {
-              const hasMoveSelected = pendingPicks.some((p) => p.type === 'move');
+              const hasMove = pendingPicks.some((p) => p.type === 'move');
               const doReroll = () => {
-                if (session.rerollMoves()) {
-                  // Only clear move picks; stat/type picks survive a move reroll
-                  pendingPicks = pendingPicks.filter((p) => p.type !== 'move');
-                  renderCard(session);
-                }
+                if (session.rerollMoves()) { pendingPicks = pendingPicks.filter((p) => p.type !== 'move'); renderCard(session); }
               };
-              if (hasMoveSelected) {
-                showToast('\uD83D\uDD04 Rerolling moves will clear your selected move.', doReroll);
-              } else { doReroll(); }
-            },
-          }, `\uD83D\uDD04 New Moves (${mr})`))));
+              if (hasMove) showToast('\uD83D\uDD04 Rerolling moves will clear your selected move.', doReroll);
+              else doReroll();
+            } }, `\uD83D\uDD04 New Moves (${mr})`))));
   }
 
-  // ---- Bottom bar ----------------------------------------------------------
-  function bottomBar(session, remaining, readyToConfirm) {
+  function bottomBar(session, remaining, readyToConfirm, maxPick, stuck) {
+    const info = stuck
+      ? el('span', { style: { color: '#e0b341' } }, 'No valid picks on this card \u2014 reroll or skip.')
+      : readyToConfirm
+        ? el('span', { style: { color: 'var(--accent-gold)', fontWeight: 700 } }, `${pendingPicks.length} pick${pendingPicks.length === 1 ? '' : 's'} ready \u2014 confirm to advance`)
+        : el('span', {}, `${pendingPicks.length}/${maxPick} picked \u2014 pick ${maxPick - pendingPicks.length} more`);
     return el('div', { class: 'draft-bottombar' },
       el('div', { class: 'draft-pending-info' },
-        readyToConfirm
-          ? el('span', { style: { color: 'var(--accent-gold)', fontWeight: 700 } }, '2 picks ready \u2014 confirm to advance')
-          : el('span', {}, `${pendingPicks.length}/2 picked \u2014 pick ${2 - pendingPicks.length} more`),
+        info,
         el('span', { style: { color: 'var(--text-dim)', marginLeft: '10px' } }, `${remaining} attributes remaining`)),
       el('div', { class: 'draft-advance-btns' },
-        readyToConfirm
-          ? el('button', { class: 'btn-primary', onClick: () => advanceCard(session) }, 'Confirm & Next \u25b6')
-          : el('button', { class: 'btn-primary', disabled: true, style: { opacity: 0.4 } }, 'Confirm & Next \u25b6')));
+        stuck
+          ? el('button', { class: 'btn-secondary', onClick: () => { session.skipIfStuck(); pendingPicks = []; renderCard(session); } }, 'Skip card \u23ED')
+          : readyToConfirm
+            ? el('button', { class: 'btn-primary', onClick: () => advanceCard(session) }, 'Confirm & Next \u25b6')
+            : el('button', { class: 'btn-primary', disabled: true, style: { opacity: 0.4 } }, 'Confirm & Next \u25b6')));
   }
 
-  // ---- Stats section -------------------------------------------------------
-  function statsSection(session, avail, canPickMore) {
+  function statsSection(session, avail, canPickMore, statLeft) {
     return el('div', { class: 'draft-section' },
       el('div', { class: 'draft-section-title' }, 'Stats'),
       el('div', { class: 'draft-stat-chips' },
         ...session.statKeys.map((k) => {
-          const drafted = k in session.stats;
+          const drafted = k in session.stats;                       // greyed on ALL future cards
           const pending = pendingPicks.some((p) => p.type === 'stat' && p.key === k);
-          const available = !drafted && !pending && canPickMore && avail.stats.some((s) => s.stat === k);
+          const available = !drafted && !pending && canPickMore && statLeft > 0;
           const state = drafted ? 'drafted' : pending ? 'pending' : available ? 'available' : 'unavailable';
           const onClick = pending
             ? () => { pendingPicks = pendingPicks.filter((p) => !(p.type === 'stat' && p.key === k)); renderCard(session); }
@@ -169,46 +260,45 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
             : undefined;
           return el('div', { class: `draft-stat-chip ${state}`, onClick },
             el('span', { class: 'draft-chip-label' }, STAT_LABELS[k] || k.toUpperCase()),
-            el('span', { class: 'draft-chip-state' },
-              drafted ? '\u2713' : pending ? '\u00d7' : available ? '+' : '\u2014'));
+            el('span', { class: 'draft-chip-state' }, drafted ? '\u2713' : pending ? '\u00d7' : available ? '+' : '\u2014'));
         })));
   }
 
-  // ---- Types section -------------------------------------------------------
-  function typesSection(session, avail, canPickMore) {
+  function typesSection(session, avail, canPickMore, typeLeft) {
+    // A card's real types are always pickable while type slots remain (picking one
+    // you already own collapses the build to mono). "—" is pickable on mono cards.
     const cardTypes = [...session.current.types];
+    const dashTaken = session.typeNone || pendingPicks.some((p) => p.type === 'type' && p.value === '\u2014');
     if (session.cardIsMono()) cardTypes.push('\u2014');
-    const slotsLeft = session.typeSlotsOpen();
     return el('div', { class: 'draft-section' },
       el('div', { class: 'draft-section-title' }, `Types (${session.typeSlotsFilled()}/2 filled)`),
       el('div', { class: 'draft-type-chips' },
         ...cardTypes.map((t) => {
           const isDash = t === '\u2014';
-          const drafted = isDash ? session.typeNone : session.types.includes(t);
+          const owned = !isDash && session.types.includes(t);       // shown but still pickable (→ mono)
           const pending = pendingPicks.some((p) => p.type === 'type' && p.value === t);
-          const available = !drafted && !pending && canPickMore && slotsLeft > 0
-            && (isDash ? session.canPickNoType() : session.current.types.includes(t));
-          const state = drafted ? 'drafted' : pending ? 'pending' : available ? 'available' : 'unavailable';
+          const available = !pending && canPickMore && typeLeft > 0
+            && (isDash ? (session.canPickNoType() && !dashTaken) : true);
+          const state = pending ? 'pending' : available ? 'available' : 'unavailable';
           const onClick = pending
             ? () => { pendingPicks = pendingPicks.filter((p) => !(p.type === 'type' && p.value === t)); renderCard(session); }
             : available
             ? () => { pendingPicks.push({ type: 'type', value: t }); renderCard(session); }
             : undefined;
-          return el('div', { class: `draft-type-chip ${state} type-${isDash ? 'none' : t.toLowerCase()}`, onClick },
-            isDash ? '\u2014 (mono)' : t);
+          const label = isDash ? '\u2014 (no 2nd type)' : (owned ? `${t} \u2713` : t);
+          return el('div', { class: `draft-type-chip ${state} type-${isDash ? 'none' : t.toLowerCase()}`, onClick }, label);
         })));
   }
 
-  // ---- Moves section -------------------------------------------------------
-  function movesSection(session, avail, canPickMore) {
+  function movesSection(session, avail, canPickMore, moveLeft) {
     const choices = session.moveChoices;
     return el('div', { class: 'draft-section' },
       el('div', { class: 'draft-section-title' }, `Moves (${session.moves.length}/4 drafted)`),
       el('div', { class: 'draft-move-grid' },
-        ...choices.map((m) => {
-          const drafted = session.moves.includes(m);
+        ...(choices.length ? choices : []).map((m) => {
+          const drafted = session.moves.includes(m);               // no move twice
           const pending = pendingPicks.some((p) => p.type === 'move' && p.value === m);
-          const available = !drafted && !pending && canPickMore && session.moveSlotsOpen() > 0 && avail.moves.includes(m);
+          const available = !drafted && !pending && canPickMore && moveLeft > 0;
           const state = drafted ? 'drafted' : pending ? 'pending' : available ? 'available' : 'unavailable';
           const onClick = pending
             ? () => { pendingPicks = pendingPicks.filter((p) => !(p.type === 'move' && p.value === m)); renderCard(session); }
@@ -216,23 +306,18 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
             ? () => { pendingPicks.push({ type: 'move', value: m }); renderCard(session); }
             : undefined;
           return el('div', { class: `draft-move-chip ${state}`, onClick }, m);
-        })));
+        }),
+        choices.length ? null : el('div', { style: { color: 'var(--text-dim)', fontSize: '12px' } }, 'This Pok\u00e9mon has no draftable moves.')));
   }
 
-  // ---- Drafted summary sidebar --------------------------------------------
   function draftedSummary(session) {
-    const typeDisplay = [];
-    if (session.types[0]) typeDisplay.push(session.types[0]);
-    if (session.typeNone) typeDisplay.push('\u2014');
-    if (session.types[1]) typeDisplay.push(session.types[1]);
-    while (typeDisplay.length < 2) typeDisplay.push('?');
+    const typeDisplay = session.typeDisplay();                     // e.g. ['Fire','—'] / ['Fire','?']
     return el('div', { class: 'draft-summary' },
       el('div', { class: 'draft-summary-title' }, 'Your Build'),
       el('div', { class: 'draft-summary-section' },
         el('div', { class: 'draft-chip-label' }, 'Types'),
         el('div', { class: 'draft-type-pills' },
-          ...typeDisplay.map((t) =>
-            el('span', { class: `type-pill type-${t === '?' || t === '\u2014' ? 'none' : t.toLowerCase()}` }, t)))),
+          ...typeDisplay.map((t) => el('span', { class: `type-pill type-${t === '?' || t === '\u2014' ? 'none' : t.toLowerCase()}` }, t)))),
       el('div', { class: 'draft-summary-section' },
         el('div', { class: 'draft-chip-label' }, 'Stats'),
         el('div', { class: 'draft-stat-mini' },
@@ -247,28 +332,35 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
             session.moves[i] || `\u2014 slot ${i + 1}`))));
   }
 
-  // ---- Advance (requires exactly 2 picks) ----------------------------------
+  // Apply both UI picks atomically against the current card, then advance.
   function advanceCard(session) {
-    if (pendingPicks.length !== 2) return; // button is disabled if not 2
-    for (const pick of pendingPicks) {
-      if (pick.type === 'stat') session.pickStat(pick.key);
-      else if (pick.type === 'type') {
-        if (pick.value === '\u2014') session.pickNoType();
-        else session.pickType(pick.value);
-      } else if (pick.type === 'move') session.pickMove(pick.value);
-    }
+    const picks = pendingPicks.map((p) => (p.type === 'type' && p.value === '\u2014') ? { type: 'none' } : p);
+    session.commitCard(picks);
     pendingPicks = [];
     renderCard(session);
   }
 
   // ===== COMPLETE ===========================================================
   function showComplete(session) {
+    stopPlay();
     let result;
     try { result = session.result(); } catch (e) {
-      clear(root).append(el('p', { class: 'placeholder-text' }, 'Error: ' + e.message));
-      return;
+      clear(root).append(el('p', { class: 'placeholder-text' }, 'Error: ' + e.message)); return;
     }
-    const statVals = session.statKeys.map((k) => result.baseStats[k] || 0);
+    lastResult = result;
+    renderBuild(result);
+  }
+
+  function renderBuild(result) {
+    stopPlay();
+    const statKeys = ['hp', 'atk', 'def', 'spa', 'spd', 'spe'];
+    const statVals = statKeys.map((k) => result.baseStats[k] || 0);
+    const actions = isDaily
+      ? [el('button', { class: 'btn-primary', onClick: submitDaily }, '\uD83D\uDCE4 Submit & See Results'),
+         el('button', { class: 'btn-secondary', onClick: () => onExit && onExit() }, '\u2190 Main Menu')]
+      : [el('button', { class: 'btn-primary', onClick: showThrones }, '\u2694\uFE0F Challenge the Thrones'),
+         el('button', { class: 'btn-secondary', onClick: () => onExit && onExit() }, '\u2190 Main Menu')];
+
     clear(root).append(
       el('div', { class: 'summary-container' },
         el('div', { class: 'summary-card' },
@@ -276,37 +368,358 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
             el('div', { class: 'summary-result' }, '\uD83C\uDF89 Draft Complete!'),
             el('div', { class: 'summary-mon' }, result.name)),
           el('div', { class: 'type-pills' },
-            ...result.types.filter(Boolean).map((t) =>
-              el('span', { class: `type-pill type-${t.toLowerCase()}` }, t))),
+            ...result.types.filter(Boolean).map((t) => el('span', { class: `type-pill type-${t.toLowerCase()}` }, t))),
           statSpreadEl(statVals.join('/')),
           el('div', { class: 'draft-complete-moves' },
             el('div', { class: 'draft-section-title', style: { marginTop: '12px' } }, 'Moves'),
             el('div', { class: 'draft-move-grid' },
               ...result.moves.map((m) => el('div', { class: 'draft-move-chip drafted' }, m)))),
-          el('div', { class: 'summary-meta' },
-            el('div', {}, `Based on: ${result.silhouetteSpecies || result.name}`)),
-          el('div', { class: 'summary-actions' },
-            el('button', { class: 'btn-primary', onClick: showBattleStub }, '\u2694\uFE0F Go to Battle!'),
-            el('button', { class: 'btn-secondary', onClick: () => onExit && onExit() }, '\u2190 Main Menu')))));
+          el('div', { class: 'summary-meta' }, el('div', {}, `Based on: ${result.silhouetteSpecies || result.name}`)),
+          el('div', { class: 'summary-actions' }, ...actions))));
   }
 
-  function showBattleStub() {
-    // Battle is Phase 5b — runMatch + playback + throne system
+  // ===== THRONE (free-play) =================================================
+  async function showThrones() {
+    stopPlay();
+    clear(root).append(spinner('Summoning the champions\u2026'));
+    let raw = null;
+    try {
+      if (!firebase) firebase = await lazyFirebase();
+      if (!identity) identity = await lazyIdentity();
+      raw = await firebase.get('/draft/throne');
+    } catch { raw = null; }       // offline → all NPC champions (deterministic)
+    const thrones = TIERS.map((tier) => resolveThrone(tier, raw && raw[tier.key]));
+    renderThrones(thrones, raw === null);
+  }
+
+  function resolveThrone(tier, stored) {
+    const period = centralPeriodKey(tier.key);
+    if (stored && stored.period === period && stored.mon) {
+      return { tier, period, mon: stored.mon, holderName: stored.holderName || 'A challenger', holderUid: stored.holderUid || null, npc: false };
+    }
+    const champ = autoDraft({ species: ctx.species, gen: 2, seed: seedFromString(`throne:${tier.key}:${period}`), playerName: `The ${tier.label} Champion` });
+    return { tier, period, mon: storedFromResult(champ), holderName: `The ${tier.label} Champion`, holderUid: null, npc: true };
+  }
+
+  function renderThrones(thrones, offline) {
     clear(root).append(
       el('div', { class: 'summary-container' },
         el('div', { class: 'summary-card' },
-          el('div', { class: 'summary-header' },
-            el('div', { class: 'summary-result' }, '\u2694\uFE0F Battle — Coming Soon'),
-            el('div', { class: 'summary-mon' }, 'Phase 5b')),
-          el('p', { class: 'sf-intro' },
-            'The battle simulation, playback, and throne system are the next phase of development. '
-            + 'Your draft is complete and valid \u2014 the battle engine (runMatch from sim.js) is already integrated; '
-            + 'the UI to display results and the throne/daily systems are what\u2019s still being built.'),
+          el('div', { class: 'summary-result', style: { textAlign: 'center', marginBottom: '6px' } }, '\uD83D\uDC51 The Five Thrones'),
+          el('p', { class: 'sf-intro', style: { textAlign: 'center' } },
+            'Beat a throne\u2019s champion (strict majority of ' + BATTLE_N + ' sims) to claim it. '
+            + 'Each throne empties to a fresh champion at its reset \u2014 daily at midnight Central, then weekly, monthly, yearly.'),
+          offline ? el('div', { class: 'battle-offline' }, '\u26A0\uFE0F Offline \u2014 showing practice champions; claims won\u2019t be saved.') : null,
+          el('div', { class: 'draft-throne-grid' },
+            ...thrones.map((t) => throneCard(t))),
           el('div', { class: 'summary-actions' },
+            el('button', { class: 'btn-secondary', onClick: () => renderBuild(lastResult) }, '\u2190 My Build'),
+            el('button', { class: 'btn-secondary', onClick: () => onExit && onExit() }, 'Main Menu')))));
+  }
+
+  function throneCard(t) {
+    const monName = t.mon.species ? `${t.mon.species}-build` : t.mon.name;
+    return el('div', { class: 'throne-card' },
+      el('div', { class: 'throne-tier' }, t.tier.label),
+      el('div', { class: 'throne-holder' }, t.npc ? '\uD83E\uDD16 ' + t.holderName : '\uD83D\uDC51 ' + t.holderName),
+      el('div', { class: 'throne-mon' }, ...(t.mon.types || []).map((ty) => el('span', { class: `type-pill type-${ty.toLowerCase()}`, style: { fontSize: '9px', marginRight: '3px' } }, ty))),
+      el('div', { class: 'throne-mon', style: { color: 'var(--text-dim)' } }, monName),
+      el('button', { class: 'btn-primary', style: { padding: '7px 12px', fontSize: '12px' },
+        onClick: () => startBattle(specFromResult(lastResult), specFromStored(t.mon), { mode: 'throne', tier: t.tier, champLabel: t.holderName }) },
+        'Challenge'));
+  }
+
+  async function claimThrone(tier) {
+    let id = identity, fb = firebase;
+    try { if (!id) id = identity = await lazyIdentity(); if (!fb) fb = firebase = await lazyFirebase(); } catch { /* offline */ }
+    if (!id || !fb) return { ok: false, msg: 'Offline \u2014 throne not saved.' };
+    const rec = {
+      mon: storedFromResult(lastResult),
+      holderUid: id.uid,
+      holderName: (id.name || 'Anonymous').slice(0, 16),
+      takenAt: Date.now(),
+      period: centralPeriodKey(tier.key),
+    };
+    try { await fb.set(`/draft/throne/${tier.key}`, rec); return { ok: true }; }
+    catch (e) { return { ok: false, msg: 'Save failed: ' + (e.message || e) }; }
+  }
+
+  // ===== BATTLE =============================================================
+  function startBattle(aSpec, bSpec, opts) {
+    stopPlay();
+    clear(root).append(spinner('Running ' + BATTLE_N + ' simulations\u2026'));
+    // defer so the spinner paints before the (synchronous) sim burst
+    setTimeout(() => {
+      const seed = seedFromString(`${aSpec.name}|${bSpec.name}|${opts.tier ? opts.tier.key : 'x'}`);
+      const res = runMatch(aSpec, bSpec, { gen: 2, moves: ctx.movestats, chart: ctx.chart, n: BATTLE_N, seed });
+      const pb = buildPlayback(res.sampleLog, aSpec, bSpec);
+      renderBattle(aSpec, bSpec, res, pb, opts);
+    }, 30);
+  }
+
+  function buildPlayback(sample, aSpec, bSpec) {
+    const maxA = aSpec.stats.hp, maxB = bSpec.stats.hp;
+    let hpA = maxA, hpB = maxB, turn = 0;
+    const sideOf = (nm) => (nm === aSpec.name ? 'a' : nm === bSpec.name ? 'b' : null);
+    const dmg = (nm, amt) => { const s = sideOf(nm); if (s === 'a') hpA = Math.max(0, hpA - amt); else if (s === 'b') hpB = Math.max(0, hpB - amt); };
+    const heal = (nm, amt) => { const s = sideOf(nm); if (s === 'a') hpA = Math.min(maxA, hpA + amt); else if (s === 'b') hpB = Math.min(maxB, hpB + amt); };
+    const frames = [{ hpA, hpB, turn, line: `${aSpec.name} faces ${bSpec.name}!` }];
+    const eff = (e) => (e > 1 ? ' \u2014 super effective!' : (e > 0 && e < 1) ? ' \u2014 not very effective' : '');
+    for (const e of sample) {
+      let line = null;
+      switch (e.t) {
+        case 'turn': turn = e.n; continue;
+        case 'use': line = `${e.source} used ${e.move}.`; break;
+        case 'miss': line = `${e.source}\u2019s ${e.move} missed!`; break;
+        case 'immune': line = `It doesn\u2019t affect ${e.target}\u2026`; break;
+        case 'ohko': dmg(e.target, Infinity); line = `One-hit KO on ${e.target}!`; break;
+        case 'damage': dmg(e.target, e.amount); line = `${e.target} took ${e.amount}${e.crit ? ' (critical hit!)' : ''}${eff(e.eff)}`; break;
+        case 'recoil': dmg(e.target, e.amount); line = `${e.target} is hit by recoil (${e.amount}).`; break;
+        case 'confused-hit': dmg(e.target, e.amount); line = `${e.target} hurt itself in confusion (${e.amount}).`; break;
+        case 'chip': dmg(e.target, e.amount); line = `${e.target} is hurt by ${STATUS_LABELS[e.cause] || e.cause} (${e.amount}).`; break;
+        case 'heal': heal(e.target, e.amount); line = `${e.target} restored ${e.amount} HP.`; break;
+        case 'drain': heal(e.target, e.amount); line = `${e.target} drained ${e.amount} HP.`; break;
+        case 'status': line = `${e.target} is ${STATUS_LABELS[e.status] || e.status}!`; break;
+        case 'confuse': line = `${e.target} became confused!`; break;
+        case 'flinch': line = `${e.target} flinched!`; break;
+        case 'fullpara': line = `${e.target} is paralyzed and can\u2019t move!`; break;
+        case 'asleep': line = `${e.target} is fast asleep.`; break;
+        case 'wake': line = `${e.target} woke up!`; break;
+        case 'frozen': line = `${e.target} is frozen solid!`; break;
+        case 'thaw': line = `${e.target} thawed out!`; break;
+        case 'faint': dmg(e.target, Infinity); line = `${e.target} fainted!`; break;
+        case 'cap': line = 'Turn limit reached \u2014 highest HP% wins.'; break;
+        default: continue;
+      }
+      if (line != null) frames.push({ hpA, hpB, turn, line });
+    }
+    return { frames, maxA, maxB };
+  }
+
+  function renderBattle(aSpec, bSpec, res, pb, opts) {
+    stopPlay();
+    let idx = 0;
+    const beat = res.challengerBeatsChampion;
+    const pct = res.challengerWinPct;
+
+    const stage = el('div', { class: 'battle-stage' });
+    const logBox = el('div', { class: 'battle-log-inner' });
+    const verdict = el('div', { class: 'battle-verdict' });
+    const controls = el('div', { class: 'battle-controls' });
+
+    function hpBar(cur, max, side) {
+      const ratio = max > 0 ? cur / max : 0;
+      const cls = ratio > 0.5 ? 'hp-ok' : ratio > 0.2 ? 'hp-warn' : 'hp-low';
+      return el('div', { class: 'battle-side' },
+        el('div', { class: 'battle-mon-name' }, side === 'a' ? `\uD83D\uDD35 ${aSpec.name}` : `\uD83D\uDD34 ${bSpec.name}`),
+        el('div', { class: 'battle-types' }, ...(side === 'a' ? aSpec.types : bSpec.types).map((t) => el('span', { class: `type-pill type-${t.toLowerCase()}`, style: { fontSize: '9px', marginRight: '3px' } }, t))),
+        el('div', { class: 'hp-track' }, el('div', { class: `hp-fill ${cls}`, style: { width: Math.round(ratio * 100) + '%' } })),
+        el('div', { class: 'hp-num' }, `${Math.max(0, Math.round(cur))} / ${max}`));
+    }
+
+    function paint() {
+      const f = pb.frames[idx];
+      clear(stage).append(hpBar(f.hpA, pb.maxA, 'a'), el('div', { class: 'battle-vs' }, 'VS'), hpBar(f.hpB, pb.maxB, 'b'));
+      clear(logBox);
+      const from = Math.max(0, idx - 40);
+      for (let i = from; i <= idx; i++) logBox.append(el('div', { class: 'battle-log-line' }, pb.frames[i].line));
+      logBox.scrollTop = logBox.scrollHeight;
+      const atEnd = idx >= pb.frames.length - 1;
+      clear(verdict);
+      if (atEnd) {
+        verdict.className = 'battle-verdict ' + (beat ? 'win' : 'loss');
+        verdict.append(
+          el('div', { class: 'battle-verdict-head' }, beat ? '\uD83C\uDFC6 You win!' : '\u274C You fell short'),
+          el('div', { class: 'battle-verdict-sub' }, `${(pct * 100).toFixed(1)}% win rate over ${res.n} simulations`),
+          el('div', { class: 'battle-verdict-sub', style: { color: 'var(--text-dim)' } }, `(${res.challengerWins}\u2013${res.championWins})`));
+      }
+      renderControls(atEnd);
+    }
+
+    function renderControls(atEnd) {
+      clear(controls);
+      const stepBtn = (label, fn, dis) => el('button', { class: 'btn-secondary', style: { padding: '6px 12px' }, disabled: dis, onClick: fn }, label);
+      const playing = !!playTimer;
+      controls.append(
+        stepBtn('\u25C0 Back', () => { stopPlay(); idx = Math.max(0, idx - 1); paint(); }, idx <= 0),
+        playing
+          ? stepBtn('\u23F8 Pause', () => { stopPlay(); paint(); }, false)
+          : stepBtn('\u25B6 Play', () => {
+              stopPlay();
+              playTimer = setInterval(() => {
+                if (idx >= pb.frames.length - 1) { stopPlay(); paint(); return; }
+                idx++; paint();
+              }, 650);
+              paint();
+            }, atEnd),
+        stepBtn('Step \u25B6', () => { stopPlay(); idx = Math.min(pb.frames.length - 1, idx + 1); paint(); }, atEnd),
+        stepBtn('\u23ED Skip', () => { stopPlay(); idx = pb.frames.length - 1; paint(); }, atEnd));
+
+      // contextual actions at the end
+      const after = el('div', { class: 'battle-after' });
+      if (atEnd) {
+        if (opts.mode === 'throne') {
+          if (beat) {
+            after.append(el('button', { class: 'btn-primary', onClick: async () => {
+              const r = await claimThrone(opts.tier);
+              if (r.ok) { flash(`\uD83D\uDC51 You claimed the ${opts.tier.label} Throne!`); showThrones(); }
+              else flash(r.msg || 'Could not claim throne.');
+            } }, `\uD83D\uDC51 Claim the ${opts.tier.label} Throne`));
+          }
+          after.append(
+            el('button', { class: 'btn-secondary', onClick: shareThrone(opts, pct, beat) }, '\uD83D\uDCE4 Share'),
+            el('button', { class: 'btn-secondary', onClick: showThrones }, '\u2190 Thrones'));
+        } else if (opts.mode === 'daily') {
+          after.append(el('button', { class: 'btn-secondary', onClick: showDailyResults }, '\u2190 Results'));
+        }
+      }
+      controls.append(after);
+    }
+
+    clear(root).append(
+      el('div', { class: 'summary-container' },
+        el('div', { class: 'summary-card' },
+          el('div', { class: 'summary-result', style: { textAlign: 'center', marginBottom: '4px', fontSize: '13px' } },
+            opts.mode === 'throne' ? `\u2694\uFE0F ${opts.tier.label} Throne` : '\u2694\uFE0F Battle'),
+          stage, verdict,
+          el('div', { class: 'battle-log' }, logBox),
+          controls)));
+    paint();
+  }
+
+  function shareThrone(opts, pct, beat) {
+    return async () => {
+      const text = buildSummaryText({
+        kind: 'throne', tierLabel: opts.tier.label, claimed: beat,
+        monName: lastResult ? lastResult.name : undefined, winPct: pct,
+      });
+      const ok = await copyToClipboard(text);
+      showShareSheet(text, ok);
+    };
+  }
+
+  function showShareSheet(text, copied) {
+    if (toast) toast.remove();
+    toast = el('div', { class: 'draft-toast', style: { maxWidth: '420px' } },
+      el('div', { style: { whiteSpace: 'pre-wrap', fontSize: '12px', marginBottom: '8px' } }, text),
+      el('div', { class: 'draft-toast-btns' },
+        el('button', { class: 'btn-primary', style: { padding: '6px 12px', fontSize: '12px' },
+          onClick: () => shareWhatsApp(text) }, 'WhatsApp'),
+        el('button', { class: 'btn-secondary', style: { padding: '6px 12px', fontSize: '12px' },
+          onClick: async () => { const ok = await copyToClipboard(text); flash(ok ? 'Copied!' : 'Copy failed'); } },
+          copied ? '\u2713 Copied' : 'Copy'),
+        el('button', { class: 'btn-secondary', style: { padding: '6px 12px', fontSize: '12px' },
+          onClick: () => { toast.remove(); toast = null; } }, 'Close')));
+    root.append(toast);
+  }
+
+  // ===== DAILY: submit + results ===========================================
+  async function submitDaily() {
+    if (!lastResult) return;
+    clear(root).append(spinner('Submitting your entry\u2026'));
+    try { if (!identity) identity = await lazyIdentity(); if (!firebase) firebase = await lazyFirebase(); } catch { /* offline */ }
+    if (identity && firebase) {
+      const name = (identity.name || 'Anonymous').slice(0, 16);
+      try {
+        await firebase.set(`/draft/daily/${ctx.dateStr}/entries/${identity.uid}`,
+          { name, mon: storedFromResult(lastResult), at: Date.now() });
+      } catch { /* already submitted (rule blocks overwrite) — fine */ }
+    }
+    showDailyResults();
+  }
+
+  async function showDailyResults() {
+    stopPlay();
+    clear(root).append(spinner('Tallying today\u2019s battles\u2026'));
+    let entries = {};
+    try {
+      if (!identity) identity = await lazyIdentity();
+      if (!firebase) firebase = await lazyFirebase();
+      entries = (await firebase.get(`/draft/daily/${ctx.dateStr}/entries`)) || {};
+    } catch { entries = {}; }
+
+    const myUid = identity && identity.uid;
+    const list = Object.keys(entries)
+      .map((uid) => ({ uid, name: entries[uid].name || 'Anonymous', mon: entries[uid].mon }))
+      .filter((e) => e.mon && e.mon.baseStats);
+
+    // If we couldn't persist (offline) but have a local build, show it provisionally.
+    let provisional = false;
+    if (lastResult && !(myUid && list.some((e) => e.uid === myUid))) {
+      list.push({ uid: myUid || '__me__', name: (identity && identity.name) || 'You', mon: storedFromResult(lastResult), _me: true });
+      provisional = !(myUid && firebase);
+    }
+
+    setTimeout(() => {
+      const specs = list.map((e) => specFromStored(e.mon));
+      const n = list.length;
+      const sum = new Array(n).fill(0), games = new Array(n).fill(0);
+      for (let i = 0; i < n; i++) {
+        for (let j = i + 1; j < n; j++) {
+          const m = runMatch(specs[i], specs[j], { gen: 2, moves: ctx.movestats, chart: ctx.chart, n: BATTLE_N, seed: seedFromString(`${ctx.dateStr}:${i}:${j}`) });
+          sum[i] += m.challengerWins / m.n; games[i]++;
+          sum[j] += m.championWins / m.n;  games[j]++;
+        }
+      }
+      const ranked = list
+        .map((e, i) => ({ ...e, avg: games[i] ? sum[i] / games[i] : 0, spec: specs[i] }))
+        .sort((a, b) => b.avg - a.avg);
+      renderDailyResults(ranked, myUid, provisional);
+    }, 30);
+  }
+
+  function renderDailyResults(ranked, myUid, provisional) {
+    const myIndex = ranked.findIndex((e) => (myUid && e.uid === myUid) || e._me);
+    const me = myIndex >= 0 ? ranked[myIndex] : null;
+    const hasOpponents = ranked.length >= 2;
+
+    const shareText = me ? buildSummaryText({
+      kind: 'daily', dateStr: ctx.dateStr, monName: me.mon.name,
+      rank: hasOpponents ? myIndex + 1 : undefined,
+      total: hasOpponents ? ranked.length : undefined,
+      winPct: hasOpponents ? me.avg : undefined,
+    }) : '';
+
+    const rows = ranked.length
+      ? ranked.map((e, i) => {
+          const mine = i === myIndex;
+          return el('tr', { class: mine ? 'lb-me' : '' },
+            el('td', {}, (['\uD83E\uDD47', '\uD83E\uDD48', '\uD83E\uDD49'][i]) || String(i + 1)),
+            el('td', { style: { fontWeight: mine ? 800 : 400, color: mine ? 'var(--accent-gold)' : '' } }, e.name + (e._me && provisional ? ' (you, unsaved)' : '')),
+            el('td', { style: { color: 'var(--text-dim)', fontSize: '11px' } }, e.mon.name),
+            el('td', { style: { fontWeight: 700 } }, hasOpponents ? `${(e.avg * 100).toFixed(0)}%` : '\u2014'));
+        })
+      : [el('tr', {}, el('td', { colspan: '4', style: { textAlign: 'center', color: 'var(--text-dim)' } }, 'No entries yet today.'))];
+
+    const canBattleLeader = ranked.length >= 2 && me;
+    const myLine = me
+      ? (hasOpponents
+          ? `You ranked #${myIndex + 1} of ${ranked.length} \u2014 ${(me.avg * 100).toFixed(1)}% average win rate.`
+          : 'You\u2019re the first to play today! Win rates appear once others enter \u2014 check back with Refresh.')
+      : null;
+
+    clear(root).append(
+      el('div', { class: 'summary-container' },
+        el('div', { class: 'summary-card' },
+          el('div', { class: 'summary-result', style: { textAlign: 'center' } }, '\uD83C\uDFAE Daily Results'),
+          el('div', { class: 'battle-vs', style: { marginBottom: '8px' } }, ctx.dateStr + ' \u00b7 Central Time'),
+          provisional ? el('div', { class: 'battle-offline' }, '\u26A0\uFE0F Couldn\u2019t save your entry (offline). Ranking shown locally.') : null,
+          myLine ? el('div', { class: 'daily-myline' }, myLine) : null,
+          el('div', { class: 'lb-board' },
+            el('table', { class: 'lb-table' },
+              el('thead', {}, el('tr', {}, el('th', {}, '#'), el('th', {}, 'Player'), el('th', {}, 'Build'), el('th', {}, 'Win%'))),
+              el('tbody', {}, ...rows))),
+          el('div', { class: 'summary-actions' },
+            me ? el('button', { class: 'btn-primary', onClick: async () => { const ok = await copyToClipboard(shareText); showShareSheet(shareText, ok); } }, '\uD83D\uDCE4 Share') : null,
+            canBattleLeader ? el('button', { class: 'btn-secondary', onClick: () => {
+              const leader = ranked[0]._me ? ranked[1] : ranked[0];
+              startBattle(me.spec, leader.spec, { mode: 'daily', champLabel: leader.name });
+            } }, '\u2694\uFE0F Battle the leader') : null,
+            el('button', { class: 'btn-secondary', onClick: showDailyResults }, '\u21BB Refresh'),
             el('button', { class: 'btn-secondary', onClick: () => onExit && onExit() }, '\u2190 Main Menu')))));
   }
 
-  return { destroy() { if (toast) { toast.remove(); toast = null; } clear(mount); } };
+  return { destroy() { stopPlay(); if (toast) { toast.remove(); toast = null; } clear(mount); } };
 }
 
 export default createDraftBattle;
