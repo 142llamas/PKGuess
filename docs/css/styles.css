@@ -1,9 +1,11 @@
 /*
  * @file        docs/css/styles.css
- * @version     1.6.0
+ * @version     1.8.0
  * @updated     2026-06-25
  * @changelog
 
+ *   1.8.0 — Section L: gen toggle, online form spacing, VR tier banner, Safari discount note. 3-col menu.
+ *   1.7.0 — Throne card button row (Elite 4 History button).
  *   1.6.0 — Added Section K: online multiplayer (room/lobby/board/podium).
  *   1.5.0 — Added Section J (Draft Battle Phase 5b): battle stage + HP bars,
  *           verdict banner, playback controls, loading spinner, offline notice,
@@ -75,8 +77,8 @@ h1,h2,h3{font-family:var(--font-pixel);}
 }
 .mode-grid{
   display:grid; gap:12px;
-  grid-template-columns:repeat(2,minmax(0,1fr));
-  max-width:860px;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  max-width:980px;
 }
 
 .mode-card{
@@ -115,6 +117,9 @@ h1,h2,h3{font-family:var(--font-pixel);}
 }
 .placeholder-text{ color:var(--text-secondary); font-size:14px; line-height:1.6; max-width:520px; }
 
+@media (max-width:760px){
+  .mode-grid{ grid-template-columns:repeat(2,minmax(0,1fr)); }
+}
 @media (max-width:480px){
   .mode-grid{ grid-template-columns:1fr; }
 }
@@ -1175,6 +1180,8 @@ h1,h2,h3{font-family:var(--font-pixel);}
   padding:12px; text-align:center; display:flex; flex-direction:column; gap:6px;
 }
 .throne-tier { font-family:var(--font-pixel); font-size:9px; color:var(--accent-gold); }
+.throne-card-btns { display:flex; gap:6px; justify-content:center; margin-top:2px; }
+.throne-card-btns .btn-primary, .throne-card-btns .btn-secondary { flex:1; }
 .throne-holder { font-size:13px; font-weight:700; color:var(--text-primary); }
 .throne-mon { font-size:11px; }
 .throne-vacant { font-size:12px; color:var(--text-dim); font-style:italic; }
@@ -1413,3 +1420,33 @@ h1,h2,h3{font-family:var(--font-pixel);}
 .online-podium-row { display:flex; align-items:center; gap:10px; padding:9px 12px; border-radius:var(--radius);
   background:var(--bg-elevated); border:1px solid var(--border-card); font-size:14px; }
 .online-podium-row.me { border-color:var(--accent-gold); }
+
+/* ===========================================================================
+ * SECTION L — Cross-cutting UX: gen toggle (#16/#18), online form spacing
+ * (#24), Victory Road tier banner (#23), Safari clue-discount note (#22).
+ * ========================================================================= */
+.gen-bar { display:flex; align-items:center; justify-content:center; gap:8px; margin:2px 0 10px; }
+.gen-bar-label { font-family:var(--font-pixel); font-size:9px; color:var(--text-dim); }
+.gen-switch { display:inline-flex; border:1px solid var(--border-card); border-radius:100px; overflow:hidden; }
+.gen-switch-btn { padding:5px 14px; font-family:var(--font-pixel); font-size:10px; cursor:pointer;
+  background:var(--bg-elevated); color:var(--text-secondary); border:none; transition:var(--transition); }
+.gen-switch-btn:hover:not(.on) { background:var(--bg-hover); color:var(--text-primary); }
+.gen-switch-btn.on { background:var(--accent-gold); color:#1a1000; cursor:default; }
+
+/* #24 — online create form: separate sections so a header sits with ITS field */
+.online-root .mp-form-section { margin-top:16px; }
+.online-root .mp-form-section:first-of-type { margin-top:6px; }
+.online-root .mp-form-label { margin-bottom:3px; }
+
+/* #23 — Victory Road: prominent "new tier" banner */
+.vr-tier-banner { margin:10px 0; padding:12px 14px; border-radius:var(--radius-lg);
+  background:linear-gradient(135deg, rgba(245,197,24,.18), rgba(245,197,24,.04));
+  border:1px solid var(--accent-gold); text-align:center; animation:vr-tier-pop .5s ease; }
+.vr-tier-banner-head { font-family:var(--font-pixel); font-size:12px; color:var(--accent-gold); margin-bottom:4px; }
+.vr-tier-banner-sub { font-size:12px; color:var(--text-secondary); }
+.vr-tier-banner-lost { font-size:11px; color:#ff8a8a; margin-top:5px; }
+@keyframes vr-tier-pop { 0%{transform:scale(.96);opacity:0;} 100%{transform:scale(1);opacity:1;} }
+
+/* #22 — Safari bait/rock discount note */
+.safari-discount-note { font-size:11px; color:var(--text-dim); text-align:center; margin-top:6px; line-height:1.5; }
+.safari-discount-note b { color:var(--accent-gold); }
