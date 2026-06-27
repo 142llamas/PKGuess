@@ -49,6 +49,15 @@
           ".validate": "($tier === 'day' || $tier === 'week' || $tier === 'month' || $tier === 'year' || $tier === 'all') && newData.hasChildren(['holderUid', 'holderName', 'takenAt'])"
         }
       },
+      "thronehistory": {
+        "$tier": {
+          ".read": "auth !== null",
+          "$entry": {
+            ".write": "auth !== null && !data.exists()",
+            ".validate": "($tier === 'day' || $tier === 'week' || $tier === 'month' || $tier === 'year' || $tier === 'all') && newData.hasChildren(['name', 'at']) && newData.child('name').isString() && newData.child('name').val().length <= 16 && newData.child('at').isNumber()"
+          }
+        }
+      },
       "daily": {
         "$dateCT": {
           "seed": {
