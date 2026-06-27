@@ -1,8 +1,10 @@
 /**
  * @file        docs/js/modes.js
- * @version     1.3.0
- * @updated     2026-06-24
+ * @version     1.4.0
+ * @updated     2026-06-26
  * @changelog
+ *   1.4.0 — Multiplayer is its own group: Hotseat (renamed) + Online + Race
+ *           ("coming soon"). Safari relabelled "Enter the Safari Zone".
  *   1.3.0 — Added Online multiplayer mode (Firebase rooms, timed turns).
  *   1.2.0 — Reordered groups: Draft first, Guess second, Reference last.
  *   1.1.0 — Split Draft into Draft Battle + Daily Challenge.
@@ -30,7 +32,7 @@ export const MODES = [
     load: () => import('./modes/single.js'),
   },
   {
-    id: 'safari', label: 'Safari Zone', icon: '🏕️', group: 'Guess',
+    id: 'safari', label: 'Enter the Safari Zone', icon: '🏕️', group: 'Guess',
     blurb: 'One shared budget across many Pokémon — score is how many you catch.',
     enabled: true, gens: [1, 2],
     load: () => import('./modes/safari.js'),
@@ -42,16 +44,22 @@ export const MODES = [
     load: () => import('./modes/victoryroad.js'),
   },
   {
-    id: 'multiplayer', label: 'Multiplayer', icon: '👥', group: 'Guess',
-    blurb: 'Pass-and-play hot seat on one device.',
+    id: 'multiplayer', label: 'Hotseat', icon: '👥', group: 'Multiplayer',
+    blurb: 'Pass-and-play on one device, 2–4 players.',
     enabled: true, gens: [1, 2],
     load: () => import('./modes/multiplayer.js'),
   },
   {
-    id: 'online', label: 'Online', icon: '🌐', group: 'Guess',
+    id: 'online', label: 'Online', icon: '🌐', group: 'Multiplayer',
     blurb: 'Play across devices: create a room, share the 6-char code, take timed turns.',
     enabled: true, gens: [1, 2],
     load: () => import('./modes/online.js'),
+  },
+  {
+    id: 'race', label: 'Race', icon: '🏁', group: 'Multiplayer',
+    blurb: 'Same mystery, everyone guesses at once — fastest correct wins. Coming soon!',
+    enabled: false, gens: [1, 2],
+    load: () => Promise.reject(new Error('Race is coming soon')),
   },
   {
     id: 'pokedex', label: 'Pokédex', icon: '📖', group: 'Reference',

@@ -1,8 +1,10 @@
 /**
  * @file        docs/js/main.js
- * @version     1.1.0
- * @updated     2026-06-23
+ * @version     1.2.0
+ * @updated     2026-06-26
  * @changelog
+ *   1.2.0 — Pass gen + modeId into controllers so modes can show the current
+ *           generation and offer an in-mode Gen 1/2 toggle (re-routes the hash).
  *   1.1.0 — Pass mode.params (e.g. Draft variant 'freeplay'|'daily') through to
  *           the controller factory so two menu entries can share one controller.
  *   1.0.0 — Initial app shell. Loads config.json (falls back to a built-in
@@ -240,7 +242,7 @@ async function launchMode(mode, gen) {
       mount: surface,
       config: CONFIG,
       data,
-      params: mode.params || {},
+      params: { ...(mode.params || {}), gen, modeId: mode.id },
       onExit: () => navigate('#/'),
     }) || null;
   } catch (err) {
