@@ -36,6 +36,48 @@ export default function (t) {
     t.eq(round.mystery.name, mystery.name, 'mystery is the one we passed');
   }
 
+  t.section('engine.js — guesses must come from the list (#15)');
+  {
+    const r = new PokeGuessRound({ genData: gen2, rng: () => 0 });
+    r.start({ difficultyId: 'custom', mystery, guessMode: 'free', clueMode: 'choose', custom: { points: 50, guessCost: 5, startClueMode: 'none' } });
+    const before = r.pointsRemaining;
+    const junk = r.submitGuess('Notarealmon');
+    t.ok(!junk.ok && junk.reason === 'unknown', 'unknown name rejected');
+    t.eq(r.pointsRemaining, before, 'unknown guess costs nothing');
+    const real = r.submitGuess('Bulbasaur'); // valid, wrong
+    t.ok(real.ok && real.correct === false, 'a real but wrong name still counts as a guess');
+    t.eq(r.pointsRemaining, before - 5, 'wrong (valid) guess deducts guessCost');
+  }
+
+  t.section('engine.js — evolution deductions (#14)');
+  {
+    const charizard = gen2.pokedex.find((p) => p.name === 'Charizard');
+    const tauros = gen2.pokedex.find((p) => p.name === 'Tauros');
+    const mk = (poke) => { const r = new PokeGuessRound({ genData: gen2, rng: () => 0 }); r.start({ difficultyId: 'custom', mystery: poke, guessMode: 'free', clueMode: 'choose', custom: { points: 99, guessCost: 0, startClueMode: 'none' } }); return r; };
+    const avail = (r, id) => r.clueAvailable(r.clue(id));
+
+    // Charizard: final stage. Revealing Stage (9) must lock Can Evolve (10) + Evolves From (11).
+    let r = mk(charizard);
+    t.ok(avail(r, 10) && avail(r, 11), 'before: Can Evolve + Evolves From available');
+    t.ok(r.buyClue(9).ok, 'reveal Current Evolution Stage');
+    t.ok(!avail(r, 10), 'after stage reveal: Can Evolve locked (deducible)');
+    t.ok(!avail(r, 11), 'after stage reveal: Evolves From locked (deducible)');
+    t.ok(avail(r, 12), 'Evolution Method stays available (stage implies it evolves from something)');
+
+    // Reverse: revealing both 10 + 11 locks Stage (9).
+    r = mk(charizard);
+    t.ok(avail(r, 9), 'before: Stage available');
+    r.buyClue(10); r.buyClue(11);
+    t.ok(!avail(r, 9), 'after Can Evolve + Evolves From: Stage locked (deducible)');
+
+    // Single-stage (Tauros): revealing Stage pins family size (8) and locks 10/11.
+    r = mk(tauros);
+    t.ok(avail(r, 8), 'before: Number of Family Members available');
+    t.ok(r.buyClue(9).ok, 'reveal Stage (single-stage)');
+    t.ok(!avail(r, 8), 'single-stage pins family size → Family Members locked');
+    t.ok(!avail(r, 10) && !avail(r, 11), 'single-stage locks Can Evolve + Evolves From');
+  }
+
   t.section('engine.js — buying a clue deducts points');
   {
     const before = round.pointsRemaining;
