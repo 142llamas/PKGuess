@@ -1,8 +1,12 @@
 /**
  * @file        js/lib/engine.js
- * @version     1.0.0
+ * @version     1.1.0
  * @updated     2026-06-23
  * @changelog
+ *   1.1.0 — Evolution cross-deductions: revealing Current Evolution Stage
+ *           locks Can Evolve + Evolves From (and the reverse); single-stage/middle
+ *           pins family size; Evolution Method stays reachable via stage. Guesses
+ *           must be a real Pokémon from this gen's list (unknown → no penalty).
  *   1.0.0 — Initial port. A DOM-free `PokeGuessRound` that owns the guess-game
  *           round rules: clue pools, availability (difficulty locks, prereqs,
  *           contextual cross-inference, exhaustion, single-use), rising/discounted
@@ -74,6 +78,7 @@ export class PokeGuessRound {
     this.movelist = o.movelist || {};
     this.rng = o.rng || Math.random;
     this.allNames = this.pokedex.map((p) => p.name);
+    this._validGuesses = new Set(this.allNames.map((n) => normalizeName(n)));
     this._clueById = new Map(this.clues.map((c) => [c.id, c]));
     // moveset clues differ in id across gens → resolve by special/field
     this._idBySpecial = {};
@@ -261,8 +266,21 @@ export class PokeGuessRound {
     if (clue.maxUses === 1 && (clue.id in rv)) return false;
 
     // contextual cross-inference (ids ≤26 are identical across gens)
-    if (clue.id === 12) { const ef = rv[11]; if (!ef || ef === 'No') return false; }
+    // Evolution cluster — fields: 8 familySize, 9 evoStage, 10 canEvolve,
+    //   11 evolvesFrom, 12 evoMethod. evoStage ∈ {single-stage,unevolved,middle,final}.
+    // Evolution Method only matters if it evolves from something — known either
+    // directly (11=Yes) or implied by stage (middle/final).
+    if (clue.id === 12) {
+      const efYes = rv[11] === 'Yes' || rv[9] === 'middle' || rv[9] === 'final';
+      if (!efYes) return false;
+    }
     if ([9, 10, 11, 12].includes(clue.id) && rv[8] === '1') return false;
+    // Current Evolution Stage fully determines Can Evolve + Evolves From …
+    if ((clue.id === 10 || clue.id === 11) && (9 in rv)) return false;
+    // … and the pair (Can Evolve + Evolves From) fully determines the Stage.
+    if (clue.id === 9 && (10 in rv) && (11 in rv)) return false;
+    // A single-stage or middle reveal pins the family size; so does No+No.
+    if (clue.id === 8 && (rv[9] === 'single-stage' || rv[9] === 'middle' || (rv[10] === 'No' && rv[11] === 'No'))) return false;
     if (clue.id === 15 && (16 in rv) && (17 in rv)) return false;
     if ([18, 19, 20, 21, 22].includes(clue.id) && (23 in rv)) return false;
     if ([3, 4, 5, 6].includes(clue.id) && rv[2] !== 'Yes') return false;
@@ -483,6 +501,9 @@ export class PokeGuessRound {
     if (s.guessMode === 'forced' && s.forcedPhase === 'reveal') return { ok: false, reason: 'forcedRevealPhase' };
     const val = String(name || '').trim();
     if (!val) return { ok: false, reason: 'empty' };
+    // Guesses must be an actual Pokémon from this generation's list (#15).
+    // Unknown names are rejected with no penalty rather than counted as wrong.
+    if (!this._validGuesses.has(normalizeName(val))) return { ok: false, reason: 'unknown' };
     if (normalizeName(val) === normalizeName(s.mystery.name)) {
       s.guesses.push({ name: val, correct: true });
       return this._win();

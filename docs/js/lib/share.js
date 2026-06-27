@@ -1,8 +1,10 @@
 /**
  * @file        js/lib/share.js
- * @version     1.0.0
+ * @version     1.1.0
  * @updated     2026-06-25
  * @changelog
+ *   1.1.0 — Share text is now plain ASCII ("I beat ___"), no win-meter and
+ *           no emoji — fixes unrenderable glyphs in shared messages (#9/#10).
  *   1.0.0 — Central-Time date/period helpers, deterministic seeds, and the
  *           summary-card text + WhatsApp/clipboard share used by Draft Battle
  *           (throne) and the Daily Challenge (SPEC §8b).
@@ -100,11 +102,6 @@ export function seedFromDate(date = new Date()) {
 
 // ---- summary card --------------------------------------------------------
 
-function meter(p) {
-  if (p == null || !isFinite(p)) return '';
-  const n = Math.max(0, Math.min(10, Math.round(p * 10)));
-  return '\uD83D\uDFE9'.repeat(n) + '\u2B1C'.repeat(10 - n); // 🟩 / ⬜
-}
 
 /**
  * Build a shareable plain-text summary card.
@@ -113,22 +110,21 @@ function meter(p) {
  *   claimed?:boolean}} opts
  */
 export function buildSummaryText(opts = {}) {
-  const { kind = 'daily', dateStr, monName, winPct, rank, total, tierLabel, claimed } = opts;
+  const { kind = 'daily', dateStr, monName, winPct, rank, total, tierLabel, claimed, beatName } = opts;
   const lines = [];
   if (kind === 'throne') {
-    lines.push('\uD83D\uDC51 Pok\u00e9Guess Draft Battle');
-    if (claimed && tierLabel) lines.push(`I claimed the ${tierLabel} Throne!`);
-    else if (tierLabel) lines.push(`${tierLabel} Throne challenge`);
-    if (monName) lines.push(`\uD83E\uDDEC ${monName}`);
-    if (winPct != null) lines.push(`\u2694\uFE0F ${Math.round(winPct * 100)}% win vs the champion`);
+    lines.push('PokeGuess Draft Battle');
+    if (claimed && beatName) lines.push(`I beat ${beatName}!`);
+    else if (beatName) lines.push(`I challenged ${beatName}.`);
+    else if (claimed && tierLabel) lines.push(`I claimed ${tierLabel}!`);
+    if (monName) lines.push(`with my ${monName}`);
+    if (winPct != null) lines.push(`(${Math.round(winPct * 100)}% win rate)`);
   } else {
-    lines.push(`\uD83C\uDFAE Pok\u00e9Guess Daily${dateStr ? ' \u2014 ' + dateStr : ''}`);
-    if (monName) lines.push(`\uD83E\uDDEC ${monName}`);
-    if (rank && total) lines.push(`\uD83C\uDFC6 Rank ${rank}/${total}`);
-    if (winPct != null) lines.push(`\u2694\uFE0F ${Math.round(winPct * 100)}% avg win rate`);
+    lines.push(`PokeGuess Daily${dateStr ? ' \u2014 ' + dateStr : ''}`);
+    if (monName) lines.push(`My pick: ${monName}`);
+    if (rank && total) lines.push(`Ranked ${rank} of ${total}`);
+    if (winPct != null) lines.push(`${Math.round(winPct * 100)}% average win rate`);
   }
-  const bar = meter(winPct);
-  if (bar) lines.push(bar);
   return lines.join('\n');
 }
 

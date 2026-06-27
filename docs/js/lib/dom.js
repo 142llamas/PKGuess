@@ -1,6 +1,6 @@
 /**
  * @file        docs/js/lib/dom.js
- * @version     1.0.0
+ * @version     1.1.0
  * @updated     2026-06-23
  * @changelog
  *   1.0.0 — Initial shared DOM helpers for the modular build. `el()` is the
@@ -107,4 +107,23 @@ export function statSpreadEl(spreadStr) {
     grid.appendChild(cell);
   });
   return grid;
+}
+
+/**
+ * Generation label + toggle for dual-gen modes (#16/#18). Shows the current
+ * generation and lets the player switch without returning to the menu — it
+ * re-routes the hash, which relaunches the mode with the other gen's data.
+ * @param {string} modeId  the route id (e.g. 'pokedex')
+ * @param {number} gen     1 or 2 (the currently active generation)
+ * @param {{label?:string}} [opts]
+ */
+export function genBar(modeId, gen, opts = {}) {
+  const cur = gen === 1 ? 1 : 2;
+  const mk = (g) => el('button', {
+    class: 'gen-switch-btn' + (g === cur ? ' on' : ''),
+    onClick: g === cur ? undefined : () => { location.hash = `#/${modeId}/${g}`; },
+  }, g === 1 ? 'Gen I' : 'Gen II');
+  return el('div', { class: 'gen-bar' },
+    opts.label ? el('span', { class: 'gen-bar-label' }, opts.label) : null,
+    el('div', { class: 'gen-switch' }, mk(1), mk(2)));
 }
