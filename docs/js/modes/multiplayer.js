@@ -44,11 +44,22 @@ export function createMultiplayer({ mount, config, data, params = {}, onExit }) 
     .then((r) => (r.ok ? r.json() : {}))
     .then((ml) => { movelist = ml || {}; })
     .catch(() => { movelist = {}; })
-    .finally(showSetup);
+    .finally(() => { showSetup(); prefillPlayerOne(); });
+
+  // Default Player 1 to the signed-in display name (#25).
+  function prefillPlayerOne() {
+    import('../lib/identity.js').then((m) => m.getIdentity()).then((id) => {
+      if (id && id.name && !setup.playerNames[0]) {
+        setup.playerNames[0] = id.name.slice(0, 16);
+        const c = document.getElementById('mp-player-inputs');
+        if (c) renderPlayerInputs(c);
+      }
+    }).catch(() => { /* offline — keep the placeholder */ });
+  }
 
   // ===== SETUP SCREEN =======================================================
   let setup = {
-    playerNames: ['Player 1', 'Player 2', '', ''],
+    playerNames: ['', 'Player 2', '', ''],
     playerCount: 2,
     gameMode: 'rtg',   // 'rtg' | 'gtr'
     clueMode: 'choose', // 'choose' | 'random'

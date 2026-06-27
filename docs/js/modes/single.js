@@ -15,7 +15,7 @@
  *   params = { rng? } optional injected RNG (deterministic tests)
  */
 
-import { el, clear } from '../lib/dom.js';
+import { el, clear, genBar } from '../lib/dom.js';
 import { statSpreadEl } from '../lib/dom.js';
 import { PokeGuessRound, normalizeName } from '../lib/engine.js';
 import { submitScore } from '../lib/leaderboard-data.js';
@@ -82,6 +82,7 @@ export function createSingle({ mount, config, data, params = {}, onExit }) {
         el('input', { type: 'number', id: 'sp-custom-guesscost', value: String(chosen.guessCost), min: '0', max: '5' })));
 
     clear(root).append(
+      genBar(params.modeId || 'single', params.gen || (data.id === 'gen1' ? 1 : 2)),
       el('div', { class: 'sp-section-title' }, 'Choose a difficulty'),
       diffGrid,
       customPanel,
@@ -349,7 +350,13 @@ export function createSingle({ mount, config, data, params = {}, onExit }) {
     const input = root.querySelector('#guess-input');
     closeAutocomplete();
     const res = round.submitGuess(name);
-    if (!res.ok) return;
+    if (!res.ok) {
+      if (res.reason === 'unknown') {
+        const fb0 = root.querySelector('#guess-feedback');
+        if (fb0) { fb0.className = 'guess-feedback error'; fb0.textContent = 'Pick a Pok\u00e9mon from the list.'; setTimeout(() => { if (fb0) fb0.textContent = ''; }, 2200); }
+      }
+      return;
+    }
     if (res.correct) { 
       // Submit to leaderboard (fire-and-forget — never blocks the UI)
       const gen = data.id || 'gen2';

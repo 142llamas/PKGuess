@@ -15,7 +15,7 @@
  * Contract: createVictoryRoad({ mount, config, data, params, onExit }) → { destroy }
  */
 
-import { el, clear, statSpreadEl } from '../lib/dom.js';
+import { el, clear, statSpreadEl, genBar } from '../lib/dom.js';
 import { PokeGuessRound, normalizeName } from '../lib/engine.js';
 import { submitScore } from '../lib/leaderboard-data.js';
 
@@ -116,6 +116,7 @@ export function createVictoryRoad({ mount, config, data, params = {}, onExit }) 
     });
 
     clear(root).append(
+      genBar(params.modeId || 'victoryroad', params.gen || (data.id === 'gen1' ? 1 : 2)),
       el('div', { class: 'sp-section-title' }, '\uD83D\uDDFB Victory Road'),
       el('p', { class: 'sf-intro' },
         'One guess per Pok\u00e9mon. Wrong answer = game over. Fewer clues as your streak grows. '
@@ -206,6 +207,7 @@ export function createVictoryRoad({ mount, config, data, params = {}, onExit }) 
           el('div', { class: 'vr-time', id: 'vr-total-time' }, '0:00'),
           el('div', { class: 'vr-poke-time', id: 'vr-poke-time' }, 'this: 0.0s'))),
       el('div', { class: 'vr-ribbon-wrap' },
+        vr.tierBanner ? tierBannerEl(vr.tierBanner) : null,
         el('div', { class: 'vr-clue-ribbon', id: 'vr-ribbon' })),
       el('div', { class: 'vr-guess-area' },
         el('div', { class: 'guess-input-wrap' },
@@ -224,7 +226,17 @@ export function createVictoryRoad({ mount, config, data, params = {}, onExit }) 
           el('button', { class: 'btn-secondary', style: { marginTop: '8px' }, onClick: perfectEnd }, 'Bank my streak'))),
     );
     renderRibbon();
+    vr.tierBanner = null;   // one-shot: only on the mon right after promotion
     const inp = root.querySelector('#vr-guess'); if (inp) setTimeout(() => inp.focus(), 50);
+  }
+
+  function tierBannerEl(b) {
+    return el('div', { class: 'vr-tier-banner' },
+      el('div', { class: 'vr-tier-banner-head' }, `\u2B06\uFE0F New tier: ${b.tier}`),
+      el('div', { class: 'vr-tier-banner-sub' }, 'Fewer clues from here on \u2014 lean on what you know.'),
+      (b.lost && b.lost.length)
+        ? el('div', { class: 'vr-tier-banner-lost' }, 'No longer shown: ' + b.lost.join(', '))
+        : null);
   }
 
   // ---- CLUE RIBBON ---------------------------------------------------------
@@ -333,10 +345,24 @@ export function createVictoryRoad({ mount, config, data, params = {}, onExit }) 
     closeAuto();
     const val = String(name || '').trim();
     if (!val) return;
+    // #15 — only real Pokémon from this gen count; a typo must NOT end the run.
+    if (!vr.round.allNames.some((n) => normalizeName(n) === normalizeName(val))) {
+      showFeedback('Pick a Pok\u00e9mon from the list.', '#e0a060'); return;
+    }
     const pokeMs = Date.now() - vr.pokeStartTime;
     const correct = normalizeName(val) === normalizeName(vr.round.mystery.name);
     if (correct) {
+      const prevTier = getTier(vr.streak);
       vr.streak++;
+      const newTier = getTier(vr.streak);
+      if (newTier.label !== prevTier.label) {              // #23 — reached a new tier
+        const newSlots = new Set(newTier.slots);
+        const lost = prevTier.slots
+          .filter((s) => !newSlots.has(s))
+          .map((s) => { const c = resolveSlot(s); return c ? c.name : null; })
+          .filter(Boolean);
+        vr.tierBanner = { tier: newTier.label, lost };
+      }
       const isNewBest = vr.bestPokeMs === null || pokeMs < vr.bestPokeMs;
       if (isNewBest) vr.bestPokeMs = pokeMs;
       showFeedback(`\u2705 Correct! Streak: ${vr.streak}  (${(pokeMs / 1000).toFixed(1)}s)`, '#50cc80');

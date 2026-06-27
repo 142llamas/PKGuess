@@ -1,8 +1,15 @@
 /**
  * @file        js/modes/draftbattle.js
- * @version     1.3.0
- * @updated     2026-06-25
+ * @version     1.4.0
+ * @updated     2026-06-26
  * @changelog
+ *   1.4.0 — Draft batch (#1–10): thrones renamed to the Elite 4 (Day–Will,
+ *           Week–Koga, Month–Bruno, Year–Lance, All-Time–Champion) with ①②③④/👑
+ *           badges; "offline" banner now reflects the actual connection, not an
+ *           empty node; daily entry write surfaces errors + verifies; a
+ *           deterministic "Daily Rival" always competes; champion history per
+ *           tier (Firebase) with a per-throne History view; share text rewritten
+ *           to "I beat ___" with no win-meter; removed the "501 sims" wording.
  *   1.3.0 — Wired to draft.js v0.5.0 (per-card commit). Draft picks are now
  *           buffered in the UI and applied atomically via session.commitCard()
  *           so BOTH of a card's picks read that card's data. Type chips are
@@ -41,9 +48,12 @@ import {
 const STAT_LABELS = { hp: 'HP', atk: 'Atk', def: 'Def', spc: 'Spc', spa: 'SpA', spd: 'SpD', spe: 'Spe' };
 const STATUS_LABELS = { par: 'paralyzed', brn: 'burned', psn: 'poisoned', tox: 'badly poisoned', slp: 'asleep', frz: 'frozen' };
 const TIERS = [
-  { key: 'day', label: 'Day' }, { key: 'week', label: 'Week' }, { key: 'month', label: 'Month' },
-  { key: 'year', label: 'Year' }, { key: 'all', label: 'All-Time' },
-];
+  { key: 'day',   cadence: 'Day',      npc: 'Will',     icon: '\u2460' }, // ①
+  { key: 'week',  cadence: 'Week',     npc: 'Koga',     icon: '\u2461' }, // ②
+  { key: 'month', cadence: 'Month',    npc: 'Bruno',    icon: '\u2462' }, // ③
+  { key: 'year',  cadence: 'Year',     npc: 'Lance',    icon: '\u2463' }, // ④
+  { key: 'all',   cadence: 'All Time', npc: 'Champion', icon: '\uD83D\uDC51' }, // 👑
+].map((t) => ({ ...t, label: `${t.cadence} \u2013 ${t.npc}` }));
 const BATTLE_N = 501;          // SPEC-locked sample count
 const lazyIdentity = () => import('../lib/identity.js').then((m) => m.getIdentity());
 const lazyFirebase = () => import('../lib/firebase.js').then((m) => m.getFirebase());
@@ -382,14 +392,14 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
   async function showThrones() {
     stopPlay();
     clear(root).append(spinner('Summoning the champions\u2026'));
-    let raw = null;
+    let raw = null, connected = true;
     try {
       if (!firebase) firebase = await lazyFirebase();
       if (!identity) identity = await lazyIdentity();
-      raw = await firebase.get('/draft/throne');
-    } catch { raw = null; }       // offline → all NPC champions (deterministic)
+      raw = await firebase.get('/draft/throne');   // null simply means "no one has claimed yet"
+    } catch { connected = false; raw = null; }
     const thrones = TIERS.map((tier) => resolveThrone(tier, raw && raw[tier.key]));
-    renderThrones(thrones, raw === null);
+    renderThrones(thrones, !connected || !firebase);
   }
 
   function resolveThrone(tier, stored) {
@@ -397,18 +407,19 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
     if (stored && stored.period === period && stored.mon) {
       return { tier, period, mon: stored.mon, holderName: stored.holderName || 'A challenger', holderUid: stored.holderUid || null, npc: false };
     }
-    const champ = autoDraft({ species: ctx.species, gen: 2, seed: seedFromString(`throne:${tier.key}:${period}`), playerName: `The ${tier.label} Champion` });
-    return { tier, period, mon: storedFromResult(champ), holderName: `The ${tier.label} Champion`, holderUid: null, npc: true };
+    // Vacant (or rolled over) → the Elite-4 member holds it with a deterministic build.
+    const champ = autoDraft({ species: ctx.species, gen: 2, seed: seedFromString(`throne:${tier.key}:${period}`), playerName: tier.npc });
+    return { tier, period, mon: storedFromResult(champ), holderName: tier.npc, holderUid: null, npc: true };
   }
 
   function renderThrones(thrones, offline) {
     clear(root).append(
       el('div', { class: 'summary-container' },
         el('div', { class: 'summary-card' },
-          el('div', { class: 'summary-result', style: { textAlign: 'center', marginBottom: '6px' } }, '\uD83D\uDC51 The Five Thrones'),
+          el('div', { class: 'summary-result', style: { textAlign: 'center', marginBottom: '6px' } }, '\u2694\uFE0F The Elite 4'),
           el('p', { class: 'sf-intro', style: { textAlign: 'center' } },
-            'Beat a throne\u2019s champion (strict majority of ' + BATTLE_N + ' sims) to claim it. '
-            + 'Each throne empties to a fresh champion at its reset \u2014 daily at midnight Central, then weekly, monthly, yearly.'),
+            'Beat a tier\u2019s champion to claim it. '
+            + 'Each empties to a fresh champion at its reset \u2014 Day at midnight Central, Week end of Sunday, Month on the 1st, Year on Jan 1; All-Time never resets.'),
           offline ? el('div', { class: 'battle-offline' }, '\u26A0\uFE0F Offline \u2014 showing practice champions; claims won\u2019t be saved.') : null,
           el('div', { class: 'draft-throne-grid' },
             ...thrones.map((t) => throneCard(t))),
@@ -420,13 +431,43 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
   function throneCard(t) {
     const monName = t.mon.species ? `${t.mon.species}-build` : t.mon.name;
     return el('div', { class: 'throne-card' },
-      el('div', { class: 'throne-tier' }, t.tier.label),
-      el('div', { class: 'throne-holder' }, t.npc ? '\uD83E\uDD16 ' + t.holderName : '\uD83D\uDC51 ' + t.holderName),
+      el('div', { class: 'throne-tier' }, `${t.tier.icon} ${t.tier.label}`),
+      el('div', { class: 'throne-holder' }, (t.npc ? '' : '\uD83D\uDC51 ') + t.holderName),
       el('div', { class: 'throne-mon' }, ...(t.mon.types || []).map((ty) => el('span', { class: `type-pill type-${ty.toLowerCase()}`, style: { fontSize: '9px', marginRight: '3px' } }, ty))),
       el('div', { class: 'throne-mon', style: { color: 'var(--text-dim)' } }, monName),
-      el('button', { class: 'btn-primary', style: { padding: '7px 12px', fontSize: '12px' },
-        onClick: () => startBattle(specFromResult(lastResult), specFromStored(t.mon), { mode: 'throne', tier: t.tier, champLabel: t.holderName }) },
-        'Challenge'));
+      el('div', { class: 'throne-card-btns' },
+        el('button', { class: 'btn-primary', style: { padding: '7px 12px', fontSize: '12px' },
+          onClick: () => startBattle(specFromResult(lastResult), specFromStored(t.mon),
+            { mode: 'throne', tier: t.tier, champLabel: t.holderName, npc: t.npc, champMon: monName }) },
+          'Challenge'),
+        el('button', { class: 'btn-secondary', style: { padding: '7px 10px', fontSize: '11px' },
+          onClick: () => showThroneHistory(t.tier) }, 'History')));
+  }
+
+  // ===== CHAMPION HISTORY (#7) ==============================================
+  async function showThroneHistory(tier) {
+    clear(root).append(spinner(`${tier.label} \u2014 champion history\u2026`));
+    let hist = null;
+    try { if (!firebase) firebase = await lazyFirebase(); hist = await firebase.get(`/draft/thronehistory/${tier.key}`); }
+    catch { hist = null; }
+    const entries = hist ? Object.values(hist).sort((a, b) => (b.at || 0) - (a.at || 0)) : [];
+    const fmt = (ms) => { try { return new Date(ms).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }); } catch { return ''; } };
+    const rows = entries.length
+      ? entries.map((e) => el('tr', {},
+          el('td', { style: { color: 'var(--text-dim)', fontSize: '11px', whiteSpace: 'nowrap' } }, fmt(e.at)),
+          el('td', { style: { fontWeight: 700 } }, e.name || 'Anonymous'),
+          el('td', { style: { color: 'var(--text-dim)', fontSize: '11px' } }, e.mon || '')))
+      : [el('tr', {}, el('td', { colspan: '3', style: { textAlign: 'center', color: 'var(--text-dim)' } }, 'No champions yet \u2014 be the first.'))];
+    clear(root).append(
+      el('div', { class: 'summary-container' },
+        el('div', { class: 'summary-card' },
+          el('div', { class: 'summary-result', style: { textAlign: 'center' } }, `${tier.icon} ${tier.label} \u2014 Champions`),
+          el('div', { class: 'lb-board' },
+            el('table', { class: 'lb-table' },
+              el('thead', {}, el('tr', {}, el('th', {}, 'Date'), el('th', {}, 'Player'), el('th', {}, 'Pok\u00e9mon'))),
+              el('tbody', {}, ...rows))),
+          el('div', { class: 'summary-actions' },
+            el('button', { class: 'btn-secondary', onClick: showThrones }, '\u2190 Elite 4')))));
   }
 
   async function claimThrone(tier) {
@@ -440,14 +481,17 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
       takenAt: Date.now(),
       period: centralPeriodKey(tier.key),
     };
-    try { await fb.set(`/draft/throne/${tier.key}`, rec); return { ok: true }; }
-    catch (e) { return { ok: false, msg: 'Save failed: ' + (e.message || e) }; }
+    try {
+      await fb.set(`/draft/throne/${tier.key}`, rec);
+      try { await fb.push(`/draft/thronehistory/${tier.key}`, { name: rec.holderName, mon: lastResult ? lastResult.name : (rec.mon && rec.mon.name) || '', at: rec.takenAt, period: rec.period }); } catch { /* history is best-effort */ }
+      return { ok: true };
+    } catch (e) { return { ok: false, msg: 'Save failed: ' + (e.message || e) }; }
   }
 
   // ===== BATTLE =============================================================
   function startBattle(aSpec, bSpec, opts) {
     stopPlay();
-    clear(root).append(spinner('Running ' + BATTLE_N + ' simulations\u2026'));
+    clear(root).append(spinner('Running the battle\u2026'));
     // defer so the spinner paints before the (synchronous) sim burst
     setTimeout(() => {
       const seed = seedFromString(`${aSpec.name}|${bSpec.name}|${opts.tier ? opts.tier.key : 'x'}`);
@@ -530,8 +574,7 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
         verdict.className = 'battle-verdict ' + (beat ? 'win' : 'loss');
         verdict.append(
           el('div', { class: 'battle-verdict-head' }, beat ? '\uD83C\uDFC6 You win!' : '\u274C You fell short'),
-          el('div', { class: 'battle-verdict-sub' }, `${(pct * 100).toFixed(1)}% win rate over ${res.n} simulations`),
-          el('div', { class: 'battle-verdict-sub', style: { color: 'var(--text-dim)' } }, `(${res.challengerWins}\u2013${res.championWins})`));
+          el('div', { class: 'battle-verdict-sub' }, `${(pct * 100).toFixed(1)}% win rate`));
       }
       renderControls(atEnd);
     }
@@ -568,7 +611,7 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
           }
           after.append(
             el('button', { class: 'btn-secondary', onClick: shareThrone(opts, pct, beat) }, '\uD83D\uDCE4 Share'),
-            el('button', { class: 'btn-secondary', onClick: showThrones }, '\u2190 Thrones'));
+            el('button', { class: 'btn-secondary', onClick: showThrones }, '\u2190 Elite 4'));
         } else if (opts.mode === 'daily') {
           after.append(el('button', { class: 'btn-secondary', onClick: showDailyResults }, '\u2190 Results'));
         }
@@ -589,8 +632,12 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
 
   function shareThrone(opts, pct, beat) {
     return async () => {
+      // Who did you beat? The Elite-4 member if it was still NPC-held; otherwise
+      // the player you dethroned (and their Pokémon).
+      const beatName = opts.npc ? opts.champLabel
+        : `${opts.champLabel}\u2019s ${opts.champMon || 'champion'}`;
       const text = buildSummaryText({
-        kind: 'throne', tierLabel: opts.tier.label, claimed: beat,
+        kind: 'throne', tierLabel: opts.tier.label, claimed: beat, beatName,
         monName: lastResult ? lastResult.name : undefined, winPct: pct,
       });
       const ok = await copyToClipboard(text);
@@ -620,10 +667,17 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
     try { if (!identity) identity = await lazyIdentity(); if (!firebase) firebase = await lazyFirebase(); } catch { /* offline */ }
     if (identity && firebase) {
       const name = (identity.name || 'Anonymous').slice(0, 16);
+      const path = `/draft/daily/${ctx.dateStr}/entries/${identity.uid}`;
       try {
-        await firebase.set(`/draft/daily/${ctx.dateStr}/entries/${identity.uid}`,
-          { name, mon: storedFromResult(lastResult), at: Date.now() });
-      } catch { /* already submitted (rule blocks overwrite) — fine */ }
+        const already = await firebase.get(path);          // one attempt per identity (rule is immutable)
+        if (!already) {
+          await firebase.set(path, { name, mon: storedFromResult(lastResult), at: Date.now() });
+          const check = await firebase.get(path);          // verify it actually persisted
+          if (!check) flash('Heads up: your entry may not have saved. Try Refresh on the results screen.');
+        }
+      } catch (e) {
+        flash('Could not save your entry: ' + ((e && e.message) || e));
+      }
     }
     showDailyResults();
   }
@@ -648,6 +702,13 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
     if (lastResult && !(myUid && list.some((e) => e.uid === myUid))) {
       list.push({ uid: myUid || '__me__', name: (identity && identity.name) || 'You', mon: storedFromResult(lastResult), _me: true });
       provisional = !(myUid && firebase);
+    }
+
+    // The Daily Rival — a deterministic house entry so even the first player has
+    // something to measure against (and to battle). Same for everyone, all day.
+    if (!list.some((e) => e.uid === '__rival__')) {
+      const rival = autoDraft({ species: ctx.species, gen: 2, seed: seedFromString(`dailyrival:${ctx.dateStr}`), playerName: 'Daily Rival' });
+      list.push({ uid: '__rival__', name: 'Daily Rival', mon: storedFromResult(rival), _rival: true });
     }
 
     setTimeout(() => {

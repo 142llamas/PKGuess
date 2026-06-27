@@ -14,7 +14,7 @@
  * Contract: createPokedex({ mount, config, data, params, onExit }) → { destroy }
  */
 
-import { el, clear, statSpreadEl } from '../lib/dom.js';
+import { el, clear, statSpreadEl, genBar } from '../lib/dom.js';
 
 const CATCH_KEY = 'pokeGuess_catchTracker';
 const SOURCE_ORDER = ['Level-up', 'TM / HM', 'Egg Move', 'Move Tutor', 'RBY TM (import)'];
@@ -89,6 +89,7 @@ export function createPokedex({ mount, config, data, params, onExit }) {
         el('button', { class: 'btn-secondary', onClick: () => onExit && onExit() }, '\u2190 Back'),
         el('div', { class: 'study-title' }, `\uD83D\uDCD6 Pok\u00e9dex \u2014 ${genLabel}`),
         el('span', { style: { width: '70px' } })),
+      genBar(params?.modeId || 'pokedex', params?.gen || (data.id === 'gen1' ? 1 : 2)),
       controls(),
       catchBar(caught, seen, unseen),
       el('div', { class: 'study-count' }, `${list.length} Pok\u00e9mon`),
@@ -177,6 +178,7 @@ export function createPokedex({ mount, config, data, params, onExit }) {
     root.append(
       el('div', { class: 'study-detail-header' },
         el('button', { class: 'btn-secondary', onClick: renderList }, '\u2190 List'),
+        el('span', { class: 'gen-bar-label', style: { whiteSpace: 'nowrap' } }, genLabel),
         el('div', { class: 'study-detail-nav' },
           el('button', { class: 'btn-secondary', onClick: () => nav(-1) }, '\u2190 Prev'),
           el('span', { class: 'study-detail-pos' }, `${view.index + 1} / ${view.list.length}`),
@@ -240,8 +242,7 @@ export function createPokedex({ mount, config, data, params, onExit }) {
       + (poke.npcObtain && poke.npcObtain !== '\u2014' ? `<div class="stat-row"><span class="label">Obtain</span><span class="value">${escHtml(poke.npcObtain)}</span></div>` : '')
       + animeInfo + '</div>'
       + '<div style="margin-top:12px"><div class="info-subhead">Base Stats</div>'
-      + (poke.fullStats ? `<div id="poke-stat-spread-placeholder"></div>` : '')
-      + (poke.fullStats ? `<div class="full-stat-string">${escHtml(poke.fullStats)}</div>` : '') + '</div></div>'
+      + (poke.fullStats ? `<div id="poke-stat-spread-placeholder"></div>` : '') + '</div></div>'
       + '<div class="summary-card"><h3>Type Matchups</h3>'
       + '<div class="info-subhead">Weaknesses</div><div class="weaknesses-list">' + (weakT || '<span style="color:var(--text-dim);font-size:11px">None</span>') + '</div>'
       + '<div class="info-subhead" style="margin-top:10px">Resistances</div><div class="resistances-list">' + (resistT || '<span style="color:var(--text-dim);font-size:11px">None</span>') + '</div>'
