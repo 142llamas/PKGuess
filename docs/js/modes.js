@@ -1,8 +1,10 @@
 /**
  * @file        docs/js/modes.js
- * @version     1.4.0
+ * @version     1.6.0
  * @updated     2026-06-26
  * @changelog
+ *   1.5.0 — Safari card label restored to "Safari Zone" (#5).
+ *   1.6.0 — Race mode shipped (parallel online race; first to N solved).
  *   1.4.0 — Multiplayer is its own group: Hotseat (renamed) + Online + Race
  *           ("coming soon"). Safari relabelled "Enter the Safari Zone".
  *   1.3.0 — Added Online multiplayer mode (Firebase rooms, timed turns).
@@ -32,7 +34,7 @@ export const MODES = [
     load: () => import('./modes/single.js'),
   },
   {
-    id: 'safari', label: 'Enter the Safari Zone', icon: '🏕️', group: 'Guess',
+    id: 'safari', label: 'Safari Zone', icon: '🏕️', group: 'Guess',
     blurb: 'One shared budget across many Pokémon — score is how many you catch.',
     enabled: true, gens: [1, 2],
     load: () => import('./modes/safari.js'),
@@ -57,9 +59,9 @@ export const MODES = [
   },
   {
     id: 'race', label: 'Race', icon: '🏁', group: 'Multiplayer',
-    blurb: 'Same mystery, everyone guesses at once — fastest correct wins. Coming soon!',
-    enabled: false, gens: [1, 2],
-    load: () => Promise.reject(new Error('Race is coming soon')),
+    blurb: 'Everyone races their own board through the same Pokémon — first to the target wins.',
+    enabled: true, gens: [1, 2],
+    load: () => import('./modes/race.js'),
   },
   {
     id: 'pokedex', label: 'Pokédex', icon: '📖', group: 'Reference',

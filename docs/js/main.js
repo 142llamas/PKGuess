@@ -1,8 +1,9 @@
 /**
  * @file        docs/js/main.js
- * @version     1.2.0
+ * @version     1.3.0
  * @updated     2026-06-26
  * @changelog
+ *   1.3.0 — Draft/Daily cards show Draft + Elite4/Results buttons; route an optional view segment (#6/#7).
  *   1.2.0 — Pass gen + modeId into controllers so modes can show the current
  *           generation and offer an in-mode Gen 1/2 toggle (re-routes the hash).
  *   1.1.0 — Pass mode.params (e.g. Draft variant 'freeplay'|'daily') through to
@@ -94,13 +95,13 @@ async function loadConfig() {
   }
 }
 
-/** Parse '#/<mode>/<gen>' -> { modeId, gen } (gen optional). */
+/** Parse '#/<mode>/<gen>/<view>' -> { modeId, gen, view } (gen/view optional). */
 function parseHash() {
   const raw = (location.hash || '').replace(/^#\/?/, '');
-  if (!raw) return { modeId: null, gen: null };
-  const [modeId, genStr] = raw.split('/');
+  if (!raw) return { modeId: null, gen: null, view: null };
+  const [modeId, genStr, view] = raw.split('/');
   const gen = genStr ? Number(genStr) : null;
-  return { modeId: modeId || null, gen: Number.isFinite(gen) ? gen : null };
+  return { modeId: modeId || null, gen: Number.isFinite(gen) ? gen : null, view: view || null };
 }
 
 function navigate(hash) {
@@ -110,7 +111,7 @@ function navigate(hash) {
 
 async function route() {
   teardownActive();
-  const { modeId, gen } = parseHash();
+  const { modeId, gen, view } = parseHash();
 
   if (!modeId) { renderMenu(); return; }
 
@@ -121,7 +122,7 @@ async function route() {
 
   if (!mode.enabled) { renderComingSoon(mode); return; }
 
-  await launchMode(mode, useGen);
+  await launchMode(mode, useGen, view);
 }
 
 function teardownActive() {
@@ -164,20 +165,35 @@ function modeCard(mode) {
   // Leaderboard: gen buttons navigate to the leaderboard but pass gen as context
   // (the leaderboard shows all boards; gen sets the default tab)
   const targetId = mode.id === 'leaderboard' ? 'leaderboard' : mode.id;
-  const genButtons = mode.gens.map((g) =>
-    el('button', {
-      class: 'gen-btn',
-      disabled: !mode.enabled,
-      onClick: () => navigate(`#/${targetId}/${g}`),
-    }, CONFIG.genLabels?.[g] || `Gen ${g}`),
-  );
+
+  let actionButtons;
+  if (mode.id === 'draftbattle') {
+    // #6 — "Draft" instead of "Gen 2"; #7 — jump straight to the Elite 4
+    actionButtons = [
+      el('button', { class: 'gen-btn', onClick: () => navigate('#/draftbattle/2') }, 'Draft'),
+      el('button', { class: 'gen-btn', onClick: () => navigate('#/draftbattle/2/thrones') }, 'Elite 4'),
+    ];
+  } else if (mode.id === 'dailychallenge') {
+    // #6 — "Draft"; #7 — jump straight to today's Results
+    actionButtons = [
+      el('button', { class: 'gen-btn', onClick: () => navigate('#/dailychallenge/2') }, 'Draft'),
+      el('button', { class: 'gen-btn', onClick: () => navigate('#/dailychallenge/2/results') }, 'Results'),
+    ];
+  } else {
+    actionButtons = mode.gens.map((g) =>
+      el('button', {
+        class: 'gen-btn',
+        disabled: !mode.enabled,
+        onClick: () => navigate(`#/${targetId}/${g}`),
+      }, CONFIG.genLabels?.[g] || `Gen ${g}`));
+  }
 
   return el('div', { class: `mode-card${mode.enabled ? '' : ' is-disabled'}` },
     el('div', { class: 'mode-card-icon' }, mode.icon),
     el('div', { class: 'mode-card-body' },
       el('h3', { class: 'mode-card-label' }, mode.label),
       el('p', { class: 'mode-card-blurb' }, mode.blurb),
-      el('div', { class: 'mode-card-gens' }, ...genButtons),
+      el('div', { class: 'mode-card-gens' }, ...actionButtons),
     ),
     mode.enabled ? null : el('span', { class: 'mode-card-badge' }, 'Coming soon'),
   );
@@ -207,7 +223,7 @@ function renderNotFound(modeId) {
   );
 }
 
-async function launchMode(mode, gen) {
+async function launchMode(mode, gen, view) {
   screenShell(el('div', { class: 'placeholder' },
     el('p', { class: 'placeholder-text' }, `Loading ${mode.label} (Gen ${gen})…`)));
 
@@ -242,7 +258,7 @@ async function launchMode(mode, gen) {
       mount: surface,
       config: CONFIG,
       data,
-      params: { ...(mode.params || {}), gen, modeId: mode.id },
+      params: { ...(mode.params || {}), gen, modeId: mode.id, view: view || null },
       onExit: () => navigate('#/'),
     }) || null;
   } catch (err) {
