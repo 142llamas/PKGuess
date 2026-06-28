@@ -72,18 +72,28 @@ export function createVictoryRoad({ mount, config, data, params = {}, onExit }) 
   let acIndex = -1;
 
   // Resolve tier slots (special/field strings) to live clue IDs once per session.
-  // Two rounds may have the same special mapped; we deduplicate.
+  // Slot names use Gen-2 vocabulary; map the Gen-1 variants here so each tier
+  // resolves to the right clue per generation (#9).
   const clueBySpecial = new Map();
   const clueByField = new Map();
   for (const c of data.clues) {
     if (c.special && !clueBySpecial.has(c.special)) clueBySpecial.set(c.special, c);
     if (c.field && !clueByField.has(c.field)) clueByField.set(c.field, c);
   }
-  const resolveSlot = (slot) =>
-    clueBySpecial.get(slot) || clueByField.get(slot) ||
-    // a few slots map to field variants with different special names
-    clueByField.get(slot.replace('randomType', 'type1')) ||
-    null;
+  const SLOT_ALIASES = {
+    e4: ['e4', 'e4Gen1', 'e4RedCal', 'e4Rival'],
+    gymLeader: ['gymLeader', 'gymLeaderYN'],
+    randomType: ['randomType', 'type1'],
+    secondType: ['secondType', 'type2'],
+    battleTower: ['battleTower', 'exampleMovesetMulti', 'exampleMoveset'],
+  };
+  const resolveSlot = (slot) => {
+    for (const key of (SLOT_ALIASES[slot] || [slot])) {
+      const hit = clueBySpecial.get(key) || clueByField.get(key);
+      if (hit) return hit;
+    }
+    return null;
+  };
 
   fetch(`data/movelist-${data.id}.json`)
     .then((r) => (r.ok ? r.json() : {}))
@@ -124,7 +134,7 @@ export function createVictoryRoad({ mount, config, data, params = {}, onExit }) 
       el('div', { class: 'vr-tier-preview' }, ...tierRows),
       el('div', { class: 'sp-start-row' },
         el('button', { class: 'btn-secondary', onClick: () => onExit && onExit() }, '\u2190 Back'),
-        el('button', { class: 'btn-primary', onClick: begin }, '\uD83D\uDDFB Begin \u25b6')));
+        el('button', { class: 'btn-primary', onClick: begin }, '\uD83D\uDDFB Enter Victory Road \u25b6')));
   }
 
   // ---- BEGIN ---------------------------------------------------------------
@@ -182,11 +192,8 @@ export function createVictoryRoad({ mount, config, data, params = {}, onExit }) 
         }
         seen.add(clue.id); continue;
       }
-      // secondType: skip if pure mono-type
-      if (clue.special === 'secondType') {
-        const t2 = poke.type2;
-        if (!t2 || /^[\u2014\-]+$/.test(t2.trim())) continue;
-      }
+      // secondType: reveal even for mono-type mons so the ribbon shows "—"
+      // (the engine returns "— (pure X-type)") rather than hiding it (#17).
       if (r.clueAvailable(clue)) r.buyClue(clue.id, { auto: true });
       seen.add(clue.id);
     }

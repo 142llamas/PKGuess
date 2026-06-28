@@ -1,8 +1,9 @@
 /**
  * @file        js/modes/draftbattle.js
- * @version     1.4.0
+ * @version     1.5.0
  * @updated     2026-06-26
  * @changelog
+ *   1.5.0 — Elite-4 flow: ordered unlock (#2), "Challenge the Elite 4" (#1), claim "{name}’s spot" (#3), daily already-done gate (#6a), jump-to Elite-4/Results views (#7).
  *   1.4.0 — Draft batch (#1–10): thrones renamed to the Elite 4 (Day–Will,
  *           Week–Koga, Month–Bruno, Year–Lance, All-Time–Champion) with ①②③④/👑
  *           badges; "offline" banner now reflects the actual connection, not an
@@ -85,6 +86,7 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
     if (!species.length) throw new Error('No draftable species found.');
     ctx = { species, movestats, chart };
     if (isDaily) startDaily();
+    else if (params.view === 'thrones') showThrones();   // #7 — view the Elite 4 directly
     else startDraft(((Math.random() * 2 ** 31) | 0), { pokemon: 3, moves: 3 });
   }).catch((err) => showError(err));
 
@@ -106,13 +108,27 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
     clear(root).append(spinner('Loading today\u2019s challenge\u2026'));
     ctx.dateStr = centralDateStr();
     try { identity = await lazyIdentity(); firebase = await lazyFirebase(); } catch { /* offline */ }
+    if (params.view === 'results') { showDailyResults(); return; }   // #7 — Results button
     if (identity && firebase) {
       try {
         const existing = await firebase.get(`/draft/daily/${ctx.dateStr}/entries/${identity.uid}`);
-        if (existing) { showDailyResults(); return; }      // one attempt per identity
+        if (existing) { showDailyGate(); return; }        // #6a — already played today
       } catch { /* read failed — let them play, submit may still work */ }
     }
     startDraft(seedFromDate(ctx.dateStr), { pokemon: 1, moves: 1 });
+  }
+
+  // #6a — message shown when today's daily is already done
+  function showDailyGate() {
+    clear(root).append(
+      el('div', { class: 'summary-container' },
+        el('div', { class: 'summary-card', style: { textAlign: 'center' } },
+          el('div', { class: 'summary-result' }, '\u2705 Already done today'),
+          el('p', { class: 'sf-intro', style: { textAlign: 'center' } },
+            'You\u2019ve already completed today\u2019s draft challenge. Come back tomorrow for a new one!'),
+          el('div', { class: 'summary-actions' },
+            el('button', { class: 'btn-primary', onClick: showDailyResults }, 'View Results'),
+            el('button', { class: 'btn-secondary', onClick: () => onExit && onExit() }, '\u2190 Main Menu')))));
   }
 
   // ===== shared bits ========================================================
@@ -368,7 +384,7 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
     const actions = isDaily
       ? [el('button', { class: 'btn-primary', onClick: submitDaily }, '\uD83D\uDCE4 Submit & See Results'),
          el('button', { class: 'btn-secondary', onClick: () => onExit && onExit() }, '\u2190 Main Menu')]
-      : [el('button', { class: 'btn-primary', onClick: showThrones }, '\u2694\uFE0F Challenge the Thrones'),
+      : [el('button', { class: 'btn-primary', onClick: showThrones }, '\u2694\uFE0F Challenge the Elite 4'),
          el('button', { class: 'btn-secondary', onClick: () => onExit && onExit() }, '\u2190 Main Menu')];
 
     clear(root).append(
@@ -413,33 +429,48 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
   }
 
   function renderThrones(thrones, offline) {
+    const uid = identity && identity.uid;
+    const conquered = (t) => !!(t && t.holderUid && uid && t.holderUid === uid);
+    const haveBuild = !!lastResult;
     clear(root).append(
       el('div', { class: 'summary-container' },
         el('div', { class: 'summary-card' },
           el('div', { class: 'summary-result', style: { textAlign: 'center', marginBottom: '6px' } }, '\u2694\uFE0F The Elite 4'),
           el('p', { class: 'sf-intro', style: { textAlign: 'center' } },
-            'Beat a tier\u2019s champion to claim it. '
+            'Beat each member to take their spot \u2014 they must be challenged in order. '
             + 'Each empties to a fresh champion at its reset \u2014 Day at midnight Central, Week end of Sunday, Month on the 1st, Year on Jan 1; All-Time never resets.'),
           offline ? el('div', { class: 'battle-offline' }, '\u26A0\uFE0F Offline \u2014 showing practice champions; claims won\u2019t be saved.') : null,
+          !haveBuild ? el('div', { class: 'sf-intro', style: { textAlign: 'center', color: 'var(--text-dim)' } }, 'Draft a team first to challenge them.') : null,
           el('div', { class: 'draft-throne-grid' },
-            ...thrones.map((t) => throneCard(t))),
+            ...thrones.map((t, i) => throneCard(t, {
+              // #2 — unlocked only if it's the first tier or you hold the one before it
+              unlocked: i === 0 || conquered(thrones[i - 1]),
+              prevName: i > 0 ? thrones[i - 1].tier.npc : null,
+              haveBuild,
+            }))),
           el('div', { class: 'summary-actions' },
-            el('button', { class: 'btn-secondary', onClick: () => renderBuild(lastResult) }, '\u2190 My Build'),
+            haveBuild ? el('button', { class: 'btn-secondary', onClick: () => renderBuild(lastResult) }, '\u2190 My Build') : null,
             el('button', { class: 'btn-secondary', onClick: () => onExit && onExit() }, 'Main Menu')))));
   }
 
-  function throneCard(t) {
+  function throneCard(t, opts = {}) {
     const monName = t.mon.species ? `${t.mon.species}-build` : t.mon.name;
-    return el('div', { class: 'throne-card' },
+    const { unlocked = true, prevName = null, haveBuild = true } = opts;
+    const canChallenge = unlocked && haveBuild;
+    const challengeBtn = canChallenge
+      ? el('button', { class: 'btn-primary', style: { padding: '7px 12px', fontSize: '12px' },
+          onClick: () => startBattle(specFromResult(lastResult), specFromStored(t.mon),
+            { mode: 'throne', tier: t.tier, champLabel: t.holderName, npc: t.npc, champMon: monName }) },
+          'Challenge')
+      : el('button', { class: 'btn-primary', disabled: true, style: { padding: '7px 12px', fontSize: '12px', opacity: 0.4 } },
+          unlocked ? 'Challenge' : `\uD83D\uDD12 Beat ${prevName} first`);
+    return el('div', { class: 'throne-card' + (unlocked ? '' : ' throne-locked') },
       el('div', { class: 'throne-tier' }, `${t.tier.icon} ${t.tier.label}`),
       el('div', { class: 'throne-holder' }, (t.npc ? '' : '\uD83D\uDC51 ') + t.holderName),
       el('div', { class: 'throne-mon' }, ...(t.mon.types || []).map((ty) => el('span', { class: `type-pill type-${ty.toLowerCase()}`, style: { fontSize: '9px', marginRight: '3px' } }, ty))),
       el('div', { class: 'throne-mon', style: { color: 'var(--text-dim)' } }, monName),
       el('div', { class: 'throne-card-btns' },
-        el('button', { class: 'btn-primary', style: { padding: '7px 12px', fontSize: '12px' },
-          onClick: () => startBattle(specFromResult(lastResult), specFromStored(t.mon),
-            { mode: 'throne', tier: t.tier, champLabel: t.holderName, npc: t.npc, champMon: monName }) },
-          'Challenge'),
+        challengeBtn,
         el('button', { class: 'btn-secondary', style: { padding: '7px 10px', fontSize: '11px' },
           onClick: () => showThroneHistory(t.tier) }, 'History')));
   }
@@ -603,11 +634,12 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
       if (atEnd) {
         if (opts.mode === 'throne') {
           if (beat) {
+            const beatName = opts.npc ? opts.tier.npc : opts.champLabel;
             after.append(el('button', { class: 'btn-primary', onClick: async () => {
               const r = await claimThrone(opts.tier);
-              if (r.ok) { flash(`\uD83D\uDC51 You claimed the ${opts.tier.label} Throne!`); showThrones(); }
-              else flash(r.msg || 'Could not claim throne.');
-            } }, `\uD83D\uDC51 Claim the ${opts.tier.label} Throne`));
+              if (r.ok) { flash(`\uD83D\uDC51 You took ${beatName}\u2019s spot in the Elite 4!`); showThrones(); }
+              else flash(r.msg || 'Could not claim the spot.');
+            } }, `\uD83D\uDC51 Claim ${beatName}\u2019s spot in the Elite 4`));
           }
           after.append(
             el('button', { class: 'btn-secondary', onClick: shareThrone(opts, pct, beat) }, '\uD83D\uDCE4 Share'),

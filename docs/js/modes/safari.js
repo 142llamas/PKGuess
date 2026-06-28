@@ -60,14 +60,14 @@ export function createSafari({ mount, config, data, params = {}, onExit }) {
   function showConfig() {
     clear(root).append(
       genBar(params.modeId || 'safari', params.gen || (data.id === 'gen1' ? 1 : 2)),
-      el('div', { class: 'sp-section-title' }, '\uD83C\uDF3F Enter the Safari Zone'),
+      el('div', { class: 'sp-section-title' }, '\uD83C\uDF3F Safari Zone'),
       el('p', { class: 'sf-intro' }, 'One shared point budget across many Pok\u00e9mon. Spend wisely \u2014 your score is how many you catch before the points run out.'),
       el('div', { class: 'sp-custom-panel' },
         el('label', { class: 'sp-custom-field' }, 'Starting budget',
           el('input', { type: 'number', id: 'sf-start-pts', value: '200', min: '50', max: '999' }))),
       el('div', { class: 'sp-start-row' },
         el('button', { class: 'btn-secondary', onClick: () => onExit && onExit() }, '\u2190 Back'),
-        el('button', { class: 'btn-primary', onClick: begin }, 'Enter the Safari \u25b6')),
+        el('button', { class: 'btn-primary', onClick: begin }, 'Enter the Safari Zone \u25b6')),
     );
   }
 
@@ -113,12 +113,12 @@ export function createSafari({ mount, config, data, params = {}, onExit }) {
               el('button', { class: 'guess-btn', onClick: submitFromInput }, 'Catch'),
               el('div', { class: 'autocomplete-list', id: 'sf-ac' })),
             el('div', { class: 'sf-actions' },
-              el('button', { class: 'btn-bait', onClick: throwBait }, '\uD83C\uDF6F Bait (\u22121 pt)'),
-              el('button', { class: 'btn-rock', onClick: throwRock }, '\uD83E\uDEA8 Rock (\u22122 pts)'),
+              el('button', { class: 'btn-bait', onClick: throwBait }, '\uD83C\uDF6F Bait (small clue, \u22121 pt)'),
+              el('button', { class: 'btn-rock', onClick: throwRock }, '\uD83E\uDEA8 Rock (big clue, \u22122 pts)'),
               el('button', { class: 'btn-run', onClick: run }, '\uD83D\uDC5F Run')),
             el('div', { class: 'safari-discount-note' },
-              '\uD83C\uDF6F ', el('b', {}, 'Bait'), ' reveals a random cheap clue for 1 pt less \u00b7 ',
-              '\uD83E\uDEA8 ', el('b', {}, 'Rock'), ' reveals a random pricey clue for 2 pts less.'),
+              el('div', {}, '\uD83C\uDF6F ', el('b', {}, 'Bait'), ' reveals a random cheap clue (<4 pts) for 1 pt less.'),
+              el('div', {}, '\uD83E\uDEA8 ', el('b', {}, 'Rock'), ' reveals a random pricey clue (\u22654 pts) for 2 pts less.')),
             el('div', { class: 'guess-feedback', id: 'sf-feedback' }),
             el('div', { class: 'revealed-summary', id: 'sf-revealed' }),
             el('div', { class: 'guess-log', id: 'sf-guesslog' })))),
@@ -133,15 +133,19 @@ export function createSafari({ mount, config, data, params = {}, onExit }) {
   function renderRevealed() {
     const box = root.querySelector('#sf-revealed'); if (!box) return;
     clear(box);
-    const rv = round.revealedClues;
-    const ids = Object.keys(rv);
+    const hist = round.state.clueHistory || {};
+    const ids = Object.keys(hist).map(Number);
     if (!ids.length) return;
     box.append(el('div', { class: 'rev-head' }, 'Revealed this Pok\u00e9mon'));
     ids.forEach((id) => {
-      const c = round.clue(+id);
-      box.append(el('div', { class: 'rev-item' + (+id === round.state.lastRevealedClueId ? ' rev-new' : '') },
-        el('span', { class: 'rev-label' }, c ? c.name : String(id)),
-        el('span', {}, String(rv[id]))));
+      const c = round.clue(id);
+      const vals = hist[id] || [];
+      vals.forEach((v, i) => {
+        const isLatest = id === round.state.lastRevealedClueId && i === vals.length - 1;
+        box.append(el('div', { class: 'rev-item' + (isLatest ? ' rev-new' : '') },
+          el('span', { class: 'rev-label' }, (c ? c.name : String(id)) + (vals.length > 1 ? ` #${i + 1}` : '')),
+          el('span', {}, String(v))));
+      });
     });
   }
 
