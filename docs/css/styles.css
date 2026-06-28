@@ -1,9 +1,10 @@
 /*
  * @file        docs/css/styles.css
- * @version     1.8.0
+ * @version     1.9.0
  * @updated     2026-06-25
  * @changelog
 
+ *   1.9.0 — Section M: Race mode styles.
  *   1.8.0 — Section L: gen toggle, online form spacing, VR tier banner, Safari discount note. 3-col menu.
  *   1.7.0 — Throne card button row (Elite 4 History button).
  *   1.6.0 — Added Section K: online multiplayer (room/lobby/board/podium).
@@ -1450,3 +1451,24 @@ h1,h2,h3{font-family:var(--font-pixel);}
 /* #22 — Safari bait/rock discount note */
 .safari-discount-note { font-size:11px; color:var(--text-dim); text-align:center; margin-top:6px; line-height:1.5; }
 .safari-discount-note b { color:var(--accent-gold); }
+
+/* ===========================================================================
+ * SECTION M — Race mode (parallel online race; first to N solved).
+ * ========================================================================= */
+.race-board{ max-width:920px; margin:0 auto; }
+.race-head{ display:flex; gap:12px; align-items:center; justify-content:space-between; flex-wrap:wrap;
+  padding:10px 12px; margin-bottom:8px; background:var(--bg-elevated); border:1px solid var(--border-card); border-radius:var(--radius-lg); }
+.race-solved{ font-family:var(--font-pixel); font-size:11px; color:var(--accent-gold); }
+.race-points{ font-family:var(--font-pixel); font-size:12px; color:var(--text-primary); }
+.race-mystery{ font-size:12px; color:var(--text-secondary); }
+.race-feedback{ min-height:20px; text-align:center; font-size:13px; margin:4px 0; }
+.race-clue-panel{ display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:10px; }
+.race-guess-row{ display:flex; gap:8px; margin:12px 0; }
+.race-guess-row .mp-input{ flex:1; }
+.race-progress{ max-width:920px; margin:14px auto 0; padding:10px 12px;
+  background:var(--bg-elevated); border:1px solid var(--border-card); border-radius:var(--radius-lg); }
+.race-bar-row{ display:flex; align-items:center; gap:10px; margin:6px 0; }
+.race-bar-name{ flex:0 0 32%; font-size:12px; color:var(--text-secondary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.race-bar-track{ flex:1; height:12px; background:var(--bg-base); border-radius:100px; overflow:hidden; border:1px solid var(--border-card); }
+.race-bar-fill{ height:100%; background:linear-gradient(90deg,var(--accent-gold),#ffe08a); transition:width .35s ease; }
+.race-bar-count{ flex:0 0 auto; font-family:var(--font-pixel); font-size:10px; color:var(--text-secondary); min-width:46px; text-align:right; }
