@@ -10,10 +10,10 @@ table is the index. Status: ✅ done & tested · 🟡 in progress · ⬜ not sta
 |------|--------:|--------|-------|
 | docs/index.html | 1.0.0 | ✅ | Loads fonts + styles.css + main.js (module). Relative paths for Pages subpath. |
 | docs/.nojekyll | — | ✅ | Empty; keeps Pages from stripping `js/`-prefixed paths. |
-| docs/css/styles.css | 1.8.0 | ✅ | Sections A–H: shell, canonical game CSS, single-player, Pokédex, Safari, VR, Multiplayer, Firebase/Leaderboard. |
+| docs/css/styles.css | 1.9.0 | ✅ | Sections A–H: shell, canonical game CSS, single-player, Pokédex, Safari, VR, Multiplayer, Firebase/Leaderboard. |
 | docs/js/lib/dom.js | 1.1.0 | ✅ | `el()`, `clear`, `mount`, `on`. No global state. |
-| docs/js/modes.js | 1.4.0 | ✅ | Registry (8 entries). Draft split: **Draft Battle** (free-play, random) + **Daily Challenge** (same seeded draft); both lazy-load draftbattle.js, differ by `params.variant`. All `enabled:false` until ported. |
-| docs/js/main.js | 1.2.0 | ✅ | (controller try/catch added)  Config load, menu render, hash router `#/<mode>/<gen>`, lazy launch, friendly fallbacks. Now passes `mode.params` to the controller. Tested under jsdom (8 cards, real config load). |
+| docs/js/modes.js | 1.6.0 | ✅ | Registry (8 entries). Draft split: **Draft Battle** (free-play, random) + **Daily Challenge** (same seeded draft); both lazy-load draftbattle.js, differ by `params.variant`. All `enabled:false` until ported. |
+| docs/js/main.js | 1.3.0 | ✅ | (controller try/catch added)  Config load, menu render, hash router `#/<mode>/<gen>`, lazy launch, friendly fallbacks. Now passes `mode.params` to the controller. Tested under jsdom (8 cards, real config load). |
 
 ## Data pipeline & data (Phase 2 — DONE this pass, except 2b below)
 | File | Version | Status | Notes |
@@ -60,7 +60,7 @@ table is the index. Status: ✅ done & tested · 🟡 in progress · ⬜ not sta
 | docs/js/sim.js | vetted | ✅ | Copied verbatim from provided sim__1_.js. runMatch/simulateBattle/toRealStats/moveId. |
 | docs/js/draft.js | v0.4.1 | ✅ | Copied verbatim from provided draft__1_.js. DraftSession/autoDraft/buildSpeciesList/buildLearnsetMap/normalizeSpecies. |
 | docs/js/lib/draft-adapter.js | 1.0.0 | ✅ | Thin re-export shim so mode controllers import cleanly from lib/. |
-| docs/js/modes/draftbattle.js | 1.4.0 | ✅ | 6×2 draft UI: one card at a time, pick 0–2 attributes, advance. Stats/types/moves all interactive. Reroll buttons. Drafted-summary sidebar. Skip advances. Complete screen. Battle phase wired as Phase 5b stub. **Enabled (Draft Battle + Daily Challenge).** |
+| docs/js/modes/draftbattle.js | 1.5.0 | ✅ | 6×2 draft UI: one card at a time, pick 0–2 attributes, advance. Stats/types/moves all interactive. Reroll buttons. Drafted-summary sidebar. Skip advances. Complete screen. Battle phase wired as Phase 5b stub. **Enabled (Draft Battle + Daily Challenge).** |
 | docs/data/movelist-gen2.json | gen | ✅ | Mew: 102 moves incl. 93 TM/HMs. Smeargle: Sketch only (correct for guess game). |
 | docs/data/draftpool-gen2.json | gen | ✅ | **New file.** Draft-specific pool overrides. Smeargle: 257 moves (all minus Sketch) for draft. Mew not overridden (movelist already correct). |
 
@@ -107,7 +107,7 @@ completion). The vetted `sim.js` was NOT touched.
 | docs/js/lib/leaderboard-data.js | 1.0.0 | ✅ | submitScore/topEntries/rankEntries (no DOM). Boards: gen1/gen2 × single/victoryroad/safari under /leaderboard/{gen}/{mode}. |
 | docs/js/modes/leaderboard.js | 1.0.0 | ✅ | Browse screen: 6 tabs (gen × mode), top-10 per board, your rank highlighted, refresh button. **Enabled.** |
 | database.rules.json | 1.0.0 | ✅ | Firebase Realtime DB security rules. players/nameclaims/leaderboard/rooms/draft all validated. Daily entries immutable once written. Throne writes validated. |
-| docs/js/main.js | 1.2.0 | ✅ | Added lazy identity init + first-launch name-prompt toast. |
+| docs/js/main.js | 1.3.0 | ✅ | Added lazy identity init + first-launch name-prompt toast. |
 
 ## Draft Battle (Phase 5 — DONE: 5a engine/data + 5b battle/throne/daily/share)
 | File | Version | Status | Notes |
@@ -115,13 +115,14 @@ completion). The vetted `sim.js` was NOT touched.
 | docs/js/lib/sim.js | vetted | ✅ | Verbatim copy of vetted sim.js (runMatch/simulateBattle/toRealStats/moveId). Do not edit. |
 | docs/js/draft.js | 0.5.0 | ✅ | **Reworked (approved):** per-card commit — 2 picks/card, each sourced from the correct card; type-twice→mono; "—" pickable; weighted move reroll (with replacement). Imports ./sim.js. Lives at docs/js/draft.js (NOT lib/). |
 | docs/js/lib/share.js | 1.1.0 | ✅ | **Created this pass.** centralDateParts/centralDateStr/centralPeriodKey (DST-correct via Intl America/Chicago), seedFromDate/seedFromString, buildSummaryText (🟩/⬜ meter), copyToClipboard, shareWhatsApp. |
-| docs/js/modes/draftbattle.js | 1.4.0 | ✅ | **Phase 5b + engine-rework wiring.** Buffers UI picks and applies them via session.commitCard() (correct per-card sourcing). Type chips pickable when owned (→mono); Skip when stuck; dynamic pick prompt. Draft UI unchanged from 1.1.0; replaced the battle stub with: runMatch(N=501) playback (HP bars, play/step/skip, verdict), throne challenge+claim (Firebase, CT period reset, deterministic NPC champions), daily entry gate + all-pairs ranking + share. Imports CT/seed/share from lib/share.js. Headless: draft completes 400/400; battle deterministic; 20-player all-pairs ≈515ms; jsdom smoke (freeplay + daily, offline) passes. See KNOWN ISSUE re: 6×2. |
-| docs/css/styles.css | 1.8.0 | ✅ | Section I (draft) + **Section J (5b): battle stage, HP bars, verdict banner, playback controls, spinner, offline notice, daily-results.** Note: two stale "Section I" header blocks exist from prior passes (older `.draft-stat-btn`/`.draft-queue` classes are unused by the current controller) — harmless, worth a cleanup later. |
+| docs/js/modes/draftbattle.js | 1.5.0 | ✅ | **Phase 5b + engine-rework wiring.** Buffers UI picks and applies them via session.commitCard() (correct per-card sourcing). Type chips pickable when owned (→mono); Skip when stuck; dynamic pick prompt. Draft UI unchanged from 1.1.0; replaced the battle stub with: runMatch(N=501) playback (HP bars, play/step/skip, verdict), throne challenge+claim (Firebase, CT period reset, deterministic NPC champions), daily entry gate + all-pairs ranking + share. Imports CT/seed/share from lib/share.js. Headless: draft completes 400/400; battle deterministic; 20-player all-pairs ≈515ms; jsdom smoke (freeplay + daily, offline) passes. See KNOWN ISSUE re: 6×2. |
+| docs/css/styles.css | 1.9.0 | ✅ | Section I (draft) + **Section J (5b): battle stage, HP bars, verdict banner, playback controls, spinner, offline notice, daily-results.** Note: two stale "Section I" header blocks exist from prior passes (older `.draft-stat-btn`/`.draft-queue` classes are unused by the current controller) — harmless, worth a cleanup later. |
 
 ## Guess modes (Phase 3 — IN PROGRESS)
 | File | Version | Status | Notes |
 |------|--------:|--------|-------|
-| docs/js/lib/engine.js | 1.1.0 | ✅ | DOM-free `PokeGuessRound` + `normalizeName`. Faithful port of the canonical Gen 2 round logic (pools, availability/locks/exhaustion, rising+discounted costs, purchase limits, all clue-value specials, category diversity, weighted random reveal, guess+score). **One engine, both gens:** ids ≤26 are identical across gens (literal); moveset clues (ids 27-34 diverge) resolve by `special`/`field`. Tested headless vs real gen1 + gen2 data (26/27 assertions; the 1 was a bad test fixture, not a bug). |
+| docs/js/lib/pokeinfo.js | 1.0.0 | ✅ | Shared per-Pokémon info card HTML (Pokédex detail + guess post-game). |
+| docs/js/lib/engine.js | 1.2.0 | ✅ | DOM-free `PokeGuessRound` + `normalizeName`. Faithful port of the canonical Gen 2 round logic (pools, availability/locks/exhaustion, rising+discounted costs, purchase limits, all clue-value specials, category diversity, weighted random reveal, guess+score). **One engine, both gens:** ids ≤26 are identical across gens (literal); moveset clues (ids 27-34 diverge) resolve by `special`/`field`. Tested headless vs real gen1 + gen2 data (26/27 assertions; the 1 was a bad test fixture, not a bug). |
 | docs/js/modes/single.js | 1.1.0 | ✅ | Single-player on engine.js (config → game → summary). **1.1.0:** guards stale/missing clue-difficulty data with a message instead of a blank screen; main.js now also try/catches controllers. Tested under jsdom. **Enabled.** |
 | docs/js/modes/pokedex.js | 1.0.0 | ✅ | Pokédex/study reference: searchable, sortable (#/A–Z) list; catch tracker (localStorage); detail view (info, type matchups, comp movesets, full move list). Reads movelist. Tested under jsdom (11 assertions). **Mode enabled.** |
 | docs/js/modes/safari.js | 1.0.0 | ✅ | Safari Zone: shared budget across a shuffled pool; 2 free start clues (Generation + BST Range); bait (random reveal), run (skip), wrong −1; ends on 0 pts / pool exhausted; score = caught; catch tracker shared w/ Pokédex. Tested under jsdom (14 assertions). **Enabled.** |
@@ -165,6 +166,7 @@ cross-inference to both gens. No per-gen rule branching.
 | tools/test/sim.test.mjs | 1.0.0 | ✅ | toRealStats, moveId, determinism, win accounting (championWins/n), type immunity, stronger-mon-wins. |
 | tools/test/draft.test.mjs | 1.0.0 | ✅ | 2-picks-from-correct-card, commitCard, type-twice→mono, "—" pick, 300-run completion w/ 0 mis-sourced, daily determinism, weighted move reroll, autoDraft. |
 | tools/test/engine.test.mjs | 1.0.0 | ✅ | normalizeName (trim+lowercase only — punctuation must match), round setup, clue purchase deducts, wrong-guess cost, correct-guess score, gen pool filter. |
+| docs/js/modes/race.js | 1.0.0 | ✅ | Parallel online Race (first to N solved). |
 | docs/js/modes/online.js | 1.0.0 | ✅ | Online MP: Firebase rooms (6-char code), 2+ players, RTG/GTR, choose/random reveals, shared pool, 60s timed turns (leader-enforced), auto-advance ~5s after a win, verified results, podium. Answer never transmitted. |
 | docs/js/lib/mp-rules.js | 1.0.0 | ✅ | Pure rules (SPEC §6): seedFor, buildEngine, applyReveals, revealOutcome, guessOutcome, nextTurnPos, weightedRandomClue, advanceAfterWin, champion, makeRoomCode. Ported from hot-seat; no DOM/Firebase. |
 | tools/test/online.smoke.mjs | 1.0.0 | ✅ | Dev-only (jsdom) two-client integration: fake in-memory Firebase + controllable clock. Drives create→join→start→reveal-sync→wrong-guess turn-pass→verified correct guess→scoring→auto-advance→60s turn-skip. 25 assertions. Not in the zero-dep runner. |

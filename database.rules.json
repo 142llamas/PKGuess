@@ -43,8 +43,8 @@
 
     "draft": {
       "throne": {
+        ".read": "auth !== null",
         "$tier": {
-          ".read": "auth !== null",
           ".write": "auth !== null",
           ".validate": "($tier === 'day' || $tier === 'week' || $tier === 'month' || $tier === 'year' || $tier === 'all') && newData.hasChildren(['holderUid', 'holderName', 'takenAt'])"
         }
@@ -65,8 +65,8 @@
             ".write": false
           },
           "entries": {
+            ".read": "auth !== null",
             "$uid": {
-              ".read": "auth !== null",
               ".write": "auth !== null && auth.uid === $uid && !data.exists()",
               ".validate": "newData.hasChildren(['name', 'at']) && newData.child('name').isString() && newData.child('name').val().length <= 16 && newData.child('at').isNumber()"
             }
