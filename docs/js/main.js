@@ -1,6 +1,6 @@
 /**
  * @file        docs/js/main.js
- * @version     1.4.0
+ * @version     1.4.0 
  * @updated     2026-06-26
  * @changelog
  *   1.4.0 — Replaced the one-shot first-load name toast with a persistent header profile pill (lib/identity-ui.js) so the PIN-claim/re-link flow is always reachable, not just on first visit (#16).
