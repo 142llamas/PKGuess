@@ -1,9 +1,12 @@
 /*
  * @file        docs/css/styles.css
- * @version     1.9.0
+ * @version     1.14.0
  * @updated     2026-06-25
  * @changelog
 
+*   1.11.0 — .random-mode clue-panel dimming (mirrors .category-mode) for the
+ *           new Random/By-category read-only clue cards (#10/#11/#15b).
+ *   1.10.0 — Section N: mobile draft Confirm right-aligned.
  *   1.9.0 — Section M: Race mode styles.
  *   1.8.0 — Section L: gen toggle, online form spacing, VR tier banner, Safari discount note. 3-col menu.
  *   1.7.0 — Throne card button row (Elite 4 History button).
@@ -182,6 +185,12 @@ h1,h2,h3{font-family:var(--font-pixel);}
 .clue-panel.category-mode .clue-btn:not(.revealed){opacity:0.6;cursor:default;}
 .clue-panel.category-mode .clue-btn:not(.revealed):hover{border-color:var(--border-card);background:var(--bg-elevated);}
 .clue-panel.category-mode .clue-btn.revealed{opacity:1;}
+/* Random mode: same "read-only reference" treatment as category mode — the
+   player never clicks a card directly, so dim them and drop the hover cue. */
+.clue-panel.random-mode .cat-body{opacity:0.78;}
+.clue-panel.random-mode .clue-btn:not(.revealed){opacity:0.6;cursor:default;}
+.clue-panel.random-mode .clue-btn:not(.revealed):hover{border-color:var(--border-card);background:var(--bg-elevated);}
+.clue-panel.random-mode .clue-btn.revealed{opacity:1;}
 .global-disclaimer{text-align:center;font-size:10px;line-height:1.5;color:var(--text-dim);padding:16px 16px 24px;max-width:580px;margin:0 auto;opacity:0.75;}
 .mp-toggle-btn:disabled,.mp-toggle-btn.disabled{opacity:0.4;cursor:not-allowed;}
 .cat-info-btn:hover{opacity:1;}
@@ -1048,6 +1057,45 @@ h1,h2,h3{font-family:var(--font-pixel);}
   box-shadow:var(--shadow-card); max-width:440px; width:calc(100% - 32px);
   display:flex; flex-direction:column; gap:4px;
 }
+/* Profile pill (#16) — always-visible header control that opens the identity
+   panel. Positioned top-right of the shell header. */
+.profile-pill-slot{ position:absolute; top:14px; right:14px; }
+.profile-pill{
+  font-family:var(--font-body); font-size:11px; font-weight:700;
+  padding:6px 12px; border-radius:100px; border:1px solid var(--border-card);
+  background:var(--bg-elevated); color:var(--text-secondary); cursor:pointer;
+  transition:var(--transition); max-width:160px; overflow:hidden;
+  text-overflow:ellipsis; white-space:nowrap;
+}
+.profile-pill:hover{ border-color:var(--accent-gold-dim); color:var(--text-primary); }
+.profile-pill-empty{ border-color:var(--accent-gold-dim); color:var(--accent-gold); animation:profile-pill-pulse 2.4s ease-in-out infinite; }
+@keyframes profile-pill-pulse{ 0%,100%{ opacity:1; } 50%{ opacity:0.6; } }
+.shell-header{ position:relative; }
+
+/* Identity panel (#16) — set/change name, protect with a PIN, re-link on a
+   new device. Persistently reachable via the profile pill, not a one-shot toast. */
+.identity-overlay{ position:fixed; inset:0; background:rgba(0,0,0,0.82); z-index:2500; display:flex; align-items:center; justify-content:center; padding:20px; overflow-y:auto; }
+.identity-panel{
+  background:var(--bg-card); border:1px solid var(--border-card); border-radius:var(--radius-lg);
+  max-width:420px; width:100%; padding:20px; box-shadow:var(--shadow-card);
+  display:flex; flex-direction:column; gap:16px; max-height:90vh; overflow-y:auto;
+}
+.identity-panel-head{ display:flex; align-items:center; justify-content:space-between; }
+.identity-panel-head h3{ font-family:var(--font-pixel); font-size:13px; color:var(--accent-gold); margin:0; }
+.identity-close-btn{ background:transparent; border:none; color:var(--text-secondary); font-size:16px; cursor:pointer; padding:2px 6px; line-height:1; }
+.identity-close-btn:hover{ color:var(--text-primary); }
+.identity-section{ border-top:1px solid var(--border-card); padding-top:14px; }
+.identity-section:first-of-type{ border-top:none; padding-top:0; }
+.identity-label{ font-family:var(--font-pixel); font-size:9px; color:var(--text-dim); letter-spacing:.4px; margin-bottom:6px; }
+.identity-current-name{ font-size:16px; font-weight:800; color:var(--text-primary); }
+.identity-status{ font-size:11px; margin-top:6px; padding:6px 9px; border-radius:var(--radius); line-height:1.5; }
+.identity-status.protected{ color:#7fdc9a; background:rgba(127,220,154,0.08); border:1px solid rgba(127,220,154,0.25); }
+.identity-status.unprotected{ color:#e0b060; background:rgba(224,176,96,0.08); border:1px solid rgba(224,176,96,0.25); }
+.identity-hint{ font-size:11px; color:var(--text-dim); line-height:1.5; margin:0 0 8px; }
+.identity-input{ width:100%; box-sizing:border-box; }
+.identity-feedback{ font-size:12px; margin-top:8px; line-height:1.5; min-height:1px; }
+.identity-feedback.ok{ color:#7fdc9a; }
+.identity-feedback.error{ color:#e0807a; }
 .lb-tabs { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:14px; }
 .lb-tab {
   padding:6px 12px; border-radius:100px; border:1px solid var(--border-card);
@@ -1472,3 +1520,41 @@ h1,h2,h3{font-family:var(--font-pixel);}
 .race-bar-track{ flex:1; height:12px; background:var(--bg-base); border-radius:100px; overflow:hidden; border:1px solid var(--border-card); }
 .race-bar-fill{ height:100%; background:linear-gradient(90deg,var(--accent-gold),#ffe08a); transition:width .35s ease; }
 .race-bar-count{ flex:0 0 auto; font-family:var(--font-pixel); font-size:10px; color:var(--text-secondary); min-width:46px; text-align:right; }
+
+/* ===========================================================================
+ * SECTION N — Mobile tweaks (#18): keep the draft Confirm button on the right.
+ * ========================================================================= */
+@media (max-width: 600px) {
+  .draft-bottombar { flex-wrap:wrap; }
+  .draft-pending-info { flex:1 1 100%; }
+  .draft-advance-btns { margin-left:auto; justify-content:flex-end; }
+}
+
+/* ===========================================================================
+ * SECTION O — Cycling Road v2 (predetermined timed clues, splits, rematch).
+ * ========================================================================= */
+.race-toasts{ position:fixed; top:70px; left:50%; transform:translateX(-50%); z-index:600;
+  display:flex; flex-direction:column; gap:6px; align-items:center; pointer-events:none; }
+.race-toast{ background:var(--bg-elevated); border:1px solid var(--accent-gold-dim); color:var(--text-primary);
+  font-size:12px; padding:8px 14px; border-radius:100px; box-shadow:var(--shadow-card);
+  opacity:1; transition:opacity .4s ease; }
+.race-toast.fade{ opacity:0; }
+.race-timecap{ margin-top:8px; font-size:11px; color:var(--text-dim); text-align:center; }
+.race-splits-table{ font-size:11px; }
+.race-splits-table th, .race-splits-table td{ white-space:nowrap; padding:5px 8px; text-align:center; }
+.race-splits-table td:nth-child(2){ text-align:left; }
+.race-split-best{ background:rgba(80,204,128,0.18); color:#7fdc9a; font-weight:800; border-radius:4px; }
+.race-split-worst{ background:rgba(224,96,96,0.15); color:#e0807a; font-weight:700; border-radius:4px; }
+.race-rematch-countdown{ margin-top:10px; font-size:13px; color:var(--accent-gold); font-weight:700; text-align:center; }
+.btn-secondary.active{ background:var(--accent-gold); color:#1a1000; border-color:var(--accent-gold); }
+
+/* ===========================================================================
+ * SECTION P — Cycling Road: small pre-existing styling gaps closed (#3 pass).
+ * ========================================================================= */
+.race-root { max-width: 720px; margin: 0 auto; }
+.online-room-meta { text-align: center; margin: 10px 0 4px; }
+.online-code-big { font-family: var(--font-pixel); font-size: 20px; letter-spacing: 3px; color: var(--accent-gold); margin: 4px 0; }
+.online-title { font-family: var(--font-pixel); font-size: 12px; color: var(--text-primary); }
+.online-player-state { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.4px; }
+.online-player.offline .online-player-state { color: #e0807a; }
+.mp-error { color: #e0807a; font-size: 12px; min-height: 16px; margin-top: 4px; }
