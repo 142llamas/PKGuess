@@ -134,197 +134,200 @@ async function mkClient(uid, name) {
   return client;
 }
 
-console.log('— Room creation, join, room-cap (#1d) —');
+console.log('— Team Mode: room creation with team toggle + team-builder lobby (#3b) —');
 let code;
-{
-  const A = await mkClient('uidA', 'Ash');
-  await tick();
-  A.click(A.btn('Create a room')); await tick();
-  const tinput = A.q('input[type=number]'); tinput.value = '3'; A.fireInput(tinput);
-  A.click(A.btn('Create room')); await tick();
-  const roomsRoot = await fb.get('/rooms');
-  code = Object.keys(roomsRoot)[0];
-  ok(!!code, 'room created with a code');
-  const room0 = await fb.get('/rooms/' + code);
-  eq(room0.settings.target, 3, 'custom target of 3 was applied');
-  A.destroy();
-}
-
-console.log('— Two players join; predetermined clue order is IDENTICAL for both (#1a) —');
 const A = await mkClient('uidA', 'Ash');
 const B = await mkClient('uidB', 'Brock');
+const C = await mkClient('uidC', 'Cathy');
+const D = await mkClient('uidD', 'Dawn');
 await tick();
-A.click(A.btn('Join with a code')); await tick();
-{ const i = A.q('input'); i.value = code; A.click(A.btn('Join')); await tick(); }
-B.click(B.btn('Join with a code')); await tick();
-{ const i = B.q('input'); i.value = code; B.click(B.btn('Join')); await tick(); }
-let room = await fb.get('/rooms/' + code);
-ok(Object.keys(room.players).length === 2, 'two players joined');
 
+A.click(A.btn('Create a room')); await tick();
+const teamBtn = A.btn('Team Mode: Off');
+ok(!!teamBtn, 'a Team Mode toggle exists on the create-room form');
+A.click(teamBtn); await tick();
+ok(A.text().includes('Team Mode: On'), 'toggling shows Team Mode is now on');
+const tinput = A.q('input[type=number]'); tinput.value = '2'; tinput.dispatchEvent(new A.win.Event('input', { bubbles: true }));
+A.click(A.btn('Create room')); await tick();
+const rooms = await fb.get('/rooms');
+code = Object.keys(rooms)[0];
+ok(!!code, 'room created');
+ok(rooms[code].settings.teams === true, 'room settings recorded teams:true');
+ok(Array.isArray(rooms[code].teamState) && rooms[code].teamState.length === 2, 'teamState initialized with 2 teams');
+
+for (const client of [B, C, D]) {
+  client.click(client.btn('Join with a code')); await tick();
+  const i = client.q('input'); i.value = code; client.click(client.btn('Join')); await tick();
+}
+let room = await fb.get('/rooms/' + code);
+eq(Object.keys(room.players).length, 4, 'all 4 players joined');
+
+console.log('— Team-builder: manual assignment + randomize (#3b) —');
+{
+  ok(A.text().includes('Unassigned (4)'), 'all 4 players start unassigned');
+  const startBtn = A.btn('Start');
+  ok(!startBtn || startBtn.disabled, 'Start is disabled while anyone is unassigned');
+
+  // manually assign A and B to Team Red, C and D to Team Blue
+  const assignTo = (client, targetLabel) => {
+    const row = [...client.mount.querySelectorAll('.online-player')].find((r) => r.textContent.includes(client.name));
+    const btn = row && [...row.querySelectorAll('button')].find((b) => b.textContent.includes(targetLabel));
+    client.click(btn);
+  };
+  assignTo(A, 'Team Red'); 
+  A.use(); await tick();
+  assignTo(A, 'Team Red'); // no-op safety; real assign uses B's own row below
+  // Assign via A (host) since only host sees move buttons
+  const clickAssign = async (name, label) => {
+    A.use();
+    const row = [...A.mount.querySelectorAll('.online-player')].find((r) => r.textContent.includes(name));
+    const btn = row && [...row.querySelectorAll('button')].find((b) => b.textContent.includes(label));
+    ok(!!btn, `host sees a "${label}" button for ${name}`);
+    A.click(btn); await tick();
+  };
+  await clickAssign('Brock', 'Team Red');
+  await clickAssign('Cathy', 'Team Blue');
+  await clickAssign('Dawn', 'Team Blue');
+  room = await fb.get('/rooms/' + code);
+  eq(room.players.uidA.team, 0, 'Ash assigned to Team Red (0)');
+  eq(room.players.uidB.team, 0, 'Brock assigned to Team Red (0)');
+  eq(room.players.uidC.team, 1, 'Cathy assigned to Team Blue (1)');
+  eq(room.players.uidD.team, 1, 'Dawn assigned to Team Blue (1)');
+
+  const startBtn2 = A.btn('Start');
+  ok(!!startBtn2 && !startBtn2.disabled, 'Start is enabled once everyone is on a team');
+}
+
+console.log('— Randomize Teams button produces an even split —');
+{
+  A.click(A.btn('Randomize Teams')); await tick();
+  room = await fb.get('/rooms/' + code);
+  const teamsArr = ['uidA', 'uidB', 'uidC', 'uidD'].map((u) => room.players[u].team);
+  ok(teamsArr.every((t) => t === 0 || t === 1), 'every player has a valid team after randomizing');
+  const count0 = teamsArr.filter((t) => t === 0).length;
+  eq(count0, 2, 'randomizing 4 players gives an even 2/2 split');
+  // Re-assign deterministically back to Red={A,B} Blue={C,D} for the rest of the test
+  const clickAssign = async (name, label) => {
+    A.use();
+    const row = [...A.mount.querySelectorAll('.online-player')].find((r) => r.textContent.includes(name));
+    const btn = row && [...row.querySelectorAll('button')].find((b) => b.textContent.includes(label));
+    if (btn) { A.click(btn); await tick(); }
+  };
+  await clickAssign('Ash', 'Team Red');
+  await clickAssign('Brock', 'Team Red');
+  await clickAssign('Cathy', 'Team Blue');
+  await clickAssign('Dawn', 'Team Blue');
+  room = await fb.get('/rooms/' + code);
+  eq(room.players.uidA.team, 0, 're-fixed: Ash on Red');
+  eq(room.players.uidB.team, 0, 're-fixed: Brock on Red');
+  eq(room.players.uidC.team, 1, 're-fixed: Cathy on Blue');
+  eq(room.players.uidD.team, 1, 're-fixed: Dawn on Blue');
+}
+
+console.log('— Starting the game sets memberOrder per team, in join order —');
 A.click(A.btn('Start')); await tick();
 room = await fb.get('/rooms/' + code);
-eq(room.status, 'playing', 'race started');
+eq(room.status, 'playing', 'team game started');
+eq(JSON.stringify(room.teamState[0].memberOrder), JSON.stringify(['uidA', 'uidB']), 'Team Red memberOrder = join order within the team');
+eq(JSON.stringify(room.teamState[1].memberOrder), JSON.stringify(['uidC', 'uidD']), 'Team Blue memberOrder = join order within the team');
 
 const order = buildOrder(room.seed, gen2.pokedex.length);
 const mystery0 = gen2.pokedex[order[0]];
-ok(A.text().includes('1 / 3') || A.text().includes('Pok\u00e9mon 1'), 'A is on mystery #1');
-ok(B.text().includes('1 / 3') || B.text().includes('Pok\u00e9mon 1'), 'B is on mystery #1');
-const firstCluesMatch = A.q('#race-revealed')?.textContent === B.q('#race-revealed')?.textContent;
-ok(firstCluesMatch, `A and B see the IDENTICAL first clue for the same mystery (#1a) [A="${A.q('#race-revealed')?.textContent}" B="${B.q('#race-revealed')?.textContent}"]`);
 
-console.log('— First clue appears immediately; a 2nd appears after 5s, not before (#1b) —');
+console.log('— Only the designated answerer can guess; teammate sees a waiting message (#3a) —');
 {
-  const before = A.q('#race-revealed').textContent;
-  ok(before.length > 0 && !before.includes('loading'), 'first clue is visible immediately on mystery presentation');
-  clock.advance(4000);
-  const at4s = A.q('#race-revealed').textContent;
-  eq(at4s, before, 'no NEW clue yet at 4s (still just the first)');
-  clock.advance(1500);
-  const at5_5s = A.q('#race-revealed').textContent;
-  ok(at5_5s !== before, 'a second clue appeared once 5s elapsed');
+  ok(!!A.q('#race-guess'), 'Ash (first in Team Red\u2019s order) sees a guess input');
+  ok(!B.q('#race-guess'), 'Brock (teammate, not up) does NOT see a guess input');
+  ok(B.text().includes('Ash is answering'), `Brock sees a "waiting for teammate" message (text: ${B.text().slice(0, 200)})`);
+  // Everyone on the team sees the SAME clue feed regardless of who's up.
+  const aClues = A.q('#race-revealed')?.textContent;
+  const bClues = B.q('#race-revealed')?.textContent;
+  eq(aClues, bClues, 'teammates see the identical revealed-clue feed even though only one can answer');
 }
 
-console.log('— Independent advancement + "advanced to round N" toast (#1c) —');
+console.log('— Correct guess advances the TEAM and rotates the answerer to the next member (#3a) —');
 {
-  const aInput = A.q('#race-guess');
-  aInput.value = mystery0.name;
+  const input = A.q('#race-guess');
+  input.value = mystery0.name;
   A.click(A.btn('Guess'));
   await tick();
   room = await fb.get('/rooms/' + code);
-  eq(room.players.uidA.solved, 1, 'A solved mystery #1 and advanced');
-  eq(room.players.uidB.solved, 0, 'B has NOT advanced — independent pacing (#1c)');
-  ok(A.text().includes('2 / 3') || A.text().includes('Pok\u00e9mon 2'), 'A is now on mystery #2');
-  ok(B.text().includes('1 / 3') || B.text().includes('Pok\u00e9mon 1'), 'B is STILL on mystery #1');
-  const toastText = B.q('#race-toasts')?.textContent || '';
-  ok(toastText.includes('Ash') && toastText.includes('round 2'), `B sees a toast about A's advancement (got: "${toastText}")`);
-  const aToast = A.q('#race-toasts')?.textContent || '';
-  eq(aToast, '', 'A does NOT see a toast about their OWN advancement');
+  eq(room.teamState[0].solved, 1, 'Team Red advanced to 1 solved');
+  eq(room.teamState[0].answererIdx, 1, 'the answerer index rotated forward');
+  ok(!!B.q('#race-guess'), 'Brock (now up per the rotation) sees the guess input');
+  ok(!A.q('#race-guess'), 'Ash (no longer up) no longer sees the guess input');
 }
 
-console.log('— B finishes too; game auto-ends once ALL active players finish (#1d.i) —');
+console.log('— "Team X advanced to round N" toast goes to the OTHER team, not your own (#1c/#3) —');
 {
-  // A still has 2 more mysteries left (solved #1 earlier); finish those first.
-  for (let m = 0; m < 4; m++) {
-    room = await fb.get('/rooms/' + code);
-    if ((room.players.uidA.solved || 0) >= 3) break;
-    const idx = room.players.uidA.solved || 0;
-    const poke = gen2.pokedex[order[idx % order.length]];
-    const aInput2 = A.q('#race-guess');
-    if (!aInput2) break;
-    aInput2.value = poke.name;
-    A.click(A.btn('Guess'));
-    await tick();
-  }
-  for (let m = 0; m < 4; m++) {
-    room = await fb.get('/rooms/' + code);
-    if ((room.players.uidB.solved || 0) >= 3) break;
-    const idx = room.players.uidB.solved || 0;
-    const poke = gen2.pokedex[order[idx % order.length]];
-    const bInput = B.q('#race-guess');
-    if (!bInput) break;
-    bInput.value = poke.name;
-    B.click(B.btn('Guess'));
-    await tick();
-  }
+  const blueToast = C.q('#race-toasts')?.textContent || '';
+  ok(blueToast.includes('Team Red') && blueToast.includes('round 2'), `Team Blue sees a toast about Team Red\u2019s advance (got: "${blueToast}")`);
+  const redToast = A.q('#race-toasts')?.textContent || '';
+  eq(redToast, '', 'Team Red does NOT get toasted about its own advancement');
+}
+
+console.log('— Team Blue solves its mystery too; game ends once BOTH teams finish (#1d.i for teams) —');
+{
+  const cInput = C.q('#race-guess');
+  ok(!!cInput, 'Cathy (first in Team Blue\u2019s order) can answer');
+  cInput.value = mystery0.name;
+  C.click(C.btn('Guess'));
+  await tick();
   room = await fb.get('/rooms/' + code);
-  eq(room.players.uidB.solved, 3, 'B eventually finished all 3');
-  eq(room.players.uidA.solved, 3, 'A already finished all 3');
+  eq(room.teamState[1].solved, 1, 'Team Blue advanced to 1 solved');
+  // Both teams now need their 2nd mystery to finish (target=2).
+  const order2Idx = 1;
+  const mystery1 = gen2.pokedex[order[order2Idx % order.length]];
+  const bInput = B.q('#race-guess'); // Brock is up for Red now
+  bInput.value = mystery1.name;
+  B.click(B.btn('Guess'));
+  await tick();
+  const dInput = D.q('#race-guess'); // Dawn is up for Blue now
+  dInput.value = mystery1.name;
+  D.click(D.btn('Guess'));
+  await tick();
+  room = await fb.get('/rooms/' + code);
+  eq(room.teamState[0].solved, 2, 'Team Red finished (2/2)');
+  eq(room.teamState[1].solved, 2, 'Team Blue finished (2/2)');
   clock.advance(1100);
   await tick();
   room = await fb.get('/rooms/' + code);
-  eq(room.status, 'gameOver', 'room auto-transitions to gameOver once everyone active has finished');
+  eq(room.status, 'gameOver', 'game ends once BOTH teams have finished');
 }
 
-console.log('— Results: ranked by total time, splits table renders (#1e) —');
+console.log('— Results show TEAM totals + splits (#1e for teams) —');
 {
   const table = A.q('.race-splits-table');
-  ok(!!table, 'a splits table is rendered');
-  ok(A.text().includes('Ash') && A.text().includes('Brock'), 'both players appear in the results');
-  ok(!!A.q('.race-split-best'), 'at least one fastest-split cell is highlighted');
+  ok(!!table, 'a team splits table renders');
+  ok(A.text().includes('Team Red') && A.text().includes('Team Blue'), 'both teams appear in the results');
 }
 
-console.log('— Persistent post-game lobby + rematch (#1f): both opt in, host starts, countdown resolves —');
+console.log('— Team Mode rematch requires ALL players opted in, not just 2 (#3b.i) —');
 {
   A.click(A.btn('rematch')); await tick();
   B.click(B.btn('rematch')); await tick();
+  C.click(C.btn('rematch')); await tick();
+  // D deliberately does NOT opt in yet
+  const findRematchBtn = (client) => [...client.mount.querySelectorAll('.btn-primary')].find((b) => b.textContent.includes('Start rematch') || b.textContent.includes('Waiting for everyone'));
+  const startBtn = findRematchBtn(A);
+  ok(!!startBtn, 'host sees the Start-rematch control');
+  ok(startBtn.disabled, 'but it is disabled — Dawn has not opted in yet (ALL must, not just 2)');
+  ok(A.text().includes('3/4 want a rematch'), `shows the ALL-must-opt-in count (text has: ${A.text().match(/\d\/\d want a rematch/)})`);
+
+  D.click(D.btn('rematch')); await tick();
+  const startBtn2 = findRematchBtn(A);
+  ok(!!startBtn2 && !startBtn2.disabled, 'once ALL 4 have opted in, Start-rematch becomes enabled');
+  A.click(startBtn2); await tick();
   room = await fb.get('/rooms/' + code);
-  ok(room.players.uidA.rematch && room.players.uidB.rematch, 'both players are marked rematch:true');
-  A.click(A.btn('Start rematch')); await tick();
-  room = await fb.get('/rooms/' + code);
-  ok(!!room.rematchCountdownEndsAt, 'host starting the rematch sets a countdown deadline');
+  ok(!!room.rematchCountdownEndsAt, 'countdown started');
   clock.advance(5200);
   await tick(6);
   room = await fb.get('/rooms/' + code);
-  eq(room.status, 'playing', 'after the 5s countdown, a NEW game started automatically');
-  eq(room.players.uidA.solved, 0, 'the rematch resets solved counts');
-  ok(room.seed !== undefined, 'a fresh seed was generated for the rematch');
+  eq(room.status, 'playing', 'rematch auto-started after the countdown');
+  eq(room.teamState[0].solved, 0, 'Team Red reset to 0 solved');
+  eq(room.players.uidA.team, 0, 'team assignments are preserved across a rematch');
 }
 
-console.log('— Early exit mid-game marks the player "left" and un-blocks the completion gate (#1d.ii) —');
-{
-  const C = await mkClient('uidC', 'Cathy');
-  const D = await mkClient('uidD', 'Dawn');
-  await tick();
-  C.click(C.btn('Create a room')); await tick();
-  const tinput2 = C.q('input[type=number]'); tinput2.value = '2'; C.fireInput(tinput2);
-  C.click(C.btn('Create room')); await tick();
-  const rooms2 = await fb.get('/rooms');
-  const code2 = Object.keys(rooms2).find((k) => k !== code);
-  D.click(D.btn('Join with a code')); await tick();
-  { const i = D.q('input'); i.value = code2; D.click(D.btn('Join')); await tick(); }
-  C.click(C.btn('Start')); await tick();
-  let r2 = await fb.get('/rooms/' + code2);
-  ok(r2.status === 'playing', 'second room started');
-  const order2 = buildOrder(r2.seed, gen2.pokedex.length);
-  D.click(D.btn('Quit')); await tick();
-  r2 = await fb.get('/rooms/' + code2);
-  ok(r2.players.uidD.left === true, 'D is marked left:true after confirming Quit');
-  for (let m = 0; m < 3; m++) {
-    r2 = await fb.get('/rooms/' + code2);
-    const idx = r2.players.uidC.solved || 0;
-    if (idx >= 2) break;
-    const poke = gen2.pokedex[order2[idx % order2.length]];
-    const cInput = C.q('#race-guess');
-    cInput.value = poke.name;
-    C.click(C.btn('Guess'));
-    await tick();
-  }
-  clock.advance(1100);
-  await tick();
-  r2 = await fb.get('/rooms/' + code2);
-  eq(r2.status, 'gameOver', 'game ends once the only ACTIVE player (C) finishes — D (left) does not block it');
-  C.destroy(); D.destroy();
-}
-
-console.log('— Rematch with nobody else opted in: host sees an error and returns to the main menu —');
-{
-  const roomsAll0 = await fb.get('/rooms');
-  const usedCodes = Object.keys(roomsAll0);
-  const E = await mkClient('uidE', 'Erika');
-  await tick();
-  E.click(E.btn('Create a room')); await tick();
-  E.click(E.btn('Create room')); await tick();
-  const roomsAll = await fb.get('/rooms');
-  const code3 = Object.keys(roomsAll).find((k) => !usedCodes.includes(k));
-  await fb.update(`/rooms/${code3}`, { status: 'gameOver', players: { uidE: { name: 'Erika', connected: true, left: false, solved: 1, splits: [1000], finishedAt: 1, rematch: false } }, joinOrder: ['uidE'] });
-  await tick();
-  E.destroy();
-  const E2 = await mkClient('uidE', 'Erika');
-  await tick();
-  E2.click(E2.btn('Join with a code')); await tick();
-  { const i = E2.q('input'); i.value = code3; E2.click(E2.btn('Join')); await tick(); }
-  E2.click(E2.btn('rematch')); await tick();
-  const startBtn = E2.btn('Start rematch');
-  ok(!!startBtn, 'host sees a Start-rematch button (host is opted in)');
-  ok(startBtn.disabled, 'but it is DISABLED — no other player has opted in yet');
-  await fb.set(`/rooms/${code3}/rematchCountdownEndsAt`, Date.now() + 5000);
-  await tick();
-  clock.advance(5200);
-  await tick(6);
-  ok(E2.exited, 'the host is returned to the main menu when nobody else stayed opted in');
-  E2.destroy();
-}
-
-A.destroy(); B.destroy();
+A.destroy(); B.destroy(); C.destroy(); D.destroy();
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

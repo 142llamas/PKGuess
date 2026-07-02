@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
   seedFor, buildEngine, applyReveals, revealOutcome, guessOutcome,
-  nextTurnPos, weightedRandomClue, advanceAfterWin, champion, makeRoomCode,
+  nextTurnPos, weightedRandomClue, advanceAfterWin, champion, makeRoomCode, buildRevealSequence,
 } from '../../docs/js/lib/mp-rules.js';
 
 const load = (rel) => JSON.parse(readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8'));
@@ -99,5 +99,31 @@ export default function (t) {
     for (let i = 0; i < 200; i++) { const p = weightedRandomClue(avail, null, 0.25, Math.random); if (p.id === 1) lo++; }
     t.ok(lo > 120, `cheap clue favored (~${lo}/200 chose the 1-pt clue)`);
     t.eq(weightedRandomClue([], null, 0.25, rng), null, 'empty pool → null');
+  }
+
+  t.section('mp-rules — buildRevealSequence (Cycling Road #1a — deterministic, points-free)');
+  {
+    const dragonite = gen2.pokedex.find((p) => p.name === 'Dragonite');
+    const seqA = buildRevealSequence({ data: gen2, movelist: {}, mystery: dragonite, seed: 4242 });
+    const seqB = buildRevealSequence({ data: gen2, movelist: {}, mystery: dragonite, seed: 4242 });
+    t.ok(seqA.length > 5, `a real mystery yields a substantial sequence (got ${seqA.length})`);
+    t.eq(JSON.stringify(seqA), JSON.stringify(seqB), 'same seed + mystery → identical sequence (fairness — every client/player sees the same order)');
+
+    const seqC = buildRevealSequence({ data: gen2, movelist: {}, mystery: dragonite, seed: 999 });
+    t.ok(JSON.stringify(seqA) !== JSON.stringify(seqC), 'a different seed produces a different sequence');
+
+    // No clue should ever repeat more than a small, sane number of times —
+    // this is the actual regression: exampleMovesetMulti has no engine-level
+    // exhaustion rule (other modes only limit it via point cost, which
+    // doesn't exist here), so without a local cap it dominated the whole
+    // sequence (161 of 200 draws was the observed failure before the fix).
+    const counts = {};
+    seqA.forEach((s) => { counts[s.id] = (counts[s.id] || 0) + 1; });
+    const maxRepeat = Math.max(...Object.values(counts));
+    t.ok(maxRepeat <= 3, `no single clue repeats more than 3 times in one sequence (got ${maxRepeat})`);
+    t.ok(Object.keys(counts).length >= 15, `a real mystery's sequence covers many distinct clues (got ${Object.keys(counts).length})`);
+
+    // Every entry is a usable {id, value} pair.
+    t.ok(seqA.every((s) => typeof s.id === 'number' && typeof s.value === 'string' && s.value.length > 0), 'every sequence entry has a numeric id and a non-empty string value');
   }
 }

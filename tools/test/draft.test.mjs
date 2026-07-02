@@ -8,7 +8,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { DraftSession, autoDraft, buildSpeciesList, buildLearnsetMap } from '../../docs/js/draft.js';
+import { DraftSession, autoDraft, autoDraftScaled, resolveThroneCascade, TIER_RANK, buildSpeciesList, buildLearnsetMap } from '../../docs/js/draft.js';
 
 const load = (rel) => JSON.parse(readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8'));
 const gen2 = load('../../docs/data/gen2.json');
@@ -22,6 +22,21 @@ const species = buildSpeciesList(gen2, learnset, 2);
 const mul = (seed) => () => { seed |= 0; seed = (seed + 0x6D2B79F5) | 0; let x = Math.imul(seed ^ (seed >>> 15), 1 | seed); x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) ^ x; return ((x ^ (x >>> 14)) >>> 0) / 4294967296; };
 
 export default function (t) {
+  t.section('draft.js — banned moves (#6j) never appear in any learnset');
+  {
+    const banned = ['Attract', 'Self-Destruct', 'Explosion', 'Baton Pass', 'Mirror Move', 'Skull Bash',
+      'Rage', 'Teleport', 'Perish Song', 'Conversion', 'Disable', 'Encore', 'False Swipe', 'Foresight',
+      'Mean Look', 'Metronome', 'Mimic', 'Mind Reader', 'Mist', 'Roar', 'Whirlwind', 'Sketch',
+      'Sky Attack', 'Snore', 'Spite', 'Spikes', 'Spider Web', 'Sweet Scent', 'Thief', 'Transform'];
+    let leaked = [];
+    for (const [sp, moves] of Object.entries(learnset)) {
+      for (const b of banned) if (moves.includes(b)) leaked.push(`${b} on ${sp}`);
+    }
+    t.eq(leaked.length, 0, `no banned move appears in any learnset (found: ${leaked.slice(0, 5).join(', ')})`);
+    t.ok((learnset['pikachu'] || []).length > 0, 'Pikachu still has a real movepool (banning didn\u2019t wipe everything)');
+    t.ok((learnset['pikachu'] || []).includes('Thunderbolt'), 'an ordinary, non-banned move is still present');
+  }
+
   t.section('draft.js — species list');
   t.ok(species.length > 200, `built ${species.length} draftable species`);
 
@@ -172,5 +187,63 @@ export default function (t) {
     t.ok(Object.keys(r.baseStats).length === 6 && r.moves.length === 4 && r.types.filter(Boolean).length >= 1, 'valid mon');
     const r2 = autoDraft({ species, gen: 2, seed: 2024, playerName: 'CPU' });
     t.eq(JSON.stringify(r), JSON.stringify(r2), 'autoDraft deterministic for a seed');
+  }
+
+  t.section('draft.js — autoDraftScaled (#7): every Elite-4 tier\u2019s base-stat total lands in its target band');
+  {
+    const bands = { Will: [425, 450], Koga: [475, 500], Bruno: [525, 550], Lance: [575, 600] };
+    for (const [name, [lo, hi]] of Object.entries(bands)) {
+      for (const seed of [111, 222, 333]) {
+        const r = autoDraftScaled({ species, gen: 2, seed: seed * 7919, playerName: name, minTotal: lo, maxTotal: hi });
+        const total = Object.values(r.baseStats).reduce((a, b) => a + b, 0);
+        t.ok(total >= lo && total <= hi, `${name} (seed ${seed}): base-stat total ${total} is within [${lo}, ${hi}]`);
+      }
+    }
+  }
+
+  t.section('draft.js — autoDraftScaled is deterministic and still a fully valid mon');
+  {
+    const r1 = autoDraftScaled({ species, gen: 2, seed: 5555, playerName: 'Lance', minTotal: 575, maxTotal: 600 });
+    const r2 = autoDraftScaled({ species, gen: 2, seed: 5555, playerName: 'Lance', minTotal: 575, maxTotal: 600 });
+    t.eq(JSON.stringify(r1), JSON.stringify(r2), 'same seed \u2192 identical scaled result');
+    t.ok(Object.keys(r1.baseStats).length === 6 && r1.moves.length === 4 && r1.types.filter(Boolean).length >= 1, 'a scaled mon is still fully valid (6 stats, 4 moves, \u22651 type)');
+  }
+
+  t.section('draft.js — autoDraftScaled falls back gracefully (closest fit) if a band is unreachable within maxAttempts');
+  {
+    // An impossible band (above any real stat combination) must not throw or hang.
+    const r = autoDraftScaled({ species, gen: 2, seed: 1, playerName: 'Impossible', minTotal: 999999, maxTotal: 999999, maxAttempts: 20 });
+    t.ok(!!r && Object.keys(r.baseStats).length === 6, 'returns the closest-fit mon instead of throwing or hanging');
+  }
+
+  t.section('draft.js — resolveThroneCascade (#14a): claiming a HIGHER throne while already holding a lower one');
+  {
+    const fakeMon = { name: 'X', types: ['Water'], baseStats: { hp: 1, atk: 1, def: 1, spa: 1, spd: 1, spe: 1 }, stats: {} };
+    // Player holds Koga (week); wins Bruno (month, higher) by beating a HUMAN holder.
+    const d1 = resolveThroneCascade({ newTierKey: 'month', oldTierKey: 'week', tierRank: TIER_RANK, defeatedUid: 'uidHuman', defeatedMon: fakeMon, champLabel: 'Rival' });
+    t.eq(d1.action, 'claimNewVacateOld', 'claiming a higher throne vacates the old (lower) one');
+    t.eq(d1.vacatedTier, 'week', 'the VACATED tier is the one they used to hold (lower), not the one they just won');
+    t.ok(!!d1.bump, 'defeating a HUMAN holder produces a bump-down record');
+    t.eq(d1.bump.holderUid, 'uidHuman', 'the bumped-down record is for the defeated HUMAN, not the winner');
+    t.eq(d1.bump.holderName, 'Rival', 'the bumped-down record keeps the defeated player\u2019s name');
+
+    // Same scenario, but the defeated holder was an NPC (no uid/mon-of-note) — no bump, just vacate.
+    const d2 = resolveThroneCascade({ newTierKey: 'month', oldTierKey: 'week', tierRank: TIER_RANK, defeatedUid: null, defeatedMon: null, champLabel: 'Bruno' });
+    t.eq(d2.action, 'claimNewVacateOld', 'still claims the higher throne and vacates the old one');
+    t.eq(d2.bump, null, 'defeating an NPC produces NO bump — the vacated throne just goes back to a fresh NPC');
+  }
+
+  t.section('draft.js — resolveThroneCascade (#14a): winning a LOWER throne while already holding a higher one keeps the higher one');
+  {
+    const d = resolveThroneCascade({ newTierKey: 'day', oldTierKey: 'year', tierRank: TIER_RANK, defeatedUid: 'uidSomeone', defeatedMon: { name: 'Y' }, champLabel: 'Someone' });
+    t.eq(d.action, 'keepOld', 'the player keeps their existing HIGHER throne rather than switching to the lower one just won');
+    t.eq(d.keptTier, 'year', 'keptTier correctly identifies the throne they keep (the higher, pre-existing one)');
+  }
+
+  t.section('draft.js — resolveThroneCascade (#14a): the All-Time Champion spot ranks above every numbered stage');
+  {
+    const d = resolveThroneCascade({ newTierKey: 'all', oldTierKey: 'year', tierRank: TIER_RANK, defeatedUid: null, defeatedMon: null, champLabel: null });
+    t.eq(d.action, 'claimNewVacateOld', 'winning All-Time while holding Lance (year) claims All-Time and vacates Lance \u2014 All-Time outranks every numbered stage');
+    t.eq(d.vacatedTier, 'year', 'Lance (year) is correctly identified as the vacated (lower) tier');
   }
 }

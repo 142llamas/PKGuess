@@ -13,12 +13,14 @@ import sim from './sim.test.mjs';
 import draft from './draft.test.mjs';
 import engine from './engine.test.mjs';
 import mprules from './mp-rules.test.mjs';
+import identity from './identity.test.mjs';
+import catchTracker from './catch-tracker.test.mjs';
 
-const SUITES = [['sim', sim], ['draft', draft], ['engine', engine], ['mp-rules', mprules]];
+const SUITES = [['sim', sim], ['draft', draft], ['engine', engine], ['mp-rules', mprules], ['identity', identity], ['catch-tracker', catchTracker]];
 
 const t = makeHarness();
 for (const [name, fn] of SUITES) {
-  try { fn(t); }
+  try { await fn(t); }
   catch (e) { t.ok(false, `${name} suite threw: ${e && e.stack || e}`); }
 }
 const passed = report(t);
