@@ -1,6 +1,6 @@
 /**
  * @file        docs/js/modes.js
- * @version     1.8.0
+ * @version     1.8.0 
  * @updated     2026-06-26
  * @changelog
  *   1.8.0 — Cycling Road menu blurb updated for the v2 mechanic (predetermined synced clue timing, not "first to target").
