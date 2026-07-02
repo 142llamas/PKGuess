@@ -1,8 +1,9 @@
 /**
  * @file        js/lib/identity.js
- * @version     1.0.0
+ * @version     1.1.0
  * @updated     2026-06-24
  * @changelog
+ *   1.1.0 — checkNameClaim()/getClaimStatus() so the UI can warn before letting a name collide with someone else’s PIN claim (#16). getIdentity() accepts an optional {firebase} override + _resetIdentityCacheForTests() for unit testing.
  *   1.0.0 — Anonymous Firebase Auth + persistent display name + optional 4-digit
  *           PIN name-claim for cross-device re-linking (SPEC §9).
  *           • Anonymous sign-in fires automatically on first call; uid is stable
@@ -37,10 +38,17 @@ function hashPin(name, pin) {
 
 let _cached = null;
 
-export async function getIdentity() {
+/**
+ * TEST-ONLY. Clears the module-level identity cache so a test can simulate a
+ * second distinct identity (e.g. a different uid) in the same process. Real
+ * app code never calls this — one identity per browser session is correct.
+ */
+export function _resetIdentityCacheForTests() { _cached = null; }
+
+export async function getIdentity(opts = {}) {
   if (_cached) return _cached;
 
-  const fb = await getFirebase();
+  const fb = opts.firebase || await getFirebase();
 
   // Sign in anonymously (idempotent — returns existing user if already signed in)
   const user = await new Promise((resolve) => {
@@ -98,6 +106,23 @@ export async function getIdentity() {
       await identity.setName(n);
     },
 
+    /**
+     * Look up whether `name` is currently claimed by anyone, WITHOUT exposing
+     * the PIN hash (#16). Callers use this before letting a player set a name
+     * outright, so a name already protected by someone else's PIN can't be
+     * silently reused by a second person.
+     * @returns {{claimed:boolean, isMine:boolean}}
+     */
+    async checkNameClaim(name) {
+      const n = String(name || '').trim().slice(0, 16);
+      if (!n) return { claimed: false, isMine: false };
+      const key = n.toLowerCase().replace(/\s+/g, '');
+      let claim = null;
+      try { claim = await fb.get(`/nameclaims/${key}`); } catch { return { claimed: false, isMine: false }; }
+      if (!claim) return { claimed: false, isMine: false };
+      return { claimed: true, isMine: claim.uid === uid };
+    },
+
     /** Re-link a claimed name on a new device using name + PIN. */
     async reclaimName(name, pin) {
       const n = String(name || '').trim().slice(0, 16);
@@ -114,9 +139,9 @@ export async function getIdentity() {
       saveName(n);
     },
 
-    get isClaimed() {
-      // Can't know synchronously without another DB read; use hasPin below
-      return false;
+    /** Is the CURRENT name protected by a PIN, and is it protected by ME? */
+    async getClaimStatus() {
+      return identity.checkNameClaim(name());
     },
   };
 

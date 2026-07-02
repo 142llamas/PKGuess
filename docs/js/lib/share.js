@@ -1,8 +1,9 @@
 /**
  * @file        js/lib/share.js
- * @version     1.1.0
+ * @version     1.2.0
  * @updated     2026-06-25
  * @changelog
+ *   1.2.0 — Throne share: "challenged X and won/lost with my Y"; no -build / no Player’s (#14e).
  *   1.1.0 — Share text is now plain ASCII ("I beat ___"), no win-meter and
  *           no emoji — fixes unrenderable glyphs in shared messages (#9/#10).
  *   1.0.0 — Central-Time date/period helpers, deterministic seeds, and the
@@ -114,10 +115,11 @@ export function buildSummaryText(opts = {}) {
   const lines = [];
   if (kind === 'throne') {
     lines.push('PokeGuess Draft Battle');
-    if (claimed && beatName) lines.push(`I beat ${beatName}!`);
-    else if (beatName) lines.push(`I challenged ${beatName}.`);
+    const won = winPct != null ? winPct > 0.5 : !!claimed;
+    if (beatName && monName) lines.push(`I challenged ${beatName} and ${won ? 'won' : 'lost'} with my ${monName}`);
+    else if (beatName) lines.push(`I challenged ${beatName} and ${won ? 'won' : 'lost'}`);
     else if (claimed && tierLabel) lines.push(`I claimed ${tierLabel}!`);
-    if (monName) lines.push(`with my ${monName}`);
+    else if (monName) lines.push(`with my ${monName}`);
     if (winPct != null) lines.push(`(${Math.round(winPct * 100)}% win rate)`);
   } else {
     lines.push(`PokeGuess Daily${dateStr ? ' \u2014 ' + dateStr : ''}`);

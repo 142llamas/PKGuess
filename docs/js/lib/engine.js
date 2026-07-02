@@ -1,8 +1,10 @@
 /**
  * @file        js/lib/engine.js
- * @version     1.1.0
+ * @version     1.3.0
  * @updated     2026-06-23
  * @changelog
+ *   1.3.0 — poolFilterForData/matchesPool: single source of truth so Gen 2 mode always includes Gen 1+2 (#13). categoryDiversityBlocked/diversityBlocked: force-different AND cycle-all now enforced for manual reveals too (cycle-all previously only applied to the random-reveal algorithm). autoRevealFromCategory: new "by category" reveal (#11/#15b). autoRevealRandom/autoRevealFromCategory: respectForcedPhase guard so a UI control can never reveal during the player’s forced-guess turn.
+ *   1.2.0 — Gen 1 gym-leader / Elite-4 clues now return Yes/No only (#10).
  *   1.1.0 — Evolution cross-deductions: revealing Current Evolution Stage
  *           locks Can Evolve + Evolves From (and the reverse); single-stage/middle
  *           pins family size; Evolution Method stays reachable via stage. Guesses
@@ -57,6 +59,27 @@ function animeAcqEvoText(poke) {
     if (!mm) return part.trim();
     return (mm[1].toUpperCase() === 'C' ? 'Acquired ' : 'Evolved ') + mm[2].trim();
   }).join('; ');
+}
+
+// ---- pool filtering (single source of truth — #13) -------------------------
+// `poolFilter` is the engine's own primitive: 'gen1' = National Dex #1-151,
+// 'gen2' = #152-251 only, anything else ('both' or omitted) = the full #1-251
+// range covered by gen2.json. This primitive's meaning never changes.
+//
+// `poolFilterForData(dataId)` is what every MODE CONTROLLER should call to
+// turn "which data file is loaded" into the correct engine poolFilter: Gen 1
+// mode stays Kanto-only, but Gen 2 mode means the *full* dex (Gen 1 + Gen 2),
+// per spec — never the narrow Johto-only 'gen2' primitive. Centralizing this
+// mapping (instead of each controller re-deriving it) is what prevents the
+// two meanings from drifting apart again.
+export function poolFilterForData(dataId) {
+  return dataId === 'gen1' ? 'gen1' : 'both';
+}
+export function matchesPool(num, poolFilter) {
+  const n = typeof num === 'string' ? parseInt(num, 10) : num;
+  if (poolFilter === 'gen1') return n >= 1 && n <= 151;
+  if (poolFilter === 'gen2') return n >= 152 && n <= 251;
+  return n >= 1 && n <= 251; // 'both' / default — every Pokémon this data set covers
 }
 
 // ===========================================================================
@@ -132,12 +155,7 @@ export class PokeGuessRound {
       };
     }
 
-    const pool = this.pokedex.filter((p) => {
-      const n = parseInt(p.num, 10);
-      if (poolFilter === 'gen1') return n >= 1 && n <= 151;
-      if (poolFilter === 'gen2') return n >= 152 && n <= 251;
-      return n >= 1 && n <= 251;
-    });
+    const pool = this.pokedex.filter((p) => matchesPool(p.num, poolFilter));
     if (!pool.length) throw new Error('no Pokémon in selected pool');
     const chosen = mystery || pool[Math.floor(this.rng() * pool.length)];
 
@@ -395,6 +413,12 @@ export class PokeGuessRound {
       }
       case 'e4':
         return (!raw || raw === '\u2014' || raw === 'No') ? 'No \u2014 not used by Elite Four, Red, or Rival' : raw;
+      case 'gymLeaderYN':
+      case 'e4Gen1': {
+        // Gen 1 stores the trainer's name; the clue only reveals Yes/No (#10).
+        const v = (raw || '').trim();
+        return (!v || v === 'No' || /^none$/i.test(v) || DASH_RE.test(v)) ? 'No' : 'Yes';
+      }
       case 'eggMoveMulti': {
         const pool = this.state.eggMovesPool || [];
         if (pool.length === 0) return 'None \u2014 this Pok\u00e9mon has no egg moves';
@@ -429,6 +453,28 @@ export class PokeGuessRound {
     }
   }
 
+  /**
+   * Would revealing a clue from `catId` right now violate the active
+   * category-diversity rule (#15c)? Single source of truth — used by manual
+   * reveals (buyClue), the weighted-random reveal, the new by-category reveal,
+   * AND the UI (to grey out / explain blocked cards and category headers)
+   * so enforcement and display can never drift apart.
+   */
+  categoryDiversityBlocked(catId) {
+    const s = this.state;
+    if (s.forceDiffCat && s.lastChosenClueCat !== null && catId === s.lastChosenClueCat) return true;
+    if (s.cycleCats && s.catCycleVisited && s.catCycleVisited.length) {
+      const availCats = [...new Set(this.clues
+        .filter((c) => this.clueAvailable(c) && !(c.maxUses === 1 && (c.id in this.state.revealedClues)) && !this.clueExhausted(c))
+        .map((c) => c.cat))];
+      const unvisited = availCats.filter((cat) => !s.catCycleVisited.includes(cat));
+      if (unvisited.length && !unvisited.includes(catId)) return true;
+    }
+    return false;
+  }
+  /** Clue-level convenience wrapper around categoryDiversityBlocked. */
+  diversityBlocked(clue) { return this.categoryDiversityBlocked(clue.cat); }
+
   // ---- actions ------------------------------------------------------------
   /** Buy/reveal a clue. Returns {ok, id, value, cost} or {ok:false, reason}. */
   buyClue(id, { auto = false } = {}) {
@@ -440,7 +486,7 @@ export class PokeGuessRound {
     if (!this.clueAvailable(clue)) return { ok: false, reason: 'unavailable' };
     if (this.difficultyLock(clue)) return { ok: false, reason: 'locked' };
     if (this.clueLimitInfo(clue).atLimit) return { ok: false, reason: 'atLimit' };
-    if (!auto && s.forceDiffCat && s.lastChosenClueCat !== null && clue.cat === s.lastChosenClueCat) return { ok: false, reason: 'sameCategory' };
+    if (!auto && this.diversityBlocked(clue)) return { ok: false, reason: 'sameCategory' };
     const cost = this.clueCurrentCost(id);
     if (s.pointsRemaining < cost) return { ok: false, reason: 'insufficientPoints' };
     const value = this._computeClueValue(clue);
@@ -466,9 +512,19 @@ export class PokeGuessRound {
     return { ok: true, id, value, cost };
   }
 
-  /** Weighted random reveal (Forced→Random). Returns the buyClue result. */
-  autoRevealRandom() {
+  /**
+   * Weighted random reveal (Forced→Random's internal auto-trigger, or a UI
+   * "Reveal a random clue" button for Guess-Anytime). `respectForcedPhase`
+   * defaults true so a UI caller can never reveal while the player is mid
+   * forced-guess turn; the internal Forced→Random auto-trigger (called from
+   * submitGuess, which fires WHILE forcedPhase is still 'guess' by design)
+   * passes false to bypass that — the one legitimate exception.
+   */
+  autoRevealRandom({ respectForcedPhase = true } = {}) {
     const s = this.state;
+    if (respectForcedPhase && s.guessMode === 'forced' && s.forcedPhase === 'guess') {
+      return { ok: false, reason: 'forcedGuessPhase' };
+    }
     const candidates = this.clues.filter((c) => {
       if (!this.clueAvailable(c)) return false;
       if (this.clueLimitInfo(c).atLimit) return false;
@@ -476,20 +532,47 @@ export class PokeGuessRound {
       return cost > 0 && s.pointsRemaining >= cost;
     });
     if (!candidates.length) return { ok: false, reason: 'noCandidates' };
-    let pool = candidates;
-    if (s.cycleCats) {
-      const unvisited = candidates.filter((c) => !(s.catCycleVisited || []).includes(c.cat));
-      if (unvisited.length) pool = unvisited;
-    } else if (s.forceDiffCat && s.lastChosenClueCat !== null) {
-      const diff = candidates.filter((c) => c.cat !== s.lastChosenClueCat);
-      if (diff.length) pool = diff;
-    }
+    const filtered = candidates.filter((c) => !this.categoryDiversityBlocked(c.cat));
+    const pool = filtered.length ? filtered : candidates;
     const penalty = this.multiClue.randomRevealCategoryPenalty;
     const weights = pool.map((c) => (1 / Math.max(1, this.clueCurrentCost(c.id))) * (c.cat === s.lastRandomRevealCat ? penalty : 1));
     const total = weights.reduce((a, b) => a + b, 0);
     let clue;
     if (total <= 0) clue = pool[Math.floor(this.rng() * pool.length)];
     else { let r = this.rng() * total; clue = pool[pool.length - 1]; for (let i = 0; i < pool.length; i++) { r -= weights[i]; if (r <= 0) { clue = pool[i]; break; } } }
+    s.lastRandomRevealCat = clue.cat;
+    return this.buyClue(clue.id, { auto: true });
+  }
+
+  /**
+   * Weighted random reveal scoped to ONE category — what a category-header
+   * click does in "By category" clue-selection mode (#11/#15b.iii). Mirrors
+   * autoRevealRandom() but the candidate pool is pre-restricted to `catId`.
+   * Returns { ok:false, reason:'categoryBlocked' } if the diversity rule
+   * forbids this category right now, or { reason:'forcedGuessPhase' } if it's
+   * the player's turn to guess, not reveal (the UI should already grey out
+   * the header in both cases — this is the defense-in-depth backstop).
+   */
+  autoRevealFromCategory(catId, { respectForcedPhase = true } = {}) {
+    const s = this.state;
+    if (respectForcedPhase && s.guessMode === 'forced' && s.forcedPhase === 'guess') {
+      return { ok: false, reason: 'forcedGuessPhase' };
+    }
+    if (this.categoryDiversityBlocked(catId)) return { ok: false, reason: 'categoryBlocked' };
+    const candidates = this.clues.filter((c) => {
+      if (c.cat !== catId) return false;
+      if (!this.clueAvailable(c)) return false;
+      if (this.clueLimitInfo(c).atLimit) return false;
+      const cost = this.clueCurrentCost(c.id);
+      return cost > 0 && s.pointsRemaining >= cost;
+    });
+    if (!candidates.length) return { ok: false, reason: 'noCandidates' };
+    const penalty = this.multiClue.randomRevealCategoryPenalty;
+    const weights = candidates.map((c) => (1 / Math.max(1, this.clueCurrentCost(c.id))) * (c.cat === s.lastRandomRevealCat ? penalty : 1));
+    const total = weights.reduce((a, b) => a + b, 0);
+    let clue;
+    if (total <= 0) clue = candidates[Math.floor(this.rng() * candidates.length)];
+    else { let r = this.rng() * total; clue = candidates[candidates.length - 1]; for (let i = 0; i < candidates.length; i++) { r -= weights[i]; if (r <= 0) { clue = candidates[i]; break; } } }
     s.lastRandomRevealCat = clue.cat;
     return this.buyClue(clue.id, { auto: true });
   }
@@ -513,7 +596,7 @@ export class PokeGuessRound {
     s.guessCostTotal += s.guessCost;
     let phaseChanged = false;
     if (s.guessMode === 'forced' && s.pointsRemaining > 0) {
-      if (s.clueMode === 'random') { this.autoRevealRandom(); }
+      if (s.clueMode === 'random') { this.autoRevealRandom({ respectForcedPhase: false }); }
       else { s.forcedPhase = 'reveal'; phaseChanged = true; }
     }
     if (s.pointsRemaining <= 0) this._loss();

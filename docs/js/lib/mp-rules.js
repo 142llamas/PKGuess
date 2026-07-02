@@ -1,8 +1,11 @@
 /**
  * @file        docs/js/lib/mp-rules.js
- * @version     1.0.0
+ * @version     1.3.0
  * @updated     2026-06-26
  * @changelog
+ *   1.3.0 — #4: buildEngine() accepts clueMode/catDiversity (backward-compatible) so online can support By-category + real diversity. Extracted computeAutoDeducedIds — evolution auto-deduction is now ONE shared implementation used by both hot-seat and online, instead of hot-seat-only duplicated logic.
+ *   1.2.0 — Exported makeRng (Cycling Road reuses it instead of duplicating). Added buildRevealSequence: deterministic, points-free clue ordering for Cycling Road (#1a) — reuses the engine’s own weighted-random algorithm rather than a second implementation, with a local repeat cap for "Reveal One Example Moveset" (which has no real exhaustion rule in the engine; every points-based mode masks that via cost, which doesn’t exist here).
+ *   1.1.0 — poolFor delegates to engine.js matchesPool (#13, one source of truth).
  *   1.0.0 — Pure, DOM-free, Firebase-free multiplayer rules, ported from the
  *           hot-seat controller so online & hot-seat share ONE source of truth
  *           (SPEC §5/§6). The online controller keeps only *shared* state in
@@ -17,7 +20,7 @@
  *   advanceAfterWin, applyReveals (helpers the controller needs).
  */
 
-import { PokeGuessRound, normalizeName } from './engine.js';
+import { PokeGuessRound, normalizeName, matchesPool } from './engine.js';
 
 // ---- deterministic seeds ----------------------------------------------------
 /** Stable uint32 from a room seed + round (+ optional salt e.g. reveal index). */
@@ -29,7 +32,7 @@ export function seedFor(roomSeed, roundNum, salt = 0) {
   return h >>> 0;
 }
 
-function makeRng(seed) {
+export function makeRng(seed) {
   let a = seed >>> 0;
   return function () {
     a |= 0; a = (a + 0x6D2B79F5) | 0;
@@ -39,26 +42,21 @@ function makeRng(seed) {
   };
 }
 
-const poolFor = (pokedex, poolFilter) => (pokedex || []).filter((p) => {
-  const n = parseInt(p.num, 10);
-  if (poolFilter === 'gen1') return n >= 1 && n <= 151;
-  if (poolFilter === 'gen2') return n >= 152 && n <= 251;
-  return n >= 1 && n <= 251;
-});
+const poolFor = (pokedex, poolFilter) => (pokedex || []).filter((p) => matchesPool(p.num, poolFilter));
 
 /**
  * Build the round for a given seed — the SAME mystery + engine for every client.
  * Mirrors the hot-seat start() (custom difficulty, no locks, no pre-reveals).
  * @returns {{ round: PokeGuessRound, mystery: object }}
  */
-export function buildEngine({ data, movelist, seed, poolFilter = 'both', poolStart = 75 }) {
+export function buildEngine({ data, movelist, seed, poolFilter = 'both', poolStart = 75, clueMode = 'choose', catDiversity = 'free' }) {
   const pool = poolFor(data.pokedex, poolFilter);
   if (!pool.length) throw new Error('no Pokémon in pool for ' + poolFilter);
   const rng = makeRng(seed >>> 0);
   const mystery = pool[Math.floor(rng() * pool.length)];
   const round = new PokeGuessRound({ genData: data, movelist: movelist || {}, rng });
   round.start({
-    difficultyId: 'custom', poolFilter, mystery,
+    difficultyId: 'custom', poolFilter, mystery, clueMode, catDiversity,
     custom: { points: poolStart, guessCost: 0, startClueMode: 'none' },
   });
   return { round, mystery };
@@ -69,6 +67,90 @@ export function buildEngine({ data, movelist, seed, poolFilter = 'both', poolSta
 export function applyReveals(round, revealedClueIds) {
   for (const id of (revealedClueIds || [])) round.buyClue(id, { auto: true });
   return round;
+}
+
+/**
+ * Evolution auto-deduction (#4 parity): given a round's CURRENT revealed
+ * clues, which evolution-cluster ids (familySize/evoStage/canEvolve/
+ * evolvesFrom) are now logically implied? Applies each one to `round` (via
+ * buyClue(id,{auto:true})) as it finds it — both hot-seat and online need the
+ * round's own state updated, not just a list — and returns the ids applied,
+ * in the order they became deducible, so the caller can persist them (e.g.
+ * append to Firebase's revealedClueIds). Centralizing this so the deduction
+ * rule can't drift between hot-seat and online; `excludedIds` (hot-seat's
+ * per-clue exclusion panel) is honored the same way in both.
+ * @returns {number[]} ids that were applied
+ */
+export function computeAutoDeducedIds(round, excludedIds) {
+  const EVO_FIELDS = [
+    { id: 8 }, { id: 9 }, { id: 10 }, { id: 11 },
+  ];
+  const excluded = excludedIds || new Set();
+  const out = [];
+  // Re-check after each simulated reveal — one deduction can unlock another
+  // (e.g. stage implies evolvesFrom, which combined with family size implies
+  // nothing further here, but the loop stays generic/order-independent).
+  for (let guard = 0; guard < 12; guard++) {
+    let did = false;
+    const rv = round.revealedClues;
+    for (const { id } of EVO_FIELDS) {
+      if (id in rv || excluded.has(id) || out.includes(id)) continue;
+      const clue = round.clue(id); if (!clue) continue;
+      const fam = rv[8], stage = rv[9], canEvo = rv[10], evoFrom = rv[11];
+      let deducible = false;
+      if (id === 10 && fam != null && stage != null) deducible = true;
+      else if (id === 11 && stage != null) deducible = (String(stage).includes('1st') === false && String(stage) !== 'standalone');
+      else if ((id === 8 || id === 9) && (evoFrom != null || canEvo != null)) deducible = true;
+      if (!deducible) continue;
+      const res = round.buyClue(id, { auto: true }); // apply to THIS round so later iterations see it
+      if (res.ok) { out.push(id); did = true; }
+    }
+    if (!did) break;
+  }
+  return out;
+}
+
+/**
+ * Cycling Road (#1a): with no point-buying, something else has to pick which
+ * clues appear and in what order. Reuses the SAME weighted-random algorithm
+ * every other "Random" clue mode already uses (cheap/easy clues first,
+ * category-diversity-aware) rather than inventing a second one — the only
+ * difference is an effectively-infinite point budget, so the sequence runs
+ * until every revealable clue for this Pokémon has been shown (respecting
+ * multi-use caps and contextual dependencies) instead of stopping when points
+ * run out. Fully deterministic from `seed` — every client (and a late joiner)
+ * rebuilds the IDENTICAL sequence with no data sent over the wire.
+ * @returns {{id:number, value:string}[]}
+ */
+export function buildRevealSequence({ data, movelist, mystery, seed }) {
+  const rng = makeRng((seed >>> 0) || 0x9e3779b9);
+  const round = new PokeGuessRound({ genData: data, movelist: movelist || {}, rng });
+  round.start({
+    difficultyId: 'custom', mystery, clueMode: 'random', catDiversity: 'diff',
+    custom: { points: 999999, guessCost: 0, startClueMode: 'none' },
+  });
+  const seq = [];
+  // "Reveal One Example Moveset" has no real exhaustion rule in the engine —
+  // every OTHER mode self-limits it via point cost, which doesn't exist here,
+  // so left unchecked it would dominate the whole sequence (confirmed: 161 of
+  // 200 draws in testing). Capping repeats HERE — not in the shared engine —
+  // keeps every points-based mode's behavior completely unchanged.
+  const repeatCounts = {};
+  const MAX_REPEATS_PER_CLUE = 3;
+  const SAFETY_CAP = 200;
+  let consecutiveRejects = 0;
+  for (let i = 0; i < SAFETY_CAP; i++) {
+    const res = round.autoRevealRandom();
+    if (!res.ok) break;
+    repeatCounts[res.id] = (repeatCounts[res.id] || 0) + 1;
+    if (repeatCounts[res.id] > MAX_REPEATS_PER_CLUE) {
+      if (++consecutiveRejects >= 8) break; // nothing new left to offer — stop spinning
+      continue;
+    }
+    consecutiveRejects = 0;
+    seq.push({ id: res.id, value: String(res.value) });
+  }
+  return seq;
 }
 
 // ---- turn-by-turn rules (pure) ----------------------------------------------

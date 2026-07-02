@@ -1,8 +1,10 @@
 /**
  * @file        js/lib/draft-adapter.js
- * @version     1.0.0
+ * @version     1.2.0
  * @updated     2026-06-24
  * @changelog
+ *   1.2.0 — re-export resolveThroneCascade + TIER_RANK (#14a).
+ *   1.1.0 — re-export autoDraftScaled (#7).
  *   1.0.0 — Thin re-export shim. The vetted draft.js and sim.js live in
  *           docs/js/ (not in lib/) because they were spec-locked as provided
  *           files. This adapter lets mode controllers import them cleanly
@@ -12,6 +14,9 @@
 export {
   DraftSession,
   autoDraft,
+  autoDraftScaled,
+  resolveThroneCascade,
+  TIER_RANK,
   buildSpeciesList,
   buildLearnsetMap,
   normalizeSpecies,
