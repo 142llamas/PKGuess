@@ -1,8 +1,9 @@
 /**
  * @file        docs/js/main.js
- * @version     1.3.0
+ * @version     1.4.0
  * @updated     2026-06-26
  * @changelog
+ *   1.4.0 — Replaced the one-shot first-load name toast with a persistent header profile pill (lib/identity-ui.js) so the PIN-claim/re-link flow is always reachable, not just on first visit (#16).
  *   1.3.0 — Draft/Daily cards show Draft + Elite4/Results buttons; route an optional view segment (#6/#7).
  *   1.2.0 — Pass gen + modeId into controllers so modes can show the current
  *           generation and offer an in-mode Gen 1/2 toggle (re-routes the hash).
@@ -28,35 +29,28 @@ const APP_VERSION = '1.0.0';
 // Kick off anonymous auth in the background — never blocks the UI.
 // If it fails (offline), the app still works; scores just won't submit.
 let _identityReady = false;
+let _identity = null;
 import('./lib/identity.js')
   .then(({ getIdentity }) => getIdentity())
   .then((id) => {
     _identityReady = true;
-    // First-time user: show a name prompt after the menu renders
-    if (!id.name) showNamePrompt(id);
+    _identity = id;
+    refreshProfilePill();
+    // First-time user: open the real identity panel (name + optional PIN),
+    // not a one-shot toast — #16, so the PIN option is actually discoverable.
+    if (!id.name) {
+      import('./lib/identity-ui.js').then(({ openIdentityPanel }) => openIdentityPanel(id, refreshProfilePill));
+    }
   })
   .catch(() => { /* offline or blocked — silent */ });
 
-function showNamePrompt(id) {
-  // Small non-blocking toast at the bottom of the screen
-  const existing = document.getElementById('name-prompt-toast');
-  if (existing) return;
-  const inp = el('input', { type: 'text', placeholder: 'Enter your display name', maxlength: '16',
-    class: 'mp-name-input', style: { flex: '1', minWidth: '0' } });
-  const toast = el('div', { id: 'name-prompt-toast', class: 'name-prompt-toast' },
-    el('span', { style: { fontSize: '12px', color: 'var(--text-secondary)' } }, '\uD83C\uDFAE Set your display name for the leaderboard:'),
-    el('div', { style: { display: 'flex', gap: '8px', marginTop: '6px' } },
-      inp,
-      el('button', { class: 'btn-primary', style: { padding: '8px 14px', fontSize: '12px' },
-        onClick: async () => {
-          const n = inp.value.trim();
-          if (!n) return;
-          try { await id.setName(n); toast.remove(); } catch { /* ignore */ }
-        },
-      }, 'Save'),
-      el('button', { class: 'btn-secondary', style: { padding: '8px 10px', fontSize: '12px' },
-        onClick: () => toast.remove() }, 'Skip')));
-  document.body.appendChild(toast);
+// Renders/refreshes the small "👤 Name" pill in the header. Always available
+// (unlike the old first-load-only toast) so a player can set, change, or
+// PIN-protect their name at any time — not just on their very first visit.
+function refreshProfilePill() {
+  const slot = document.getElementById('profile-pill-slot');
+  if (!slot || !_identity) return;
+  import('./lib/identity-ui.js').then(({ renderProfilePill }) => renderProfilePill(slot, _identity));
 }
 
 // Minimal config the shell can run on before data/config.json exists (Phase 2).
@@ -146,6 +140,7 @@ function renderMenu() {
 
   screenShell(
     el('header', { class: 'shell-header' },
+      el('div', { class: 'profile-pill-slot', id: 'profile-pill-slot' }),
       el('h1', { class: 'shell-title' }, CONFIG.title || 'PokéGuess'),
       el('p', { class: 'shell-tagline' }, 'Mystery Pokémon · Gen 1 & 2 · Draft Battle'),
     ),
@@ -159,6 +154,7 @@ function renderMenu() {
     ),
     el('footer', { class: 'shell-footer' }, `Build skeleton v${APP_VERSION}`),
   );
+  refreshProfilePill();
 }
 
 function modeCard(mode) {

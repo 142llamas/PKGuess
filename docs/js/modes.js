@@ -1,8 +1,10 @@
 /**
  * @file        docs/js/modes.js
- * @version     1.6.0
+ * @version     1.8.0
  * @updated     2026-06-26
  * @changelog
+ *   1.8.0 — Cycling Road menu blurb updated for the v2 mechanic (predetermined synced clue timing, not "first to target").
+ *   1.7.0 — Race renamed to Cycling Road (#1a).
  *   1.5.0 — Safari card label restored to "Safari Zone" (#5).
  *   1.6.0 — Race mode shipped (parallel online race; first to N solved).
  *   1.4.0 — Multiplayer is its own group: Hotseat (renamed) + Online + Race
@@ -58,8 +60,8 @@ export const MODES = [
     load: () => import('./modes/online.js'),
   },
   {
-    id: 'race', label: 'Race', icon: '🏁', group: 'Multiplayer',
-    blurb: 'Everyone races their own board through the same Pokémon — first to the target wins.',
+    id: 'race', label: 'Cycling Road', icon: '🏁', group: 'Multiplayer',
+    blurb: 'Race the same Pokémon in the same clue order — clues reveal automatically every few seconds. Fastest total time wins.',
     enabled: true, gens: [1, 2],
     load: () => import('./modes/race.js'),
   },

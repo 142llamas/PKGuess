@@ -1,8 +1,10 @@
 /**
  * @file        docs/js/draft.js   (PokeGuess — Draft Battle engine)
- * @version     0.5.0
+ * @version     0.7.0
  * @updated     2026-06-25
  * @changelog
+ *   0.7.0 — #14a: added resolveThroneCascade (pure decision logic) + TIER_RANK. A single Pokémon/session can only hold one Elite-4 spot: claiming a higher throne while already holding a lower one vacates the lower one (bumping the just-defeated holder down into it if they were human, or leaving it for a fresh NPC if not); trying to claim a lower throne while already holding a higher one keeps the higher one instead.
+ *   0.6.0 — #7: added autoDraftScaled — rejection-samples autoDraft with a deterministic incrementing sub-seed until the resulting base-stat total lands in a target band (e.g. 525–550 for Bruno), preserving the "every stat is a real Pokémon’s real stat" design rather than mutating totals directly. Falls back to the closest-fit result if a band is unreachable within maxAttempts.
  *   0.5.0 — TWO PICKS PER CARD (authorised engine change; supersedes the
  *           one-aspect-per-spin model). Picks now RECORD on the current card
  *           WITHOUT advancing; the deck advances only on commitCard(). So both
@@ -303,6 +305,55 @@ export function autoDraft({ species, gen = 2, seed = (Math.random() * 2 ** 31) |
   return s.result();
 }
 
+/**
+ * #7 — an NPC Elite-4 opponent scaled to a target base-stat-total band (e.g.
+ * Koga: 475–500). autoDraft's stat "cards" are each a REAL Pok\u00e9mon's real
+ * stat, so a target total can't just be assigned directly without either
+ * breaking that "every stat is real" property or reimplementing the card
+ * picker's internals. Rejection sampling preserves it exactly: keep
+ * autoDraft-ing with a deterministic, incrementing sub-seed until the result
+ * lands in-band. Empirically fast (sampled distribution has a natural median
+ * around 410, so even the rarest target band above 575 converges within a
+ * few hundred attempts, and each attempt is well under a millisecond) — and
+ * this only ever runs once per (tier, period), not per render. Falls back to
+ * the closest-to-band result seen if maxAttempts is somehow exhausted, so a
+ * pathological pool never causes an infinite loop or a thrown error.
+ */
+export function autoDraftScaled({ species, gen = 2, seed, playerName, minTotal, maxTotal, maxAttempts = 800 }) {
+  let best = null, bestDist = Infinity;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const attemptSeed = subSeed(seed >>> 0, attempt);
+    const result = autoDraft({ species, gen, seed: attemptSeed, playerName });
+    const total = Object.values(result.baseStats).reduce((a, b) => a + b, 0);
+    if (total >= minTotal && total <= maxTotal) return result;
+    const dist = total < minTotal ? minTotal - total : total - maxTotal;
+    if (dist < bestDist) { bestDist = dist; best = result; }
+  }
+  return best;
+}
+
+/**
+ * #14a — pure decision logic for "a single Pok\u00e9mon/session can only hold ONE
+ * Elite-4 spot at a time." Given that a player already holds `oldTierKey` and
+ * has just won a battle to claim `newTierKey`, decide what happens — no I/O,
+ * fully testable in isolation from claimThrone's Firebase reads/writes.
+ * @returns {{action:'claimNewVacateOld', vacatedTier:string, bump:object|null} | {action:'keepOld', keptTier:string}}
+ */
+export function resolveThroneCascade({ newTierKey, oldTierKey, tierRank, defeatedUid, defeatedMon, champLabel }) {
+  const newRank = tierRank[newTierKey] || 0;
+  const oldRank = tierRank[oldTierKey] || 0;
+  if (newRank > oldRank) {
+    return {
+      action: 'claimNewVacateOld',
+      vacatedTier: oldTierKey,
+      bump: (defeatedUid && defeatedMon) ? { holderUid: defeatedUid, mon: defeatedMon, holderName: champLabel || 'A challenger' } : null,
+    };
+  }
+  return { action: 'keepOld', keptTier: oldTierKey };
+}
+
+export const TIER_RANK = { day: 1, week: 2, month: 3, year: 4, all: 5 };
+
 // ===========================================================================
 //  DATA ADAPTERS  (unchanged from 0.4.1)
 // ===========================================================================
@@ -340,6 +391,21 @@ export function canonicalizeMove(raw) {
 }
 
 /** Build { speciesNameLower: [valid move display names] } from movelist-genN.json */
+// #6j — removed from the draft pool: mostly switch/trapping/opponent-move-set
+// effects that don't make sense in a switchless 1v1 sim (Whirlwind, Roar,
+// Baton Pass, Disable, Mean Look, Mind Reader, Mist, Spider Web), moves with
+// dynamically-changing movesets the sim can't model (Metronome, Mimic,
+// Sketch, Transform, Mirror Move), and a handful of others called out
+// explicitly. Never even offered during a draft, regardless of a species'
+// real movepool.
+const BANNED_DRAFT_MOVES = new Set([
+  'attract', 'selfdestruct', 'explosion', 'batonpass', 'mirrormove', 'skullbash',
+  'rage', 'teleport', 'perishsong', 'conversion', 'disable', 'encore',
+  'falseswipe', 'foresight', 'meanlook', 'metronome', 'mimic', 'mindreader',
+  'mist', 'roar', 'whirlwind', 'sketch', 'skyattack', 'snore', 'spite',
+  'spikes', 'spiderweb', 'sweetscent', 'thief', 'transform',
+].map(moveId));
+
 export function buildLearnsetMap(movelist, moveStats) {
   const have = new Set(Object.keys(moveStats || {}));
   const map = {};
@@ -351,7 +417,7 @@ export function buildLearnsetMap(movelist, moveStats) {
       const nm = canonicalizeMove(raw);
       if (!nm || isHiddenPower(nm)) continue;
       const id = moveId(nm);
-      if (!have.has(id) || seenIds.has(id)) continue;     // sim-valid + dedupe
+      if (!have.has(id) || seenIds.has(id) || BANNED_DRAFT_MOVES.has(id)) continue;     // sim-valid + dedupe + not banned
       seenIds.add(id); out.push(nm);
     }
     map[name.toLowerCase()] = out;
