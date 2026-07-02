@@ -1,6 +1,6 @@
 /**
  * @file        docs/js/draft.js   (PokeGuess — Draft Battle engine)
- * @version     0.7.0
+ * @version     0.7.0 
  * @updated     2026-06-25
  * @changelog
  *   0.7.0 — #14a: added resolveThroneCascade (pure decision logic) + TIER_RANK. A single Pokémon/session can only hold one Elite-4 spot: claiming a higher throne while already holding a lower one vacates the lower one (bumping the just-defeated holder down into it if they were human, or leaving it for a fresh NPC if not); trying to claim a lower throne while already holding a higher one keeps the higher one instead.
