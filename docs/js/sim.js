@@ -7,7 +7,7 @@
  * UI can replay one battle step-by-step while the real outcome is a win-% taken
  * over many silent simulations.
  *
- * @version 2.1.0
+ * @version 2.1.0 
  * @changelog
  *   2.1.0 — Fixed a significant bug found during verification: OHKO moves
  *           (Guillotine/Horn Drill/Fissure) were completely non-functional.
