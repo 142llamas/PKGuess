@@ -1,8 +1,13 @@
 /**
  * @file        js/modes/draftbattle.js
- * @version     1.5.0
+ * @version     1.10.0
  * @updated     2026-06-26
  * @changelog
+ *   1.10.0 — #9: daily results now has a "See Yesterday’s Results" button (Central-Time date math reused from today’s), with a "Today’s Results" button to return; showDailyResults()/renderDailyResults() generalized to take an optional historical date instead of always reading ctx.dateStr.
+ *   1.9.0 — #14a: claimThrone() now enforces the one-spot-per-Pokémon rule via draft.js’s resolveThroneCascade, with a distinct on-screen message for each outcome (claimed + vacated, or kept the existing higher spot). throneCard() now threads the defeated holder’s full mon/uid through to the battle result so the cascade has what it needs.
+ *   1.8.0 — #7: each Elite-4 tier’s NPC now scales to a target base-stat-total band (Will 425–450, Koga 475–500, Bruno 525–550, Lance 575–600) instead of drafting with the same natural stat distribution a player gets. The All-Time Champion tier is intentionally left unscaled (the spec didn’t define a band for it).
+ *   1.7.0 — Battle-log playback now narrates every event sim.js 2.0.0 introduced (charge, recharge, multi-hit, curse, belly drum, rest, pain split, leech seed, crash, stat boosts, confusion ending) — these were previously silently dropped by the renderer's default:continue, so a stat-changing or special move would fire correctly but show nothing happening on screen.
+ *   1.6.0 — Elite-4 labels (1–Will…, Stage x), one-throne history "name – types – stats", removed "battle the leader", default name "Player", locked-stage hardening (#5,#8,#14).
  *   1.5.0 — Elite-4 flow: ordered unlock (#2), "Challenge the Elite 4" (#1), claim "{name}’s spot" (#3), daily already-done gate (#6a), jump-to Elite-4/Results views (#7).
  *   1.4.0 — Draft batch (#1–10): thrones renamed to the Elite 4 (Day–Will,
  *           Week–Koga, Month–Bruno, Year–Lance, All-Time–Champion) with ①②③④/👑
@@ -39,7 +44,7 @@
 
 import { el, clear, statSpreadEl } from '../lib/dom.js';
 import {
-  DraftSession, autoDraft, buildSpeciesList, buildLearnsetMap, runMatch, toRealStats,
+  DraftSession, autoDraft, autoDraftScaled, resolveThroneCascade, TIER_RANK, buildSpeciesList, buildLearnsetMap, runMatch, toRealStats,
 } from '../lib/draft-adapter.js';
 import {
   centralDateStr, centralPeriodKey, seedFromDate, seedFromString, buildSummaryText,
@@ -47,14 +52,21 @@ import {
 } from '../lib/share.js';
 
 const STAT_LABELS = { hp: 'HP', atk: 'Atk', def: 'Def', spc: 'Spc', spa: 'SpA', spd: 'SpD', spe: 'Spe' };
-const STATUS_LABELS = { par: 'paralyzed', brn: 'burned', psn: 'poisoned', tox: 'badly poisoned', slp: 'asleep', frz: 'frozen' };
+const STATUS_LABELS = { par: 'paralyzed', brn: 'burned', psn: 'poisoned', tox: 'badly poisoned', slp: 'asleep', frz: 'frozen', leechseed: 'Leech Seed', curse: 'the curse' };
 const TIERS = [
-  { key: 'day',   cadence: 'Day',      npc: 'Will',     icon: '\u2460' }, // ①
-  { key: 'week',  cadence: 'Week',     npc: 'Koga',     icon: '\u2461' }, // ②
-  { key: 'month', cadence: 'Month',    npc: 'Bruno',    icon: '\u2462' }, // ③
-  { key: 'year',  cadence: 'Year',     npc: 'Lance',    icon: '\u2463' }, // ④
-  { key: 'all',   cadence: 'All Time', npc: 'Champion', icon: '\uD83D\uDC51' }, // 👑
-].map((t) => ({ ...t, label: `${t.cadence} \u2013 ${t.npc}` }));
+  { key: 'day',   cadence: 'Day',      npc: 'Will',     icon: '\u2460', stage: 1, statBand: [425, 450] }, // ①
+  { key: 'week',  cadence: 'Week',     npc: 'Koga',     icon: '\u2461', stage: 2, statBand: [475, 500] }, // ②
+  { key: 'month', cadence: 'Month',    npc: 'Bruno',    icon: '\u2462', stage: 3, statBand: [525, 550] }, // ③
+  { key: 'year',  cadence: 'Year',     npc: 'Lance',    icon: '\u2463', stage: 4, statBand: [575, 600] }, // ④
+  { key: 'all',   cadence: 'All Time', npc: 'Champion', icon: '\uD83D\uDC51', stage: null, statBand: null }, // 👑 — no band defined; NPC fallback stays a natural, unscaled auto-draft
+].map((t) => ({
+  ...t,
+  // card on the Elite-4 grid: "1 – Will" … "4 – Lance", "All Time – Champion"
+  cardLabel: t.stage ? `${t.stage} \u2013 ${t.npc}` : 'All Time \u2013 Champion',
+  // battle / history screen: "Elite 4 – Stage 1" … or "Greatest Pokémon of All Time"
+  challengeLabel: t.stage ? `Elite 4 \u2013 Stage ${t.stage}` : 'Greatest Pok\u00e9mon of All Time',
+  label: `${t.cadence} \u2013 ${t.npc}`,   // legacy fallback
+}));
 const BATTLE_N = 501;          // SPEC-locked sample count
 const lazyIdentity = () => import('../lib/identity.js').then((m) => m.getIdentity());
 const lazyFirebase = () => import('../lib/firebase.js').then((m) => m.getFirebase());
@@ -423,8 +435,12 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
     if (stored && stored.period === period && stored.mon) {
       return { tier, period, mon: stored.mon, holderName: stored.holderName || 'A challenger', holderUid: stored.holderUid || null, npc: false };
     }
-    // Vacant (or rolled over) → the Elite-4 member holds it with a deterministic build.
-    const champ = autoDraft({ species: ctx.species, gen: 2, seed: seedFromString(`throne:${tier.key}:${period}`), playerName: tier.npc });
+    // Vacant (or rolled over) → the Elite-4 member holds it with a deterministic build,
+    // scaled to that stage's target base-stat-total band (#7) when one is defined.
+    const seed = seedFromString(`throne:${tier.key}:${period}`);
+    const champ = tier.statBand
+      ? autoDraftScaled({ species: ctx.species, gen: 2, seed, playerName: tier.npc, minTotal: tier.statBand[0], maxTotal: tier.statBand[1] })
+      : autoDraft({ species: ctx.species, gen: 2, seed, playerName: tier.npc });
     return { tier, period, mon: storedFromResult(champ), holderName: tier.npc, holderUid: null, npc: true };
   }
 
@@ -454,18 +470,18 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
   }
 
   function throneCard(t, opts = {}) {
-    const monName = t.mon.species ? `${t.mon.species}-build` : t.mon.name;
+    const monName = t.mon.species || t.mon.name;
     const { unlocked = true, prevName = null, haveBuild = true } = opts;
     const canChallenge = unlocked && haveBuild;
     const challengeBtn = canChallenge
       ? el('button', { class: 'btn-primary', style: { padding: '7px 12px', fontSize: '12px' },
-          onClick: () => startBattle(specFromResult(lastResult), specFromStored(t.mon),
-            { mode: 'throne', tier: t.tier, champLabel: t.holderName, npc: t.npc, champMon: monName }) },
+          onClick: () => { if (!canChallenge) return; startBattle(specFromResult(lastResult), specFromStored(t.mon),
+            { mode: 'throne', tier: t.tier, champLabel: t.holderName, npc: t.npc, champMon: monName, defeatedMon: t.mon, defeatedUid: t.holderUid }); } },
           'Challenge')
-      : el('button', { class: 'btn-primary', disabled: true, style: { padding: '7px 12px', fontSize: '12px', opacity: 0.4 } },
+      : el('button', { class: 'btn-primary throne-locked-btn', disabled: true, style: { padding: '7px 12px', fontSize: '12px', opacity: 0.4, cursor: 'not-allowed', pointerEvents: 'none' } },
           unlocked ? 'Challenge' : `\uD83D\uDD12 Beat ${prevName} first`);
     return el('div', { class: 'throne-card' + (unlocked ? '' : ' throne-locked') },
-      el('div', { class: 'throne-tier' }, `${t.tier.icon} ${t.tier.label}`),
+      el('div', { class: 'throne-tier' }, `${t.tier.icon} ${t.tier.cardLabel}`),
       el('div', { class: 'throne-holder' }, (t.npc ? '' : '\uD83D\uDC51 ') + t.holderName),
       el('div', { class: 'throne-mon' }, ...(t.mon.types || []).map((ty) => el('span', { class: `type-pill type-${ty.toLowerCase()}`, style: { fontSize: '9px', marginRight: '3px' } }, ty))),
       el('div', { class: 'throne-mon', style: { color: 'var(--text-dim)' } }, monName),
@@ -477,22 +493,30 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
 
   // ===== CHAMPION HISTORY (#7) ==============================================
   async function showThroneHistory(tier) {
-    clear(root).append(spinner(`${tier.label} \u2014 champion history\u2026`));
+    clear(root).append(spinner(`${tier.challengeLabel} \u2014 champion history\u2026`));
     let hist = null;
     try { if (!firebase) firebase = await lazyFirebase(); hist = await firebase.get(`/draft/thronehistory/${tier.key}`); }
     catch { hist = null; }
     const entries = hist ? Object.values(hist).sort((a, b) => (b.at || 0) - (a.at || 0)) : [];
     const fmt = (ms) => { try { return new Date(ms).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }); } catch { return ''; } };
+    // #14f — "Gastly – Ice/Grass – 35/55/65/35/100/125" (older entries stored a bare name string)
+    const monLabel = (mon) => {
+      if (!mon) return '';
+      if (typeof mon === 'string') return mon;
+      const types = (mon.types || []).filter(Boolean).join('/');
+      const stats = Array.isArray(mon.baseStats) ? mon.baseStats.join('/') : '';
+      return [mon.name, types, stats].filter(Boolean).join(' \u2013 ');
+    };
     const rows = entries.length
       ? entries.map((e) => el('tr', {},
           el('td', { style: { color: 'var(--text-dim)', fontSize: '11px', whiteSpace: 'nowrap' } }, fmt(e.at)),
-          el('td', { style: { fontWeight: 700 } }, e.name || 'Anonymous'),
-          el('td', { style: { color: 'var(--text-dim)', fontSize: '11px' } }, e.mon || '')))
+          el('td', { style: { fontWeight: 700 } }, e.name || 'Player'),
+          el('td', { style: { color: 'var(--text-dim)', fontSize: '11px' } }, monLabel(e.mon))))
       : [el('tr', {}, el('td', { colspan: '3', style: { textAlign: 'center', color: 'var(--text-dim)' } }, 'No champions yet \u2014 be the first.'))];
     clear(root).append(
       el('div', { class: 'summary-container' },
         el('div', { class: 'summary-card' },
-          el('div', { class: 'summary-result', style: { textAlign: 'center' } }, `${tier.icon} ${tier.label} \u2014 Champions`),
+          el('div', { class: 'summary-result', style: { textAlign: 'center' } }, `${tier.icon} ${tier.challengeLabel} \u2014 Champions`),
           el('div', { class: 'lb-board' },
             el('table', { class: 'lb-table' },
               el('thead', {}, el('tr', {}, el('th', {}, 'Date'), el('th', {}, 'Player'), el('th', {}, 'Pok\u00e9mon'))),
@@ -501,20 +525,53 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
             el('button', { class: 'btn-secondary', onClick: showThrones }, '\u2190 Elite 4')))));
   }
 
-  async function claimThrone(tier) {
+  async function claimThrone(tier, opts = {}) {
     let id = identity, fb = firebase;
     try { if (!id) id = identity = await lazyIdentity(); if (!fb) fb = firebase = await lazyFirebase(); } catch { /* offline */ }
     if (!id || !fb) return { ok: false, msg: 'Offline \u2014 throne not saved.' };
     const rec = {
       mon: storedFromResult(lastResult),
       holderUid: id.uid,
-      holderName: (id.name || 'Anonymous').slice(0, 16),
+      holderName: (id.name || 'Player').slice(0, 16),
       takenAt: Date.now(),
       period: centralPeriodKey(tier.key),
     };
     try {
+      // #14a — a single Pok\u00e9mon/session can only hold ONE Elite-4 spot at a
+      // time. The DECISION (who ends up where) is a pure function so it's
+      // fully unit-testable; this just performs the resulting reads/writes.
+      let existingThrones = null;
+      try { existingThrones = await fb.get('/draft/throne'); } catch { existingThrones = null; }
+      const otherKey = existingThrones
+        ? Object.keys(existingThrones).find((k) => k !== tier.key && existingThrones[k] && existingThrones[k].holderUid === id.uid)
+        : null;
+
+      if (otherKey) {
+        const decision = resolveThroneCascade({
+          newTierKey: tier.key, oldTierKey: otherKey, tierRank: TIER_RANK,
+          defeatedUid: opts.defeatedUid, defeatedMon: opts.defeatedMon, champLabel: opts.champLabel,
+        });
+        if (decision.action === 'claimNewVacateOld') {
+          await fb.set(`/draft/throne/${tier.key}`, rec);
+          if (decision.bump) {
+            await fb.set(`/draft/throne/${decision.vacatedTier}`, {
+              mon: decision.bump.mon, holderUid: decision.bump.holderUid,
+              holderName: decision.bump.holderName.slice(0, 16),
+              takenAt: Date.now(), period: centralPeriodKey(decision.vacatedTier),
+            });
+          } else {
+            await fb.set(`/draft/throne/${decision.vacatedTier}`, null);
+          }
+          try { await fb.push(`/draft/thronehistory/${tier.key}`, { name: rec.holderName, mon: { name: lastResult ? lastResult.name : (rec.mon && rec.mon.name) || '', types: (rec.mon && rec.mon.types) || [], baseStats: (rec.mon && rec.mon.baseStats) || [] }, at: rec.takenAt, period: rec.period }); } catch { /* history is best-effort */ }
+          return { ok: true, vacatedTier: decision.vacatedTier, bumpedName: decision.bump ? decision.bump.holderName : null };
+        }
+        // keepOld — player already holds a HIGHER throne; this one reverts to vacant.
+        await fb.set(`/draft/throne/${tier.key}`, null);
+        return { ok: true, keptHigherTier: decision.keptTier };
+      }
+
       await fb.set(`/draft/throne/${tier.key}`, rec);
-      try { await fb.push(`/draft/thronehistory/${tier.key}`, { name: rec.holderName, mon: lastResult ? lastResult.name : (rec.mon && rec.mon.name) || '', at: rec.takenAt, period: rec.period }); } catch { /* history is best-effort */ }
+      try { await fb.push(`/draft/thronehistory/${tier.key}`, { name: rec.holderName, mon: { name: lastResult ? lastResult.name : (rec.mon && rec.mon.name) || '', types: (rec.mon && rec.mon.types) || [], baseStats: (rec.mon && rec.mon.baseStats) || [] }, at: rec.takenAt, period: rec.period }); } catch { /* history is best-effort */ }
       return { ok: true };
     } catch (e) { return { ok: false, msg: 'Save failed: ' + (e.message || e) }; }
   }
@@ -556,6 +613,7 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
         case 'drain': heal(e.target, e.amount); line = `${e.target} drained ${e.amount} HP.`; break;
         case 'status': line = `${e.target} is ${STATUS_LABELS[e.status] || e.status}!`; break;
         case 'confuse': line = `${e.target} became confused!`; break;
+        case 'confuse-end': line = `${e.target} snapped out of confusion.`; break;
         case 'flinch': line = `${e.target} flinched!`; break;
         case 'fullpara': line = `${e.target} is paralyzed and can\u2019t move!`; break;
         case 'asleep': line = `${e.target} is fast asleep.`; break;
@@ -564,6 +622,23 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
         case 'thaw': line = `${e.target} thawed out!`; break;
         case 'faint': dmg(e.target, Infinity); line = `${e.target} fainted!`; break;
         case 'cap': line = 'Turn limit reached \u2014 highest HP% wins.'; break;
+        case 'charge': line = `${e.source} tucked in its ${e.move === 'Fly' ? 'wings and flew up' : e.move === 'Dig' ? 'body and dug underground' : 'power'} for ${e.move}!`; break;
+        case 'recharge': line = `${e.target} must recharge!`; break;
+        case 'multihit': line = `Hit ${e.hits} time${e.hits === 1 ? '' : 's'}!`; break;
+        case 'curse-cost': dmg(e.target, e.amount); line = `${e.target} cut its own HP to lay a curse! (${e.amount})`; break;
+        case 'curse': line = `${e.target} was cursed!`; break;
+        case 'bellydrum': dmg(e.target, e.amount); line = `${e.target} cut its own HP to maximize its Attack! (${e.amount})`; break;
+        case 'rest': line = `${e.target} went to sleep and became healthy!`; break;
+        case 'painsplit': line = `${e.source} and ${e.target} shared their pain \u2014 HP equalized.`; break;
+        case 'leechseed': line = `${e.target} was seeded!`; break;
+        case 'crash': dmg(e.target, e.amount); line = `${e.target} kept going and crashed! (${e.amount})`; break;
+        case 'fail': line = 'But it failed!'; break;
+        case 'boost': {
+          const label = STAT_LABELS[e.stat] || e.stat;
+          const mag = Math.abs(e.delta) >= 2 ? ' sharply' : '';
+          line = `${e.target}\u2019s ${label}${mag} ${e.delta > 0 ? 'rose' : 'fell'}!`;
+          break;
+        }
         default: continue;
       }
       if (line != null) frames.push({ hpA, hpB, turn, line });
@@ -636,8 +711,17 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
           if (beat) {
             const beatName = opts.npc ? opts.tier.npc : opts.champLabel;
             after.append(el('button', { class: 'btn-primary', onClick: async () => {
-              const r = await claimThrone(opts.tier);
-              if (r.ok) { flash(`\uD83D\uDC51 You took ${beatName}\u2019s spot in the Elite 4!`); showThrones(); }
+              const r = await claimThrone(opts.tier, opts);
+              if (r.ok && r.keptHigherTier) {
+                const keptLabel = TIERS.find((t) => t.key === r.keptHigherTier)?.cardLabel || r.keptHigherTier;
+                flash(`You already hold a higher Elite 4 spot (${keptLabel}) \u2014 this one stays open for the next challenger.`);
+                showThrones();
+              } else if (r.ok && r.vacatedTier) {
+                const vacatedLabel = TIERS.find((t) => t.key === r.vacatedTier)?.cardLabel || r.vacatedTier;
+                const vacateMsg = r.bumpedName ? `${r.bumpedName} was bumped down to the ${vacatedLabel} spot.` : `The ${vacatedLabel} spot is now open for a fresh challenger.`;
+                flash(`\uD83D\uDC51 You took ${beatName}\u2019s spot in the Elite 4! (${vacateMsg})`);
+                showThrones();
+              } else if (r.ok) { flash(`\uD83D\uDC51 You took ${beatName}\u2019s spot in the Elite 4!`); showThrones(); }
               else flash(r.msg || 'Could not claim the spot.');
             } }, `\uD83D\uDC51 Claim ${beatName}\u2019s spot in the Elite 4`));
           }
@@ -655,7 +739,7 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
       el('div', { class: 'summary-container' },
         el('div', { class: 'summary-card' },
           el('div', { class: 'summary-result', style: { textAlign: 'center', marginBottom: '4px', fontSize: '13px' } },
-            opts.mode === 'throne' ? `\u2694\uFE0F ${opts.tier.label} Throne` : '\u2694\uFE0F Battle'),
+            opts.mode === 'throne' ? `\u2694\uFE0F ${opts.tier.challengeLabel}` : '\u2694\uFE0F Battle'),
           stage, verdict,
           el('div', { class: 'battle-log' }, logBox),
           controls)));
@@ -669,7 +753,7 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
       const beatName = opts.npc ? opts.champLabel
         : `${opts.champLabel}\u2019s ${opts.champMon || 'champion'}`;
       const text = buildSummaryText({
-        kind: 'throne', tierLabel: opts.tier.label, claimed: beat, beatName,
+        kind: 'throne', tierLabel: opts.tier.challengeLabel, claimed: beat, beatName,
         monName: lastResult ? lastResult.name : undefined, winPct: pct,
       });
       const ok = await copyToClipboard(text);
@@ -714,14 +798,21 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
     showDailyResults();
   }
 
-  async function showDailyResults() {
+  // #9 — Central-Time "yesterday", reusing the same DST-aware date math as today's.
+  function yesterdayDateStr() {
+    return centralDateStr(new Date(Date.now() - 86400000));
+  }
+
+  async function showDailyResults(dateStrOverride) {
     stopPlay();
-    clear(root).append(spinner('Tallying today\u2019s battles\u2026'));
+    const dateStr = dateStrOverride || ctx.dateStr;
+    const isHistorical = dateStr !== ctx.dateStr;
+    clear(root).append(spinner(isHistorical ? 'Loading yesterday\u2019s results\u2026' : 'Tallying today\u2019s battles\u2026'));
     let entries = {};
     try {
       if (!identity) identity = await lazyIdentity();
       if (!firebase) firebase = await lazyFirebase();
-      entries = (await firebase.get(`/draft/daily/${ctx.dateStr}/entries`)) || {};
+      entries = (await firebase.get(`/draft/daily/${dateStr}/entries`)) || {};
     } catch { entries = {}; }
 
     const myUid = identity && identity.uid;
@@ -729,9 +820,10 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
       .map((uid) => ({ uid, name: entries[uid].name || 'Anonymous', mon: entries[uid].mon }))
       .filter((e) => e.mon && e.mon.baseStats);
 
-    // If we couldn't persist (offline) but have a local build, show it provisionally.
+    // The "unsaved local build" fallback only makes sense for TODAY — a past
+    // day's entries are either saved or simply weren't played, never "pending".
     let provisional = false;
-    if (lastResult && !(myUid && list.some((e) => e.uid === myUid))) {
+    if (!isHistorical && lastResult && !(myUid && list.some((e) => e.uid === myUid))) {
       list.push({ uid: myUid || '__me__', name: (identity && identity.name) || 'You', mon: storedFromResult(lastResult), _me: true });
       provisional = !(myUid && firebase);
     }
@@ -739,7 +831,7 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
     // The Daily Rival — a deterministic house entry so even the first player has
     // something to measure against (and to battle). Same for everyone, all day.
     if (!list.some((e) => e.uid === '__rival__')) {
-      const rival = autoDraft({ species: ctx.species, gen: 2, seed: seedFromString(`dailyrival:${ctx.dateStr}`), playerName: 'Daily Rival' });
+      const rival = autoDraft({ species: ctx.species, gen: 2, seed: seedFromString(`dailyrival:${dateStr}`), playerName: 'Daily Rival' });
       list.push({ uid: '__rival__', name: 'Daily Rival', mon: storedFromResult(rival), _rival: true });
     }
 
@@ -749,7 +841,7 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
       const sum = new Array(n).fill(0), games = new Array(n).fill(0);
       for (let i = 0; i < n; i++) {
         for (let j = i + 1; j < n; j++) {
-          const m = runMatch(specs[i], specs[j], { gen: 2, moves: ctx.movestats, chart: ctx.chart, n: BATTLE_N, seed: seedFromString(`${ctx.dateStr}:${i}:${j}`) });
+          const m = runMatch(specs[i], specs[j], { gen: 2, moves: ctx.movestats, chart: ctx.chart, n: BATTLE_N, seed: seedFromString(`${dateStr}:${i}:${j}`) });
           sum[i] += m.challengerWins / m.n; games[i]++;
           sum[j] += m.championWins / m.n;  games[j]++;
         }
@@ -757,17 +849,17 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
       const ranked = list
         .map((e, i) => ({ ...e, avg: games[i] ? sum[i] / games[i] : 0, spec: specs[i] }))
         .sort((a, b) => b.avg - a.avg);
-      renderDailyResults(ranked, myUid, provisional);
+      renderDailyResults(ranked, myUid, provisional, dateStr, isHistorical);
     }, 30);
   }
 
-  function renderDailyResults(ranked, myUid, provisional) {
+  function renderDailyResults(ranked, myUid, provisional, dateStr, isHistorical) {
     const myIndex = ranked.findIndex((e) => (myUid && e.uid === myUid) || e._me);
     const me = myIndex >= 0 ? ranked[myIndex] : null;
     const hasOpponents = ranked.length >= 2;
 
     const shareText = me ? buildSummaryText({
-      kind: 'daily', dateStr: ctx.dateStr, monName: me.mon.name,
+      kind: 'daily', dateStr, monName: me.mon.name,
       rank: hasOpponents ? myIndex + 1 : undefined,
       total: hasOpponents ? ranked.length : undefined,
       winPct: hasOpponents ? me.avg : undefined,
@@ -782,20 +874,19 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
             el('td', { style: { color: 'var(--text-dim)', fontSize: '11px' } }, e.mon.name),
             el('td', { style: { fontWeight: 700 } }, hasOpponents ? `${(e.avg * 100).toFixed(0)}%` : '\u2014'));
         })
-      : [el('tr', {}, el('td', { colspan: '4', style: { textAlign: 'center', color: 'var(--text-dim)' } }, 'No entries yet today.'))];
+      : [el('tr', {}, el('td', { colspan: '4', style: { textAlign: 'center', color: 'var(--text-dim)' } }, isHistorical ? 'No one played that day.' : 'No entries yet today.'))];
 
-    const canBattleLeader = ranked.length >= 2 && me;
     const myLine = me
       ? (hasOpponents
           ? `You ranked #${myIndex + 1} of ${ranked.length} \u2014 ${(me.avg * 100).toFixed(1)}% average win rate.`
           : 'You\u2019re the first to play today! Win rates appear once others enter \u2014 check back with Refresh.')
-      : null;
+      : (isHistorical ? 'You didn\u2019t play that day.' : null);
 
     clear(root).append(
       el('div', { class: 'summary-container' },
         el('div', { class: 'summary-card' },
-          el('div', { class: 'summary-result', style: { textAlign: 'center' } }, '\uD83C\uDFAE Daily Results'),
-          el('div', { class: 'battle-vs', style: { marginBottom: '8px' } }, ctx.dateStr + ' \u00b7 Central Time'),
+          el('div', { class: 'summary-result', style: { textAlign: 'center' } }, isHistorical ? '\uD83D\uDCC5 Yesterday\u2019s Results' : '\uD83C\uDFAE Daily Results'),
+          el('div', { class: 'battle-vs', style: { marginBottom: '8px' } }, dateStr + ' \u00b7 Central Time'),
           provisional ? el('div', { class: 'battle-offline' }, '\u26A0\uFE0F Couldn\u2019t save your entry (offline). Ranking shown locally.') : null,
           myLine ? el('div', { class: 'daily-myline' }, myLine) : null,
           el('div', { class: 'lb-board' },
@@ -804,11 +895,10 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
               el('tbody', {}, ...rows))),
           el('div', { class: 'summary-actions' },
             me ? el('button', { class: 'btn-primary', onClick: async () => { const ok = await copyToClipboard(shareText); showShareSheet(shareText, ok); } }, '\uD83D\uDCE4 Share') : null,
-            canBattleLeader ? el('button', { class: 'btn-secondary', onClick: () => {
-              const leader = ranked[0]._me ? ranked[1] : ranked[0];
-              startBattle(me.spec, leader.spec, { mode: 'daily', champLabel: leader.name });
-            } }, '\u2694\uFE0F Battle the leader') : null,
-            el('button', { class: 'btn-secondary', onClick: showDailyResults }, '\u21BB Refresh'),
+            el('button', { class: 'btn-secondary', onClick: () => showDailyResults(dateStr) }, '\u21BB Refresh'),
+            isHistorical
+              ? el('button', { class: 'btn-secondary', onClick: () => showDailyResults(ctx.dateStr) }, '\u2192 Today\u2019s Results')
+              : el('button', { class: 'btn-secondary', onClick: () => showDailyResults(yesterdayDateStr()) }, '\uD83D\uDCC5 See Yesterday\u2019s Results'),
             el('button', { class: 'btn-secondary', onClick: () => onExit && onExit() }, '\u2190 Main Menu')))));
   }
 

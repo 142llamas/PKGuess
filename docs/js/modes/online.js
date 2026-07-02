@@ -1,8 +1,12 @@
 /**
  * @file        docs/js/modes/online.js
- * @version     1.0.0
+ * @version     1.4.0
  * @updated     2026-06-26
  * @changelog
+ *   1.4.0 — #4 parity with hot-seat: added By-category clue selection, real Category Diversity (Force-Different/Cycle-All), the per-clue "Clue Availability" exclusion panel, and evolution auto-deduction — none of these existed in online at all before. Also fixed the SAME multi-use-clue bug found in multiplayer.js: Random/By-category reveal pools were permanently dropping a multi-use clue (e.g. Reveal One Weakness) after its first use instead of respecting its real cap. Known remaining gap: online’s clue cards use their own `.online-clue` CSS rather than the shared `.clue-btn` styling hot-seat uses, so they now BEHAVE identically but don’t yet LOOK pixel-identical — a further visual-unification pass would need to touch the card DOM structure, which felt like too much additional risk to bundle into the same change.
+ *   1.3.0 — #2/#1f: persistent post-game lobby + opt-in rematch with a host-triggered 5s countdown (leader-driven resolution, resilient to the host disconnecting), replacing the old immediate one-click "Play again" that also never reset scores. "Leave room" → "Main menu".
+ *   1.2.0 — #17: online never touched the catch tracker — every client now marks Caught/Seen for itself when a round resolves (via renderRoundOver/renderGameOver) or when leaving mid-round.
+ *   1.1.0 — Gen II room setting now pulls the full dex via poolFilterForData (#13); dropped the now-redundant "Both" generation option.
  *   1.0.0 — Online multiplayer (SPEC §8a "Online"). Firebase rooms with a 6-char
  *           code; 2+ players; RTG/GTR; choose or weighted-random reveals; shared
  *           pool; first to the win target wins. Built on lib/mp-rules.js so the
@@ -23,15 +27,17 @@
 import { el, clear } from '../lib/dom.js';
 import {
   seedFor, buildEngine, applyReveals, revealOutcome, guessOutcome,
-  nextTurnPos, weightedRandomClue, advanceAfterWin, champion, makeRoomCode,
+  nextTurnPos, weightedRandomClue, advanceAfterWin, champion, makeRoomCode, computeAutoDeducedIds,
 } from '../lib/mp-rules.js';
-import { normalizeName } from '../lib/engine.js';
+import { normalizeName, poolFilterForData } from '../lib/engine.js';
+import { markCaught, markSeen } from '../lib/catch-tracker.js';
 
 const COLORS = ['#f5c518', '#4a9eff', '#35c759', '#ff5a5a', '#b06bff', '#ff9f40'];
 const GRACE_MS = 2000;          // leader waits this long past the deadline before skipping
 const ADVANCE_MS = 5000;        // round-over → next round
 const TICK_MS = 1000;
 const TURN_MS = 60000;          // 60s per turn (chosen)
+const REMATCH_COUNTDOWN_MS = 5000; // #1f/#2
 
 export function createOnline({ mount, config, data, params = {}, onExit }) {
   const root = el('div', { class: 'mp-content online-root' });
@@ -68,6 +74,8 @@ export function createOnline({ mount, config, data, params = {}, onExit }) {
     return (dsCache[key] = { data: d, movelist: ml });
   }
 
+  function excludedSet() { return new Set((room && room.settings && room.settings.excludedIds) || []); }
+
   function localEngine() {
     if (!room || room.status === 'lobby') return null;
     const gen = room.settings.gen;
@@ -79,7 +87,8 @@ export function createOnline({ mount, config, data, params = {}, onExit }) {
     }
     const { round, mystery } = buildEngine({
       data: ds.data, movelist: ds.movelist, seed: seedFor(room.seed, room.roundNum),
-      poolFilter: gen, poolStart: room.settings.poolStart,
+      poolFilter: poolFilterForData(gen), poolStart: room.settings.poolStart,
+      clueMode: room.settings.clueMode, catDiversity: room.settings.catDiversity || 'free',
     });
     applyReveals(round, revIds);
     engineCache = { roundNum: room.roundNum, gen, revLen: revIds.length, round, mystery };
@@ -114,7 +123,7 @@ export function createOnline({ mount, config, data, params = {}, onExit }) {
 
   // ===================================================================== CREATE
   function showCreate() {
-    const s = { gen: defaultGen, gameMode: 'rtg', clueMode: 'choose', winTarget: 150, poolStart: 75, guessCost: 0 };
+    const s = { gen: defaultGen, gameMode: 'rtg', clueMode: 'choose', catDiversity: 'free', winTarget: 150, poolStart: 75, guessCost: 0, excludedIds: new Set() };
     const seg = (label, key, opts) => el('div', { class: 'mp-form-section' },
       el('div', { class: 'mp-form-label' }, label),
       el('div', { class: 'online-seg' }, ...opts.map(([val, txt]) =>
@@ -125,27 +134,50 @@ export function createOnline({ mount, config, data, params = {}, onExit }) {
     put(root, 
       el('div', { style: { maxWidth: '460px', margin: '0 auto' } },
         el('div', { class: 'summary-result', style: { textAlign: 'center', marginBottom: '10px' } }, 'Create a room'),
-        seg('Generation', 'gen', [['gen1', 'Gen I'], ['gen2', 'Gen II'], ['both', 'Both']]),
+        seg('Generation', 'gen', [['gen1', 'Gen I'], ['gen2', 'Gen II']]),
         seg('Turn order', 'gameMode', [['rtg', 'Reveal \u2192 Guess'], ['gtr', 'Guess \u2192 Reveal']]),
-        seg('Clue picking', 'clueMode', [['choose', 'Choose'], ['random', 'Random']]),
+        seg('Clue picking', 'clueMode', [['choose', 'Choose'], ['random', 'Random'], ['category', 'By category']]),
+        seg('Category diversity', 'catDiversity', [['free', 'Free'], ['diff', 'Force different'], ['cycle', 'Cycle all']]),
         num('Win target (pts)', 'winTarget', 10, 9999),
         num('Pool per round (pts)', 'poolStart', 10, 999),
         num('Wrong-guess cost (pts)', 'guessCost', 0, 20),
+        excludeSection(s),
         el('div', { class: 'summary-actions' },
           el('button', { class: 'btn-primary', onClick: () => createRoom(s) }, 'Create room'),
           el('button', { class: 'btn-secondary', onClick: showEntry }, '\u2190 Back'))));
   }
 
+  // #4 parity — hot-seat's "Clue Availability" exclusion panel, ported as-is.
+  function excludeSection(s) {
+    const body = el('div', { class: 'mp-exclude-body', id: 'online-excl-body', style: { display: 'none' } });
+    const tog = el('button', { class: 'mp-excl-toggle',
+      onClick: () => { const open = body.style.display !== 'none'; body.style.display = open ? 'none' : ''; tog.classList.toggle('open', !open); } },
+      '\u2699\uFE0F Clue Availability ', el('span', { class: 'adv-arrow' }, '\u25bc'));
+    for (const cat of data.categories) {
+      const catClues = data.clues.filter((c) => c.cat === cat.id);
+      const catBlock = el('div', { class: 'mp-excl-cat' },
+        el('div', { class: 'mp-excl-cat-head', style: { color: cat.color } }, cat.name));
+      for (const c of catClues) {
+        const cb = el('input', { type: 'checkbox', checked: true,
+          onChange: (e) => { e.target.checked ? s.excludedIds.delete(c.id) : s.excludedIds.add(c.id); } });
+        catBlock.append(el('label', { class: 'mp-excl-row' }, cb, el('span', {}, c.name), el('span', { class: 'mp-excl-cost' }, `${c.cost}pt`)));
+      }
+      body.append(catBlock);
+    }
+    return el('div', { class: 'mp-form-section' }, tog, body);
+  }
+
   async function createRoom(settings) {
     code = makeRoomCode();
     const seed = (Math.random() * 2 ** 31) >>> 0;
-    const player = { name: (me.name || 'Host').slice(0, 16), color: COLORS[0], score: 0, roundsWon: 0, connected: true, joinedAt: Date.now() };
+    const player = { name: (me.name || 'Host').slice(0, 16), color: COLORS[0], score: 0, roundsWon: 0, connected: true, rematch: false, joinedAt: Date.now() };
+    const persistedSettings = { ...settings, excludedIds: [...(settings.excludedIds || [])] };
     const initial = {
-      code, seed, hostUid: me.uid, status: 'lobby', settings,
+      code, seed, hostUid: me.uid, status: 'lobby', settings: persistedSettings,
       players: { [me.uid]: player }, joinOrder: [me.uid],
       turnOrder: [], currentTurnPos: 0, phase: 'reveal', pool: settings.poolStart,
       roundNum: 0, revealedClueIds: [], guessLog: [], lastRandomRevealCat: null,
-      turnDeadline: 0, roundResult: null, updatedAt: Date.now(),
+      turnDeadline: 0, roundResult: null, rematchCountdownEndsAt: null, updatedAt: Date.now(),
     };
     try {
       await fb.set(`/rooms/${code}`, initial);
@@ -184,7 +216,7 @@ export function createOnline({ mount, config, data, params = {}, onExit }) {
     const idx = (snap.joinOrder || []).length;
     try {
       if (!existing) {
-        const player = { name: (me.name || 'Player').slice(0, 16), color: COLORS[idx % COLORS.length], score: 0, roundsWon: 0, connected: true, joinedAt: Date.now() };
+        const player = { name: (me.name || 'Player').slice(0, 16), color: COLORS[idx % COLORS.length], score: 0, roundsWon: 0, connected: true, rematch: false, joinedAt: Date.now() };
         await fb.update(`/rooms/${code}/players/${me.uid}`, player);
         await fb.set(`/rooms/${code}/joinOrder`, [...(snap.joinOrder || []), me.uid]);
       } else {
@@ -219,6 +251,8 @@ export function createOnline({ mount, config, data, params = {}, onExit }) {
       await advanceTurn(true);                  // active player ran out of time / is away
     } else if (room.status === 'roundOver' && room.turnDeadline && now > room.turnDeadline) {
       await startRound(room.roundNum + 1);
+    } else if (room.status === 'gameOver' && room.rematchCountdownEndsAt && now >= room.rematchCountdownEndsAt) {
+      await resolveRematchCountdown();           // #2/#1f — same pattern as Cycling Road
     }
   }
 
@@ -242,10 +276,15 @@ export function createOnline({ mount, config, data, params = {}, onExit }) {
   }
 
   function updateTimerText() {
-    const elx = root.querySelector('.online-timer'); if (!elx) return;
-    const secs = secondsLeft(); if (secs == null) return;
-    elx.textContent = `\u23F1 ${secs}s`;
-    elx.classList.toggle('low', secs <= 10);
+    const elx = root.querySelector('.online-timer'); if (elx) {
+      const secs = secondsLeft();
+      if (secs != null) { elx.textContent = `\u23F1 ${secs}s`; elx.classList.toggle('low', secs <= 10); }
+    }
+    const rc = root.querySelector('.race-rematch-countdown');
+    if (rc && room && room.rematchCountdownEndsAt) {
+      const remain = Math.max(0, Math.ceil((room.rematchCountdownEndsAt - Date.now()) / 1000));
+      rc.textContent = `\u23F3 Rematch starting in ${remain}s\u2026 (stay opted in to join)`;
+    }
   }
 
   function topbar(extra) {
@@ -277,7 +316,7 @@ export function createOnline({ mount, config, data, params = {}, onExit }) {
         el('div', { class: 'mp-form-label' }, 'Share this code'),
         el('div', { class: 'online-code' }, code),
         el('p', { class: 'sf-intro', style: { textAlign: 'center' } },
-          `${room.settings.gen === 'both' ? 'Gen I & II' : room.settings.gen === 'gen1' ? 'Gen I' : 'Gen II'} \u00b7 ` +
+          `${room.settings.gen === 'gen1' ? 'Gen I' : 'Gen II'} \u00b7 ` +
           `${room.settings.gameMode.toUpperCase()} \u00b7 ${room.settings.clueMode} clues \u00b7 win at ${room.settings.winTarget} pts`),
         el('div', { class: 'mp-form-label', style: { marginTop: '14px' } }, `Players (${n})`),
         playerList(),
@@ -318,26 +357,72 @@ export function createOnline({ mount, config, data, params = {}, onExit }) {
 
   function cluePanel(eng, mine) {
     const rv = eng.round.revealedClues;
+    const hist = eng.round.state.clueHistory;
     const ds = dsCache[room.settings.gen === 'gen1' ? 1 : 2];
     const clues = ds.data.clues, categories = ds.data.categories;
-    const canReveal = mine && room.phase === 'reveal' && room.settings.clueMode === 'choose';
-    return el('div', { class: 'mp-clue-panel' },
-      ...categories.map((cat) => el('div', { class: 'online-cat' },
-        el('div', { class: 'cat-header', style: { background: cat.bg } }, el('span', { class: 'cat-name', style: { color: cat.color } }, cat.name)),
-        el('div', { class: 'online-clue-row' },
-          ...clues.filter((c) => c.cat === cat.id).map((c) => clueCard(c, eng, rv, canReveal))))));
+    const clueMode = room.settings.clueMode;
+    const canReveal = mine && room.phase === 'reveal';
+    const phaseLocked = !canReveal;
+    const panel = el('div', { class: 'mp-clue-panel' + (clueMode === 'category' ? ' category-mode' : clueMode === 'random' ? ' random-mode' : '') });
+    for (const cat of categories) {
+      const catClues = clues.filter((c) => c.cat === cat.id);
+      const cardsRow = el('div', { class: 'online-clue-row' }, ...catClues.map((c) => clueCard(c, eng, rv, hist, clueMode === 'choose' && canReveal)));
+      if (clueMode === 'category') {
+        const diversityBlocked = eng.round.categoryDiversityBlocked(cat.id);
+        const excluded = excludedSet();
+        const hasRevealable = catClues.some((c) => !excluded.has(c.id) && eng.round.clueAvailable(c) && room.pool >= eng.round.clueCurrentCost(c.id));
+        const blocked = phaseLocked || diversityBlocked || !hasRevealable;
+        const reason = phaseLocked ? '' : diversityBlocked ? (room.settings.catDiversity === 'cycle' ? 'Pick from an unused category first' : 'Pick a different category first') : 'No clues left here';
+        const header = el('div', { class: 'cat-header cat-header-reveal', style: { background: cat.bg } },
+          el('span', { class: 'cat-name', style: { color: cat.color } }, cat.name),
+          !phaseLocked ? el('button', { class: 'cat-reveal-btn', disabled: blocked }, blocked ? reason : '\uD83C\uDFB2 Reveal') : null);
+        const section = el('div', { class: 'online-cat cat-section-clickable' + (blocked ? ' reveal-disabled' : '') }, header, cardsRow);
+        if (!blocked) section.addEventListener('click', (e) => { if (e.target.closest('.online-clue-row')) return; revealFromCategory(cat.id); });
+        panel.append(section);
+      } else {
+        panel.append(el('div', { class: 'online-cat' },
+          el('div', { class: 'cat-header', style: { background: cat.bg } }, el('span', { class: 'cat-name', style: { color: cat.color } }, cat.name)),
+          cardsRow));
+      }
+    }
+    return panel;
   }
 
-  function clueCard(clue, eng, rv, canReveal) {
+  function clueCard(clue, eng, rv, hist, clickable) {
+    const h = hist[clue.id] || [];
+    const uses = h.length;
+    const isMultiUse = clue.maxUses !== 1 || clue.costIncrement > 0;
     const revealed = clue.id in rv;
-    const affordable = room.pool >= clue.cost;
-    const available = canReveal && !revealed && eng.round.clueAvailable(clue) && affordable;
-    const cls = 'online-clue' + (revealed ? ' revealed' : '') + (available ? ' available' : '') + (!available && !revealed ? ' disabled' : '');
-    return el('div', { class: cls, onClick: available ? () => revealClue(clue.id) : undefined },
-      el('div', { class: 'online-clue-top' },
-        el('span', { class: 'online-clue-name' }, clue.name),
-        el('span', { class: 'clue-cost-badge' }, `${clue.cost}pt`)),
-      revealed ? el('div', { class: 'clue-revealed-value' }, String(rv[clue.id])) : null);
+    if (revealed && !isMultiUse) {
+      return el('div', { class: 'online-clue revealed' },
+        el('div', { class: 'online-clue-top' }, el('span', { class: 'online-clue-name' }, clue.name), el('span', { class: 'clue-cost-badge' }, `${clue.cost}pt`)),
+        el('div', { class: 'clue-revealed-value' }, String(rv[clue.id])));
+    }
+    if (isMultiUse && eng.round.clueExhausted(clue)) {
+      return el('div', { class: 'online-clue disabled' },
+        el('div', { class: 'online-clue-top' }, el('span', { class: 'online-clue-name' }, clue.name), el('span', { class: 'clue-cost-badge' }, `${clue.cost}pt`)),
+        el('div', { class: 'clue-unavail-note' }, '\u2717 ' + (h[h.length - 1] || 'Exhausted')));
+    }
+    const excluded = excludedSet();
+    if (excluded.has(clue.id) || !eng.round.clueAvailable(clue)) {
+      return el('div', { class: 'online-clue disabled' },
+        el('div', { class: 'online-clue-top' }, el('span', { class: 'online-clue-name' }, clue.name), el('span', { class: 'clue-cost-badge' }, `${clue.cost}pt`)));
+    }
+    // #4 — Force-Different/Cycle-All only matter in Choose mode; Random and
+    // By-category reveal through their own dedicated controls instead.
+    if (clickable && eng.round.diversityBlocked(clue)) {
+      return el('div', { class: 'online-clue disabled' },
+        el('div', { class: 'online-clue-top' }, el('span', { class: 'online-clue-name' }, clue.name), el('span', { class: 'clue-cost-badge' }, `${clue.cost}pt`)),
+        el('div', { class: 'clue-unavail-note' }, room.settings.catDiversity === 'cycle' ? 'Pick from an unused category first' : 'Pick a different category first'));
+    }
+    const affordable = room.pool >= eng.round.clueCurrentCost(clue.id);
+    const cls = 'online-clue' + (isMultiUse && uses > 0 ? ' revealed' : '') + (clickable && affordable ? ' available' : ' disabled');
+    const card = el('div', { class: cls },
+      el('div', { class: 'online-clue-top' }, el('span', { class: 'online-clue-name' }, clue.name), el('span', { class: 'clue-cost-badge' }, `${eng.round.clueCurrentCost(clue.id)}pt`),
+        isMultiUse && uses > 0 ? el('span', { class: 'clue-use-badge' }, `use ${uses + 1}`) : null));
+    for (let i = 0; i < h.length; i++) card.append(el('div', { class: 'clue-revealed-value', style: { fontSize: i ? '11px' : '12px', opacity: i ? '0.8' : '1' } }, (i ? `#${i + 1} ` : '') + h[i]));
+    if (clickable && affordable) card.addEventListener('click', () => revealClue(clue.id));
+    return card;
   }
 
   function actionBlock(eng, mine) {
@@ -348,6 +433,9 @@ export function createOnline({ mount, config, data, params = {}, onExit }) {
         put(block,
           el('button', { class: 'btn-bait', style: { width: '100%' }, onClick: revealRandom }, '\uD83C\uDF6F Reveal a random clue'),
           el('button', { class: 'btn-secondary', style: { width: '100%', marginTop: '8px' }, onClick: () => skipToGuess() }, 'Skip to guess \u25b6'));
+      } else if (room.settings.clueMode === 'category') {
+        put(block, el('p', { class: 'mp-phase-hint' }, '\u2191 Tap a category to reveal a random clue from it'),
+          el('button', { class: 'btn-secondary', style: { width: '100%' }, onClick: () => skipToGuess() }, 'Skip to guess \u25b6'));
       } else {
         put(block, el('p', { class: 'mp-phase-hint' }, '\u2191 Tap a clue to reveal it'),
           el('button', { class: 'btn-secondary', style: { width: '100%' }, onClick: () => skipToGuess() }, 'Skip to guess \u25b6'));
@@ -393,29 +481,62 @@ export function createOnline({ mount, config, data, params = {}, onExit }) {
   }
 
   async function revealClue(id) {
-    if (!isMyTurn() || room.phase !== 'reveal') return;
+    if (!isMyTurn() || room.phase !== 'reveal' || room.settings.clueMode !== 'choose') return;
+    const excluded = excludedSet();
+    if (excluded.has(id)) return;
     const ds = dsCache[room.settings.gen === 'gen1' ? 1 : 2];
     const clue = ds.data.clues.find((c) => c.id === id);
     if (!clue || room.pool < clue.cost) return;
     // verify locally that the clue is buyable on this mystery
     const eng = localEngine();
-    if (!eng.round.clueAvailable(clue) || (clue.id in eng.round.revealedClues)) return;
+    if (!eng.round.clueAvailable(clue)) return;
+    if (eng.round.diversityBlocked(clue)) return; // #4 — Force-Different/Cycle-All apply to manual picks here too
     const out = revealOutcome({ pool: room.pool, revealedClueIds: room.revealedClueIds || [], phase: room.phase }, id, clue.cost, room.settings.gameMode);
+    eng.round.buyClue(id, { auto: true });
+    const deduced = computeAutoDeducedIds(eng.round, excluded); // #4 — evolution auto-deduction parity
     engineCache.roundNum = -1; // force rebuild next render
-    await fb.update(`/rooms/${code}`, { pool: out.pool, revealedClueIds: out.revealedClueIds, phase: out.phase, updatedAt: Date.now() });
+    await fb.update(`/rooms/${code}`, { pool: out.pool, revealedClueIds: [...out.revealedClueIds, ...deduced], phase: out.phase, updatedAt: Date.now() });
   }
 
   async function revealRandom() {
     if (!isMyTurn() || room.phase !== 'reveal') return;
     const ds = dsCache[room.settings.gen === 'gen1' ? 1 : 2];
     const eng = localEngine();
-    const available = ds.data.clues.filter((c) => !(c.id in eng.round.revealedClues) && eng.round.clueAvailable(c) && room.pool >= c.cost);
+    const excluded = excludedSet();
+    // #4 — clueAvailable() alone already correctly handles single- AND
+    // multi-use exhaustion; the old `!(c.id in revealedClues)` check
+    // permanently dropped a multi-use clue (e.g. Reveal One Weakness) after
+    // its FIRST use instead of respecting its real cap (same bug found and
+    // fixed in multiplayer.js's random/category reveal pools).
+    const available = ds.data.clues.filter((c) => !excluded.has(c.id) && eng.round.clueAvailable(c) && room.pool >= eng.round.clueCurrentCost(c.id));
     if (!available.length) return skipToGuess();
     const pen = (ds.data.multiClue && ds.data.multiClue.randomRevealCategoryPenalty) ?? 0.25;
     const rng = mkRng(seedFor(room.seed, room.roundNum, (room.revealedClueIds || []).length + 1));
     const pick = weightedRandomClue(available, room.lastRandomRevealCat, pen, rng);
     const out = revealOutcome({ pool: room.pool, revealedClueIds: room.revealedClueIds || [], phase: room.phase }, pick.id, pick.cost, room.settings.gameMode);
-    await fb.update(`/rooms/${code}`, { pool: out.pool, revealedClueIds: out.revealedClueIds, phase: out.phase, lastRandomRevealCat: pick.cat, updatedAt: Date.now() });
+    eng.round.buyClue(pick.id, { auto: true });
+    const deduced = computeAutoDeducedIds(eng.round, excluded);
+    engineCache.roundNum = -1;
+    await fb.update(`/rooms/${code}`, { pool: out.pool, revealedClueIds: [...out.revealedClueIds, ...deduced], phase: out.phase, lastRandomRevealCat: pick.cat, updatedAt: Date.now() });
+  }
+
+  // #4 parity — "By category" clue selection (hot-seat already has this).
+  async function revealFromCategory(catId) {
+    if (!isMyTurn() || room.phase !== 'reveal') return;
+    const ds = dsCache[room.settings.gen === 'gen1' ? 1 : 2];
+    const eng = localEngine();
+    if (eng.round.categoryDiversityBlocked(catId)) return;
+    const excluded = excludedSet();
+    const available = ds.data.clues.filter((c) => c.cat === catId && !excluded.has(c.id) && eng.round.clueAvailable(c) && room.pool >= eng.round.clueCurrentCost(c.id));
+    if (!available.length) return;
+    const pen = (ds.data.multiClue && ds.data.multiClue.randomRevealCategoryPenalty) ?? 0.25;
+    const rng = mkRng(seedFor(room.seed, room.roundNum, (room.revealedClueIds || []).length + 1));
+    const pick = weightedRandomClue(available, room.lastRandomRevealCat, pen, rng);
+    const out = revealOutcome({ pool: room.pool, revealedClueIds: room.revealedClueIds || [], phase: room.phase }, pick.id, pick.cost, room.settings.gameMode);
+    eng.round.buyClue(pick.id, { auto: true });
+    const deduced = computeAutoDeducedIds(eng.round, excluded);
+    engineCache.roundNum = -1;
+    await fb.update(`/rooms/${code}`, { pool: out.pool, revealedClueIds: [...out.revealedClueIds, ...deduced], phase: out.phase, lastRandomRevealCat: pick.cat, updatedAt: Date.now() });
   }
 
   function skipToGuess() {
@@ -472,6 +593,9 @@ export function createOnline({ mount, config, data, params = {}, onExit }) {
 
   function renderRoundOver() {
     const rr = room.roundResult || {};
+    // #17a/#17b — every client independently marks its own device's tracker:
+    // caught if THIS player guessed it, seen (not caught) otherwise.
+    if (rr.mysteryName) (rr.winnerUid === me.uid ? markCaught : markSeen)(rr.mysteryName);
     const eng = localEngine();
     const verified = eng && String(eng.mystery.num) === String(rr.mysteryNum) && normalizeName(rr.guessName) === normalizeName(eng.mystery.name);
     const secs = secondsLeft();
@@ -495,9 +619,17 @@ export function createOnline({ mount, config, data, params = {}, onExit }) {
   }
 
   function renderGameOver() {
+    // #17 — the FINAL round's outcome skips renderRoundOver() entirely, so it
+    // needs the same per-device catch-tracking applied here too.
+    const rr = room.roundResult || {};
+    if (rr.mysteryName) (rr.winnerUid === me.uid ? markCaught : markSeen)(rr.mysteryName);
     const arr = Object.entries(room.players).map(([uid, p]) => ({ uid, ...p })).sort((a, b) => (b.score || 0) - (a.score || 0));
     const champ = arr[0];
-    const eng = localEngine();
+    const connected = arr.filter((p) => p.connected);
+    const rematchers = connected.filter((p) => p.rematch);
+    const myPlayer = room.players[me.uid] || {};
+    const countdownActive = room.rematchCountdownEndsAt && room.rematchCountdownEndsAt > Date.now();
+
     put(root, 
       topbar(),
       el('div', { class: 'summary-container' },
@@ -509,15 +641,73 @@ export function createOnline({ mount, config, data, params = {}, onExit }) {
               el('span', { class: 'mp-name-swatch', style: { background: p.color } }),
               el('span', { style: { flex: 1, fontWeight: p.uid === me.uid ? 800 : 400 } }, p.name),
               el('span', { style: { fontWeight: 700 } }, `${p.score || 0} pts`)))),
+          // #1f — persistent post-game lobby: players stay here until Main
+          // Menu / leaving; Rematch is an opt-in count with a host-triggered
+          // 5s countdown that only pulls in whoever is still opted in then.
+          el('div', { class: 'identity-section' },
+            el('div', { class: 'identity-label' }, `Lobby \u2014 ${connected.length} still here`),
+            el('div', { class: 'sp-start-row' },
+              el('button', { class: 'btn-secondary' + (myPlayer.rematch ? ' active' : ''), onClick: toggleRematch },
+                myPlayer.rematch ? '\u2705 Rematch selected' : '\uD83D\uDD01 Want a rematch?'),
+              el('span', { class: 'sf-intro' }, `${rematchers.length} player${rematchers.length === 1 ? '' : 's'} want a rematch`)),
+            countdownActive
+              ? el('div', { class: 'race-rematch-countdown' }, `\u23F3 Rematch starting in ${Math.ceil((room.rematchCountdownEndsAt - Date.now()) / 1000)}s\u2026 (stay opted in to join)`)
+              : (isHost()
+                  ? el('button', { class: 'btn-primary', style: { marginTop: '8px' },
+                      disabled: !(myPlayer.rematch && rematchers.some((p) => p.uid !== me.uid)),
+                      onClick: startRematchCountdown },
+                      'Start rematch (5s countdown)')
+                  : null)),
           el('div', { class: 'summary-actions' },
-            isHost() ? el('button', { class: 'btn-primary', onClick: () => startRound(1) }, 'Play again') : null,
-            el('button', { class: 'btn-secondary', onClick: leaveRoom }, 'Leave room')))));
+            el('button', { class: 'btn-secondary', onClick: leaveRoom }, 'Main menu')))));
+  }
+
+  async function toggleRematch() {
+    const cur = (room.players[me.uid] || {}).rematch;
+    try { await fb.set(`/rooms/${code}/players/${me.uid}/rematch`, !cur); } catch { /* onValue resyncs */ }
+  }
+
+  async function startRematchCountdown() {
+    try { await fb.set(`/rooms/${code}/rematchCountdownEndsAt`, Date.now() + REMATCH_COUNTDOWN_MS); } catch { /* onValue resyncs */ }
+  }
+
+  // #1f — leader-driven (resilient to the host disconnecting mid-countdown,
+  // matching this file's existing isLeader() pattern): resolve the countdown
+  // into either a fresh game for whoever stayed opted in, or a cancellation.
+  async function resolveRematchCountdown() {
+    const participants = Object.entries(room.players)
+      .map(([uid, p]) => ({ uid, ...p }))
+      .filter((p) => p.rematch && p.connected);
+    if (participants.length < 2) {
+      try { await fb.update(`/rooms/${code}`, { rematchCountdownEndsAt: null }); } catch { /* ok */ }
+      if (isHost()) { alert('Not enough players stayed opted in for a rematch.'); leaveRoom(); }
+      return;
+    }
+    const newPlayers = {};
+    participants.forEach((p, i) => {
+      newPlayers[p.uid] = { name: p.name, color: COLORS[i % COLORS.length], score: 0, roundsWon: 0, connected: true, rematch: false, joinedAt: Date.now() };
+    });
+    try {
+      await fb.update(`/rooms/${code}`, {
+        players: newPlayers, joinOrder: participants.map((p) => p.uid),
+        turnOrder: participants.map((p) => p.uid), currentTurnPos: 0,
+        seed: (Math.random() * 2 ** 31) >>> 0,
+        status: 'playing', roundNum: 1, pool: room.settings.poolStart,
+        phase: room.settings.gameMode === 'rtg' ? 'reveal' : 'guess',
+        revealedClueIds: [], guessLog: [], lastRandomRevealCat: null,
+        roundResult: null, turnDeadline: Date.now() + TURN_MS, rematchCountdownEndsAt: null,
+        updatedAt: Date.now(),
+      });
+    } catch { /* onValue resyncs */ }
   }
 
   // ===================================================================== misc
   function mkRng(seed) { let a = seed >>> 0; return function () { a |= 0; a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
 
   async function leaveRoom() {
+    // #17b — if a round is actively in progress, this device saw the mystery
+    // but never caught it.
+    try { const eng = room && room.status === 'playing' ? localEngine() : null; if (eng && eng.mystery) markSeen(eng.mystery.name); } catch { /* ignore */ }
     stopTicker();
     if (unsub) { try { unsub(); } catch { /* ok */ } unsub = null; }
     try { if (code && me) await fb.set(`/rooms/${code}/players/${me.uid}/connected`, false); } catch { /* ok */ }

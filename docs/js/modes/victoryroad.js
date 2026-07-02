@@ -1,8 +1,9 @@
 /**
  * @file        js/modes/victoryroad.js
- * @version     1.1.0
+ * @version     1.2.0
  * @updated     2026-06-24
  * @changelog
+ *   1.2.0 — Gen 2 mode draws from the full dex (#13).
  *   1.1.0 — Tier rows expandable/collapsible: click to reveal clue names.
  *   1.0.0 — Victory Road, ported from the canonical screen. Endless streak
  *           gauntlet: one guess per Pokémon, wrong = game over. Pre-revealed
@@ -16,7 +17,7 @@
  */
 
 import { el, clear, statSpreadEl, genBar } from '../lib/dom.js';
-import { PokeGuessRound, normalizeName } from '../lib/engine.js';
+import { PokeGuessRound, normalizeName, poolFilterForData, matchesPool } from '../lib/engine.js';
 import { submitScore } from '../lib/leaderboard-data.js';
 
 // Tier definitions (streak thresholds + which clue specials/fields to pre-reveal).
@@ -65,7 +66,7 @@ export function createVictoryRoad({ mount, config, data, params = {}, onExit }) 
   }
 
   const rng = params.rng || Math.random;
-  const poolFilter = data.id === 'gen1' ? 'gen1' : 'gen2';
+  const poolFilter = poolFilterForData(data.id);
   let movelist = {};
   let vr = null; // runtime state
   let timerInterval = null;
@@ -139,10 +140,7 @@ export function createVictoryRoad({ mount, config, data, params = {}, onExit }) 
 
   // ---- BEGIN ---------------------------------------------------------------
   function begin() {
-    const pool = shuffle(data.pokedex.filter((p) => {
-      const n = parseInt(p.num, 10);
-      return poolFilter === 'gen1' ? n <= 151 : n >= 152 && n <= 251;
-    }));
+    const pool = shuffle(data.pokedex.filter((p) => matchesPool(p.num, poolFilter)));
     const now = Date.now();
     vr = { streak: 0, pool, poolIdx: 0, perfectLaps: 0, startTime: now, pokeStartTime: now, bestPokeMs: null, totalMs: 0, round: null };
     startTimer();
@@ -445,10 +443,7 @@ export function createVictoryRoad({ mount, config, data, params = {}, onExit }) 
     const overlay = root.querySelector('#vr-perfect-overlay');
     if (overlay) overlay.classList.remove('active');
     // Reshuffle for the next lap
-    vr.pool = shuffle(data.pokedex.filter((p) => {
-      const n = parseInt(p.num, 10);
-      return poolFilter === 'gen1' ? n <= 151 : n >= 152 && n <= 251;
-    }));
+    vr.pool = shuffle(data.pokedex.filter((p) => matchesPool(p.num, poolFilter)));
     vr.poolIdx = 0;
     startTimer();
     nextMon();

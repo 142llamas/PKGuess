@@ -1,8 +1,10 @@
 /**
  * @file        js/modes/single.js
- * @version     1.0.0
+ * @version     1.2.0
  * @updated     2026-06-24
  * @changelog
+ *   1.2.0 — #17: Single Player never touched the catch tracker at all — a correct guess now marks Caught, and running out of points (via any path: a guess, a card click, or a random/category reveal) marks Seen, via one centralized checkGameOver() helper.
+ *   1.1.0 — Gen 2 mode draws from the full dex (#13). Clue grid is now clueMode-aware: Random/By-category cards are read-only; a "Reveal a random clue" button (Random) and clickable category headers (By category) drive reveals instead; category-diversity violations are shown and blocked, not silently ignored (#10/#11/#15b/#15c).
  *   1.0.0 — Single Player screen controller on top of lib/engine.js. Faithful
  *           re-creation of the canonical flow (config → game → summary) with no
  *           game rules of its own: every decision (availability, cost, limits,
@@ -17,7 +19,9 @@
 
 import { el, clear, genBar } from '../lib/dom.js';
 import { statSpreadEl } from '../lib/dom.js';
-import { PokeGuessRound, normalizeName } from '../lib/engine.js';
+import { pokemonInfoHTML } from '../lib/pokeinfo.js';
+import { markCaught, markSeen } from '../lib/catch-tracker.js';
+import { PokeGuessRound, normalizeName, poolFilterForData, matchesPool } from '../lib/engine.js';
 import { submitScore } from '../lib/leaderboard-data.js';
 
 export function createSingle({ mount, config, data, params = {}, onExit }) {
@@ -120,7 +124,7 @@ export function createSingle({ mount, config, data, params = {}, onExit }) {
       chosen.guessCost = clampInt(root.querySelector('#sp-custom-guesscost')?.value, 0, 5, 1);
     }
     round = new PokeGuessRound({ genData: data, movelist, rng: params.rng });
-    const poolFilter = data.id === 'gen1' ? 'gen1' : data.id === 'gen2' ? 'gen2' : 'both';
+    const poolFilter = poolFilterForData(data.id);
     round.start({
       difficultyId: chosen.difficulty,
       poolFilter,
@@ -193,22 +197,96 @@ export function createSingle({ mount, config, data, params = {}, onExit }) {
     const panel = root.querySelector('#clue-panel');
     if (!panel) return;
     clear(panel);
+    const clueMode = round.state.clueMode;
+    panel.classList.remove('category-mode', 'random-mode');
+    if (clueMode === 'category') panel.classList.add('category-mode');
+    if (clueMode === 'random') panel.classList.add('random-mode');
+
+    const s = round.state;
+    const phaseLocked = s.guessMode === 'forced' && s.forcedPhase === 'guess';
+    if (clueMode === 'random') {
+      // Forced+Random reveals automatically after each wrong guess — there is
+      // never a moment the player can act, so no button is ever shown for it.
+      panel.appendChild(s.guessMode === 'forced'
+        ? el('div', { class: 'cat-mode-banner' },
+            '\uD83C\uDFB2 ', el('strong', {}, 'Random clue selection'), ' \u2014 a clue reveals automatically after each wrong guess.')
+        : el('div', { class: 'cat-mode-banner' },
+            '\uD83C\uDFB2 ', el('strong', {}, 'Random clue selection'), ' \u2014 you don\u2019t choose which clue is revealed. ',
+            el('button', { class: 'cat-reveal-btn', style: { marginLeft: '8px' }, onClick: revealRandomClue }, '\uD83C\uDFB2 Reveal a random clue')));
+    } else if (clueMode === 'category') {
+      panel.appendChild(el('div', { class: 'cat-mode-banner' },
+        '\uD83D\uDCC2 ', el('strong', {}, 'By category'), phaseLocked
+          ? ' \u2014 make your guess first, then pick a category to reveal from.'
+          : ' \u2014 click a category below to reveal a random clue from it.'));
+    }
+
     const lockedCats = (round.state.diffRestrictions && round.state.diffRestrictions.lockedCats) || [];
     for (const cat of cats) {
       if (lockedCats.includes(cat.id)) continue;
       const body = el('div', { class: 'cat-body' });
-      const section = el('div', { class: 'cat-section' },
-        el('div', { class: 'cat-header', style: { background: cat.bg } },
-          el('span', { class: 'cat-name', style: { color: cat.color } }, cat.name)),
-        body);
       for (const clue of clues.filter((c) => c.cat === cat.id)) body.appendChild(renderCard(clue, cat));
-      if (body.children.length) panel.appendChild(section);
+      if (!body.children.length) continue;
+
+      if (clueMode === 'category') {
+        const diversityBlocked = round.categoryDiversityBlocked(cat.id);
+        const blocked = phaseLocked || diversityBlocked || !categoryHasRevealableClue(cat.id);
+        const reason = phaseLocked ? 'Make your guess first'
+          : diversityBlocked ? (round.state.cycleCats ? 'Pick from an unused category first' : 'Pick a different category first')
+          : 'No affordable clues left here';
+        const header = el('div', { class: 'cat-header cat-header-reveal', style: { background: cat.bg } },
+          el('span', { class: 'cat-name', style: { color: cat.color } }, cat.name),
+          el('button', { class: 'cat-reveal-btn', disabled: blocked }, blocked ? reason : '\uD83C\uDFB2 Reveal'));
+        const section = el('div', { class: 'cat-section cat-section-clickable' + (blocked ? ' reveal-disabled' : '') }, header, body);
+        if (!blocked) section.addEventListener('click', (e) => { if (e.target.closest('.cat-body')) return; revealFromCategory(cat.id); });
+        panel.appendChild(section);
+      } else {
+        panel.appendChild(el('div', { class: 'cat-section' },
+          el('div', { class: 'cat-header', style: { background: cat.bg } },
+            el('span', { class: 'cat-name', style: { color: cat.color } }, cat.name)),
+          body));
+      }
     }
     // locked-category summary line
     if (lockedCats.length) {
       const names = lockedCats.map((id) => catById.get(id)?.name).filter(Boolean).join(', ');
       panel.appendChild(el('div', { class: 'clue-unavail-note', style: { padding: '8px' } }, `\uD83D\uDD12 Locked on this difficulty: ${names}`));
     }
+  }
+
+  // Does this category currently have ANY clue the player could actually reveal
+  // (available + affordable + not at its use limit)? Used to grey out a category
+  // header that's technically not diversity-blocked but has nothing left to give.
+  function categoryHasRevealableClue(catId) {
+    return clues.some((c) => c.cat === catId && round.clueAvailable(c)
+      && !round.clueLimitInfo(c).atLimit && round.pointsRemaining >= round.clueCurrentCost(c.id));
+  }
+
+  function revealRandomClue() {
+    const res = round.autoRevealRandom();
+    if (!res.ok) { flashFeedback(res.reason === 'noCandidates' ? 'No clues you can afford right now.' : 'Couldn\u2019t reveal a clue.'); return; }
+    renderClueGrid(); renderRevealed(); updatePoints(); updateForcedUI();
+    checkGameOver();
+  }
+
+  function revealFromCategory(catId) {
+    const res = round.autoRevealFromCategory(catId);
+    if (!res.ok) {
+      const msg = res.reason === 'categoryBlocked' ? 'Pick a different category first.'
+        : res.reason === 'forcedGuessPhase' ? 'Make your guess first.'
+        : 'No affordable clues left in that category.';
+      flashFeedback(msg);
+      return;
+    }
+    renderClueGrid(); renderRevealed(); updatePoints(); updateForcedUI();
+    checkGameOver();
+  }
+
+  function flashFeedback(msg) {
+    const fb = root.querySelector('#guess-feedback');
+    if (!fb) return;
+    fb.className = 'guess-feedback error';
+    fb.textContent = msg;
+    setTimeout(() => { if (fb) fb.textContent = ''; }, 2200);
   }
 
   function renderCard(clue, cat) {
@@ -251,6 +329,15 @@ export function createSingle({ mount, config, data, params = {}, onExit }) {
       card.append(top(clue.name), note('clue-prereq-note', `Requires: ${req ? req.name : '?'}`));
       return card;
     }
+    // Category-diversity gate — only meaningful in "Choose" mode (#15c): in
+    // Random/By-category mode the player never picks an individual clue, so
+    // this rule is enforced at the random-pool / category-header level instead.
+    if (s.clueMode === 'choose' && round.diversityBlocked(clue)) {
+      card.classList.add('unavailable', 'prereq-blocked');
+      card.append(top(clue.name), note('clue-unavail-note',
+        s.cycleCats ? 'Pick from an unused category first' : 'Pick a different category first'));
+      return card;
+    }
 
     // available / multi-use
     const canAfford = round.pointsRemaining >= currentCost;
@@ -274,7 +361,9 @@ export function createSingle({ mount, config, data, params = {}, onExit }) {
         (i ? `#${i + 1} ` : '') + hist[i]));
     }
     if (limitInfo.note) card.append(note('clue-limit-note', (limitInfo.atLimit ? '\u2717 ' : '') + limitInfo.note));
-    card.addEventListener('click', () => buyAndRefresh(clue.id));
+    // Cards are clickable ONLY in "Choose" mode (#11/#15b) — Random and
+    // By-category reveal through their own dedicated controls instead.
+    if (s.clueMode === 'choose') card.addEventListener('click', () => buyAndRefresh(clue.id));
     return card;
 
     function top(name, badge, color) {
@@ -300,7 +389,18 @@ export function createSingle({ mount, config, data, params = {}, onExit }) {
     renderRevealed();
     updatePoints();
     updateForcedUI();
-    if (round.gameOver) showSummary();
+    checkGameOver();
+  }
+
+  // Centralized game-over check (#17): every path that can end the round
+  // WITHOUT a correct guess (running out of points via a reveal, or a final
+  // wrong guess) reaches here — the mystery was seen, never caught, so mark
+  // it 'seen' before showing the summary. The WIN path returns earlier and
+  // calls markCaught() itself, so it never reaches this helper.
+  function checkGameOver() {
+    if (!round.gameOver) return;
+    markSeen(round.mystery.name);
+    showSummary();
   }
 
   // ---- revealed summary ---------------------------------------------------
@@ -308,16 +408,26 @@ export function createSingle({ mount, config, data, params = {}, onExit }) {
     const box = root.querySelector('#revealed-summary');
     if (!box) return;
     clear(box);
-    const rv = round.revealedClues;
-    const ids = Object.keys(rv).map(Number);
+    const hist = round.state.clueHistory || {};
+    const ids = Object.keys(hist).map(Number);
     if (!ids.length) { box.append(el('div', { class: 'rev-empty' }, 'No clues revealed yet.')); return; }
     box.append(el('div', { class: 'rev-cat-label' }, 'Revealed'));
     for (const id of ids) {
       const c = round.clue(id);
-      box.append(el('div', { class: 'rev-item' + (id === round.state.lastRevealedClueId ? ' rev-new' : '') },
-        el('span', { class: 'rev-item-name' }, c ? c.name : `#${id}`),
-        el('span', { class: 'rev-item-value' }, String(rv[id]))));
+      const vals = hist[id] || [];
+      vals.forEach((v, i) => {
+        const isLatest = id === round.state.lastRevealedClueId && i === vals.length - 1;
+        box.append(el('div', { class: 'rev-item' + (isLatest ? ' rev-new' : '') },
+          el('span', { class: 'rev-item-name' }, (c ? c.name : `#${id}`) + (vals.length > 1 ? ` #${i + 1}` : '')),
+          el('span', { class: 'rev-item-value' }, String(v))));
+      });
     }
+  }
+
+  // total reveals incl. repeated multi-use clues (#14)
+  function totalReveals() {
+    const hist = round.state.clueHistory || {};
+    return Object.keys(hist).reduce((n, id) => n + (hist[id] ? hist[id].length : 0), 0);
   }
 
   // ---- points -------------------------------------------------------------
@@ -360,8 +470,9 @@ export function createSingle({ mount, config, data, params = {}, onExit }) {
     if (res.correct) { 
       // Submit to leaderboard (fire-and-forget — never blocks the UI)
       const gen = data.id || 'gen2';
-      const detail = `diff:${chosen.difficulty} clues:${Object.keys(round.revealedClues).length} wrong:${round.wrongGuesses.length}`;
+      const detail = `diff:${chosen.difficulty} clues:${totalReveals()} wrong:${round.wrongGuesses.length}`;
       submitScore(gen, 'single', { score: round.pointsRemaining, detail }).catch(() => {});
+      markCaught(round.mystery.name); // #17a
       showSummary(); return; 
     }
     // wrong
@@ -377,9 +488,10 @@ export function createSingle({ mount, config, data, params = {}, onExit }) {
     if (badge) badge.textContent = `${wc} guess${wc !== 1 ? 'es' : ''}`;
     renderGuessLog();
     renderClueGrid();
+    renderRevealed();
     updatePoints();
     updateForcedUI();
-    if (round.gameOver) showSummary();
+    checkGameOver();
   }
 
   function renderGuessLog() {
@@ -433,7 +545,7 @@ export function createSingle({ mount, config, data, params = {}, onExit }) {
   function showSummary() {
     const m = round.mystery;
     const win = round.gameResult === 'win';
-    const types = [m.type1, ...(m.type2 && m.type2 !== '\u2014' ? [m.type2] : [])];
+    const genLabel = (data.id === 'gen1') ? 'Gen 1' : 'Gen 2';
 
     clear(root).append(
       el('div', { class: 'summary-container' },
@@ -441,17 +553,27 @@ export function createSingle({ mount, config, data, params = {}, onExit }) {
           el('div', { class: 'summary-header' + (win ? ' win' : ' loss') },
             el('div', { class: 'summary-result' }, win ? '\uD83C\uDF89 Correct!' : '\uD83D\uDCA5 Out of points'),
             el('div', { class: 'summary-mon' }, `#${m.num} ${m.name}`),
+            el('div', { class: 'gen-bar-label', style: { marginTop: '2px' } }, genLabel),
             win ? el('div', { class: 'summary-score' }, `Score: ${round.pointsRemaining} pts`) : null),
-          el('div', { class: 'type-pills' }, ...types.map((t) =>
-            el('span', { class: `type-pill type-${t.toLowerCase()}` }, t))),
-          m.fullStats ? statSpreadEl(m.fullStats) : null,
           el('div', { class: 'summary-meta' },
             el('div', {}, `Wrong guesses: ${round.wrongGuesses.length}`),
-            el('div', {}, `Clues revealed: ${Object.keys(round.revealedClues).length}`)),
-          el('div', { class: 'summary-actions' },
-            el('button', { class: 'btn-primary', onClick: showConfig }, 'Play again'),
-            el('button', { class: 'btn-secondary', onClick: () => onExit && onExit() }, 'Main menu')),
-        )));
+            el('div', {}, `Clues revealed: ${totalReveals()}`))),
+        // #13 — full Pokédex-style card for this Pokémon / generation
+        el('div', { html: pokemonInfoHTML(m, movelist) }),
+        el('div', { class: 'summary-actions' },
+          el('button', { class: 'btn-primary', onClick: showConfig }, 'Play again'),
+          el('button', { class: 'btn-secondary', onClick: () => onExit && onExit() }, 'Main menu')),
+      ));
+
+    // the info HTML leaves a placeholder for the rich stat spread + a collapsible
+    const ph = root.querySelector('#poke-stat-spread-placeholder');
+    if (ph && m.fullStats) ph.replaceWith(statSpreadEl(m.fullStats));
+    const toggle = root.querySelector('.collapsible-toggle');
+    if (toggle) toggle.addEventListener('click', () => {
+      toggle.classList.toggle('open');
+      const body = toggle.parentElement.querySelector('.collapsible-body');
+      if (body) body.classList.toggle('open');
+    });
   }
 
   // ---- utils + lifecycle --------------------------------------------------

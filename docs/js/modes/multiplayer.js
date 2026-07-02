@@ -1,8 +1,11 @@
 /**
  * @file        js/modes/multiplayer.js
- * @version     1.0.0
+ * @version     1.3.0
  * @updated     2026-06-24
  * @changelog
+ *   1.3.0 — #4: applyEvoDeductions() now delegates to the shared mp-rules.computeAutoDeducedIds (same logic, single source of truth with online.js).
+ *   1.2.0 — #17: hotseat never touched the catch tracker — a round's winner now marks the mystery Caught, and quitting mid-round marks it Seen. Fixed finding: Random/By-category reveal pools permanently dropped a multi-use clue (e.g. Reveal One Weakness) after its FIRST use instead of respecting its real use cap — mpCard() also now shows per-use reveal history instead of collapsing multi-use clues to their latest value only. Cost checks use the live current cost, not the stale base cost.
+ *   1.1.0 — Gen 2 mode draws from the full dex (#13). Added "By category" clue selection + a real Category Diversity setting (previously never reached the engine, so Force-Different/Cycle-All were silent no-ops in hotseat). Random/By-category cards are now read-only; manual reveals are subject to the diversity rule instead of always bypassing it (#10/#11/#15b/#15c).
  *   1.0.0 — Hot-seat multiplayer, ported from the canonical MP screen.
  *           2–4 players pass the device. Shared point pool per round; whoever
  *           correctly identifies the Pokémon earns the remaining points. Two
@@ -16,7 +19,9 @@
  */
 
 import { el, clear } from '../lib/dom.js';
-import { PokeGuessRound, normalizeName } from '../lib/engine.js';
+import { PokeGuessRound, normalizeName, poolFilterForData, matchesPool } from '../lib/engine.js';
+import { markCaught, markSeen } from '../lib/catch-tracker.js';
+import { computeAutoDeducedIds } from '../lib/mp-rules.js';
 
 const PLAYER_COLORS = ['#ffd700', '#3a7fdb', '#27a447', '#d04830'];
 const PLACE_EMOJI = ['\uD83E\uDD47', '\uD83E\uDD48', '\uD83E\uDD49', '4\uFE0F\u20E3'];
@@ -34,7 +39,7 @@ export function createMultiplayer({ mount, config, data, params = {}, onExit }) 
   }
 
   const rng = params.rng || Math.random;
-  const poolFilter = data.id === 'gen1' ? 'gen1' : 'gen2';
+  const poolFilter = poolFilterForData(data.id);
   const dflt = (config && config.mpDefaults) || {};
   let movelist = {};
   let mp = null; // runtime state
@@ -62,7 +67,8 @@ export function createMultiplayer({ mount, config, data, params = {}, onExit }) 
     playerNames: ['', 'Player 2', '', ''],
     playerCount: 2,
     gameMode: 'rtg',   // 'rtg' | 'gtr'
-    clueMode: 'choose', // 'choose' | 'random'
+    clueMode: 'choose', // 'choose' | 'random' | 'category'
+    catDiversity: 'free', // 'free' | 'diff' | 'cycle'
     winTarget: dflt.winTarget || 150,
     poolStart: dflt.poolPerRound || 75,
     guessCost: dflt.guessCost || 0,
@@ -138,7 +144,14 @@ export function createMultiplayer({ mount, config, data, params = {}, onExit }) 
       toggle('clueMode', [
         ['choose', 'Choose Clues', 'Active player picks which clue to reveal'],
         ['random', 'Random Clues', 'A weighted-random clue is revealed automatically'],
-      ], () => setup.clueMode, (v) => { setup.clueMode = v; }));
+        ['category', 'By Category', 'Pick a category; a random clue from it is revealed'],
+      ], () => setup.clueMode, (v) => { setup.clueMode = v; }),
+      el('div', { class: 'mp-form-label', style: { marginTop: '12px' } }, 'Category Diversity'),
+      toggle('catDiversity', [
+        ['free', 'Free Choice', 'Reveal from any category in any order'],
+        ['diff', 'Force Different', 'Cannot reveal from the same category twice in a row'],
+        ['cycle', 'Cycle All', 'Must reveal from every available category before repeating any'],
+      ], () => setup.catDiversity, (v) => { setup.catDiversity = v; }));
   }
 
   function numInput(label, key, min, max) {
@@ -189,13 +202,10 @@ export function createMultiplayer({ mount, config, data, params = {}, onExit }) 
       clueCount: 0, clueCostTotal: 0,
     }));
     // Build shuffled pool from dex
-    const pool = data.pokedex.filter((p) => {
-      const n = parseInt(p.num, 10);
-      return poolFilter === 'gen1' ? n <= 151 : n >= 152 && n <= 251;
-    });
+    const pool = data.pokedex.filter((p) => matchesPool(p.num, poolFilter));
     mp = {
       players, turnOrder: players.map((p) => p.id),
-      currentTurnPos: 0, gameMode: setup.gameMode, clueMode: setup.clueMode,
+      currentTurnPos: 0, gameMode: setup.gameMode, clueMode: setup.clueMode, catDiversity: setup.catDiversity,
       winTarget: setup.winTarget, poolStart: setup.poolStart, guessCost: setup.guessCost,
       excludedIds: new Set(setup.excludedIds),
       pool, round: null, phase: null, turnHasRevealed: false,
@@ -209,7 +219,7 @@ export function createMultiplayer({ mount, config, data, params = {}, onExit }) 
     const poke = mp.pool[Math.floor(rng() * mp.pool.length)];
     mp.round = new PokeGuessRound({ genData: data, movelist, rng });
     mp.round.start({
-      difficultyId: 'custom', poolFilter, mystery: poke,
+      difficultyId: 'custom', poolFilter, mystery: poke, catDiversity: mp.catDiversity,
       custom: { points: mp.poolStart, guessCost: 0, startClueMode: 'none' },
     });
     mp.pointPool = mp.poolStart;
@@ -226,7 +236,12 @@ export function createMultiplayer({ mount, config, data, params = {}, onExit }) 
     const cur = mp.players[mp.turnOrder[mp.currentTurnPos]];
     clear(root).append(
       el('div', { class: 'game-topbar' },
-        el('button', { class: 'btn-secondary game-exit', onClick: () => { if (confirm('Quit? Progress will be lost.')) { onExit && onExit(); } } }, '\u2190 Quit'),
+        el('button', { class: 'btn-secondary game-exit', onClick: () => {
+        if (confirm('Quit? Progress will be lost.')) {
+          if (mp && mp.round && mp.round.mystery && !mp.gameOver) markSeen(mp.round.mystery.name); // #17b
+          onExit && onExit();
+        }
+      } }, '\u2190 Quit'),
         el('div', { class: 'mp-topbar-info' },
           el('div', { class: 'mp-round-badge', id: 'mp-round-badge' }, `Round ${mp.roundNum}`),
           el('div', { class: 'mp-target-badge' }, data.id === 'gen1' ? 'Gen 1' : 'Gen 2'),
@@ -274,56 +289,110 @@ export function createMultiplayer({ mount, config, data, params = {}, onExit }) 
     clear(panel);
     const r = mp.round, s = r.state;
     const cats = data.categories, clues = data.clues;
+    panel.classList.remove('category-mode', 'random-mode');
+    if (mp.clueMode === 'category') panel.classList.add('category-mode');
+    if (mp.clueMode === 'random') panel.classList.add('random-mode');
+    const phaseLocked = mp.phase !== 'reveal';
     for (const cat of cats) {
       const body = el('div', { class: 'cat-body' });
       for (const c of clues.filter((cl) => cl.cat === cat.id)) body.appendChild(mpCard(c, cat));
-      if (body.children.length) panel.appendChild(el('div', { class: 'cat-section' },
-        el('div', { class: 'cat-header', style: { background: cat.bg } }, el('span', { class: 'cat-name', style: { color: cat.color } }, cat.name)),
-        body));
+      if (!body.children.length) continue;
+      if (mp.clueMode === 'category') {
+        const diversityBlocked = r.categoryDiversityBlocked(cat.id);
+        const hasRevealable = clues.some((c) => c.cat === cat.id && !mp.excludedIds.has(c.id)
+          && r.clueAvailable(c) && !r.clueLimitInfo(c).atLimit && mp.pointPool >= r.clueCurrentCost(c.id));
+        const blocked = phaseLocked || diversityBlocked || !hasRevealable;
+        const reason = phaseLocked ? '' : diversityBlocked ? (mp.catDiversity === 'cycle' ? 'Pick from an unused category first' : 'Pick a different category first') : 'No clues left here';
+        const header = el('div', { class: 'cat-header cat-header-reveal', style: { background: cat.bg } },
+          el('span', { class: 'cat-name', style: { color: cat.color } }, cat.name),
+          !phaseLocked ? el('button', { class: 'cat-reveal-btn', disabled: blocked }, blocked ? reason : '\uD83C\uDFB2 Reveal') : null);
+        const section = el('div', { class: 'cat-section cat-section-clickable' + (blocked ? ' reveal-disabled' : '') }, header, body);
+        if (!blocked) section.addEventListener('click', (e) => { if (e.target.closest('.cat-body')) return; revealFromCategory(cat.id); });
+        panel.appendChild(section);
+      } else {
+        panel.appendChild(el('div', { class: 'cat-section' },
+          el('div', { class: 'cat-header', style: { background: cat.bg } }, el('span', { class: 'cat-name', style: { color: cat.color } }, cat.name)),
+          body));
+      }
     }
   }
 
   function mpCard(clue, cat) {
-    const r = mp.round, rv = r.revealedClues;
-    const isRevealed = clue.id in rv;
+    const r = mp.round, s = r.state;
+    const hist = s.clueHistory[clue.id] || [];
+    const uses = hist.length;
+    const isRevealed = clue.id in r.revealedClues;
+    const isMultiUse = clue.maxUses !== 1 || clue.costIncrement > 0;
+    const currentCost = r.clueCurrentCost(clue.id);
     const isExcluded = mp.excludedIds.has(clue.id);
     const isPhaseReveal = mp.phase === 'reveal';
     const card = el('button', { class: 'clue-btn', dataset: { clue: clue.id } });
 
-    if (isRevealed) {
+    if (isRevealed && !isMultiUse) {
       card.classList.add('revealed');
       Object.assign(card.style, { background: cat.bg, borderColor: cat.color });
       card.append(el('div', { class: 'clue-top' }, el('span', { class: 'clue-btn-name', style: { color: cat.color } }, clue.name)),
-        el('div', { class: 'clue-revealed-value' }, String(rv[clue.id])));
+        el('div', { class: 'clue-revealed-value' }, String(r.revealedClues[clue.id])));
       return card;
     }
-    if (isExcluded || !r.clueAvailable(clue) || !isPhaseReveal) {
+    // #17-adjacent finding: a multi-use clue that's now exhausted (hit its cap,
+    // e.g. all weaknesses shown) must still show what it revealed, not collapse
+    // into a bare "unavailable" card — mirrors single.js's exhaustion display.
+    if (isMultiUse && r.clueExhausted(clue)) {
+      card.classList.add('unavailable');
+      card.append(el('div', { class: 'clue-top' }, el('span', { class: 'clue-btn-name' }, clue.name),
+        el('span', { class: 'clue-cost-badge', style: { background: '#555' } }, `${clue.cost}pt`)),
+        el('div', { class: 'clue-unavail-note' }, '\u2717 ' + (hist[hist.length - 1] || 'Exhausted')));
+      return card;
+    }
+    if (isExcluded || !r.clueAvailable(clue)) {
       card.classList.add('unavailable');
       card.append(el('div', { class: 'clue-top' }, el('span', { class: 'clue-btn-name' }, clue.name),
         el('span', { class: 'clue-cost-badge', style: { background: '#555' } }, `${clue.cost}pt`)));
       return card;
     }
-    if (mp.pointPool < clue.cost) card.classList.add('cant-afford');
+    // Category-diversity gate — only meaningful in "Choose" mode (#15c); Random
+    // and By-category reveal through their own dedicated controls instead.
+    if (mp.clueMode === 'choose' && r.diversityBlocked(clue)) {
+      card.classList.add('unavailable', 'prereq-blocked');
+      card.append(el('div', { class: 'clue-top' }, el('span', { class: 'clue-btn-name' }, clue.name),
+        el('span', { class: 'clue-cost-badge', style: { background: '#555' } }, `${clue.cost}pt`)),
+        el('div', { class: 'clue-unavail-note' }, mp.catDiversity === 'cycle' ? 'Pick from an unused category first' : 'Pick a different category first'));
+      return card;
+    }
+    if (mp.pointPool < currentCost || !isPhaseReveal) card.classList.add('cant-afford');
     const costs = data.clues.map((c) => c.cost);
     const lo = Math.min(...costs), hi = Math.max(...costs);
-    const t = hi > lo ? (clue.cost - lo) / (hi - lo) : 0;
+    const t = hi > lo ? (currentCost - lo) / (hi - lo) : 0;
     const bg = `hsl(${Math.round(120 * (1 - t))},${62 + Math.round(18 * Math.abs(t - 0.5) * 2)}%,${40 + Math.round(6 * (1 - Math.abs(t - 0.5) * 2))}%)`;
+    const useBadge = (isMultiUse && uses > 0) ? el('span', { class: 'clue-use-badge' }, `use ${uses + 1}`) : null;
+    if (isMultiUse && uses > 0) {
+      card.classList.add('revealed');
+      Object.assign(card.style, { background: cat.bg, borderColor: cat.color });
+    }
     card.append(el('div', { class: 'clue-top' },
-      el('span', { class: 'clue-btn-name' }, clue.name),
-      el('span', { class: 'clue-cost-badge', style: { background: bg } }, `${clue.cost}pt`)));
-    card.addEventListener('click', () => revealClue(clue.id));
+      el('span', { class: 'clue-btn-name', style: isMultiUse && uses > 0 ? { color: cat.color } : {} }, clue.name),
+      el('span', { style: { display: 'flex', gap: '4px', alignItems: 'center' } },
+        el('span', { class: 'clue-cost-badge', style: { background: bg } }, `${currentCost}pt`), useBadge)));
+    for (let i = 0; i < hist.length; i++) {
+      card.append(el('div', { class: 'clue-revealed-value', style: { fontSize: i ? '11px' : '12px', opacity: i ? '0.8' : '1' } },
+        (i ? `#${i + 1} ` : '') + hist[i]));
+    }
+    // Cards are clickable ONLY in "Choose" mode (#11/#15b) — Random and
+    // By-category reveal through the action block / category header instead.
+    if (mp.clueMode === 'choose' && isPhaseReveal) card.addEventListener('click', () => revealClue(clue.id));
     return card;
   }
 
   // ---- reveal --------------------------------------------------------------
-  function revealClue(id) {
+  function revealClue(id, { auto = false } = {}) {
     if (mp.phase !== 'reveal') return;
     const clue = data.clues.find((c) => c.id === id);
     if (!clue || mp.excludedIds.has(id)) return;
     const r = mp.round;
     if (!r.clueAvailable(clue)) return;
     if (mp.pointPool < clue.cost) return;
-    const res = r.buyClue(id, { auto: true });
+    const res = r.buyClue(id, { auto });
     if (!res.ok) return;
     mp.pointPool = Math.max(0, mp.pointPool - clue.cost);
     const cur = mp.players[mp.turnOrder[mp.currentTurnPos]];
@@ -341,16 +410,37 @@ export function createMultiplayer({ mount, config, data, params = {}, onExit }) 
     if (mp.phase !== 'reveal') return;
     const r = mp.round;
     const available = data.clues.filter((c) =>
-      !mp.excludedIds.has(c.id) && !(c.id in r.revealedClues) && r.clueAvailable(c) && mp.pointPool >= c.cost);
+      !mp.excludedIds.has(c.id) && r.clueAvailable(c) && mp.pointPool >= r.clueCurrentCost(c.id));
     if (!available.length) { skipReveal(); return; }
     const pen = data.multiClue?.randomRevealCategoryPenalty ?? 0.25;
-    const weights = available.map((c) => (1 / Math.max(1, c.cost)) * (c.cat === mp.lastRandomRevealCat ? pen : 1));
+    const weights = available.map((c) => (1 / Math.max(1, r.clueCurrentCost(c.id))) * (c.cat === mp.lastRandomRevealCat ? pen : 1));
     const total = weights.reduce((a, b) => a + b, 0);
     let pick = available[available.length - 1];
     let rr = rng() * (total || 1);
     for (let i = 0; i < available.length; i++) { rr -= weights[i]; if (rr <= 0) { pick = available[i]; break; } }
     mp.lastRandomRevealCat = pick.cat;
-    revealClue(pick.id);
+    revealClue(pick.id, { auto: true });
+  }
+
+  // "By category" clue selection (#11/#15b.iii): a category header click reveals
+  // a random clue from THAT category only. Mirrors revealRandom()'s pattern
+  // (same excludedIds/pointPool awareness) rather than the engine's own
+  // autoRevealFromCategory, since only this local pool understands exclusions.
+  function revealFromCategory(catId) {
+    if (mp.phase !== 'reveal') return;
+    const r = mp.round;
+    if (r.categoryDiversityBlocked(catId)) return; // header should already be disabled
+    const available = data.clues.filter((c) =>
+      c.cat === catId && !mp.excludedIds.has(c.id) && r.clueAvailable(c) && mp.pointPool >= r.clueCurrentCost(c.id));
+    if (!available.length) return;
+    const pen = data.multiClue?.randomRevealCategoryPenalty ?? 0.25;
+    const weights = available.map((c) => (1 / Math.max(1, r.clueCurrentCost(c.id))) * (c.cat === mp.lastRandomRevealCat ? pen : 1));
+    const total = weights.reduce((a, b) => a + b, 0);
+    let pick = available[available.length - 1];
+    let rr = rng() * (total || 1);
+    for (let i = 0; i < available.length; i++) { rr -= weights[i]; if (rr <= 0) { pick = available[i]; break; } }
+    mp.lastRandomRevealCat = pick.cat;
+    revealClue(pick.id, { auto: true });
   }
 
   function skipReveal() {
@@ -359,35 +449,7 @@ export function createMultiplayer({ mount, config, data, params = {}, onExit }) 
   }
 
   function applyEvoDeductions() {
-    // Auto-reveal cost-free evolution cross-inferences (ids 8–11: familySize, evoStage, canEvolve, evolvesFrom)
-    const EVO_FIELDS = [
-      { id: 8, field: 'familySize' }, { id: 9, field: 'evoStage' },
-      { id: 10, field: 'canEvolve' }, { id: 11, field: 'evolvesFrom' },
-    ];
-    const r = mp.round;
-    const rv = r.revealedClues;
-    for (let guard = 0; guard < 12; guard++) {
-      let did = false;
-      for (const { id, field } of EVO_FIELDS) {
-        if (id in rv) continue;
-        if (mp.excludedIds.has(id)) continue;
-        const clue = data.clues.find((c) => c.id === id); if (!clue) continue;
-        // Only auto-reveal if logically deducible from what's already shown
-        const fam = rv[8], stage = rv[9], canEvo = rv[10], evoFrom = rv[11];
-        let deducible = false;
-        if (id === 10 && fam != null && stage != null) {
-          deducible = true; // family+stage → can evolve deducible
-        } else if (id === 11 && stage != null) {
-          deducible = (String(stage).includes('1st') === false && String(stage) !== 'standalone'); // non-1st-stage → evolvesFrom = Yes
-        } else if ((id === 8 || id === 9) && (evoFrom != null || canEvo != null)) {
-          deducible = true;
-        }
-        if (!deducible) continue;
-        const res = r.buyClue(id, { auto: true });
-        if (res.ok) did = true;
-      }
-      if (!did) break;
-    }
+    computeAutoDeducedIds(mp.round, mp.excludedIds);
   }
 
   // ---- action block (phase-dependent) -------------------------------------
@@ -403,6 +465,11 @@ export function createMultiplayer({ mount, config, data, params = {}, onExit }) 
         block.append(
           el('button', { class: 'btn-bait', style: { width: '100%' }, onClick: revealRandom }, '\uD83C\uDF6F Reveal a random clue'),
           el('button', { class: 'btn-secondary', style: { width: '100%', marginTop: '8px', fontSize: '12px' }, onClick: skipReveal }, 'Skip reveal'));
+      } else if (mp.clueMode === 'category') {
+        block.append(el('p', { class: 'mp-phase-hint' }, '\u2191 Click a category above to reveal a random clue from it'));
+        if (mp.turnHasRevealed) {
+          block.append(el('button', { class: 'btn-secondary', style: { width: '100%', fontSize: '12px' }, onClick: () => { mp.phase = 'guess'; renderActionBlock(); renderCluePanel(); } }, 'Skip to guess \u25b6'));
+        }
       } else {
         block.append(el('p', { class: 'mp-phase-hint' }, '\u2191 Click a clue above to reveal it'));
         if (mp.turnHasRevealed) {
@@ -522,6 +589,7 @@ export function createMultiplayer({ mount, config, data, params = {}, onExit }) 
   function roundEnd(winnerId, earned) {
     const winner = mp.players[winnerId];
     const poke = mp.round.mystery;
+    markCaught(poke.name); // #17a — hotseat shares one device/tracker, so a win by any player catches it
     const cluesCount = Object.keys(mp.round.revealedClues).length;
     mp.roundHistory.push({
       round: mp.roundNum, pokemon: poke.name, type1: poke.type1, type2: poke.type2,

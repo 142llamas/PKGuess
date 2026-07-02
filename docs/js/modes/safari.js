@@ -1,8 +1,10 @@
 /**
  * @file        js/modes/safari.js
- * @version     1.0.0
+ * @version     1.2.0
  * @updated     2026-06-24
  * @changelog
+ *   1.2.0 — Catch/Seen now go through the shared lib/catch-tracker.js (#17), same storage key, no data loss.
+ *   1.1.0 — Gen 2 mode draws from the full dex (#13).
  *   1.0.0 — Safari Zone, ported from the canonical screen. A SHARED point budget
  *           carries across a shuffled pool of every Pokémon (no replacement).
  *           Each Pokémon: two free starting clues (Generation + BST Range), buy
@@ -16,10 +18,9 @@
  */
 
 import { el, clear, genBar } from '../lib/dom.js';
-import { PokeGuessRound, normalizeName } from '../lib/engine.js';
+import { PokeGuessRound, normalizeName, poolFilterForData, matchesPool } from '../lib/engine.js';
 import { submitScore } from '../lib/leaderboard-data.js';
-
-const CATCH_KEY = 'pokeGuess_catchTracker';
+import { markCaught, markSeen } from '../lib/catch-tracker.js';
 
 export function createSafari({ mount, config, data, params = {}, onExit }) {
   const root = el('div', { class: 'sp-content' });
@@ -39,7 +40,7 @@ export function createSafari({ mount, config, data, params = {}, onExit }) {
   const round = new PokeGuessRound({ genData: data, movelist: {}, rng });
   const genClueId = (clues.find((c) => c.special === 'generation') || {}).id;
   const bstClueId = (clues.find((c) => c.field === 'bstRange') || {}).id;
-  const poolFilter = data.id === 'gen1' ? 'gen1' : data.id === 'gen2' ? 'gen2' : 'both';
+  const poolFilter = poolFilterForData(data.id);
 
   let movelist = {};
   let sf = null; // { startPts, budget, pool, idx, caught }
@@ -50,11 +51,6 @@ export function createSafari({ mount, config, data, params = {}, onExit }) {
     .then((ml) => { movelist = ml || {}; round.movelist = movelist; })
     .catch(() => { movelist = {}; })
     .finally(showConfig);
-
-  // ---- catch tracker (shared with Pokédex) --------------------------------
-  function markCatch(name, status) {
-    try { const d = JSON.parse(localStorage.getItem(CATCH_KEY) || '{}'); d[name.toLowerCase()] = status; localStorage.setItem(CATCH_KEY, JSON.stringify(d)); } catch { /* ignore */ }
-  }
 
   // ---- config -------------------------------------------------------------
   function showConfig() {
@@ -73,10 +69,7 @@ export function createSafari({ mount, config, data, params = {}, onExit }) {
 
   function begin() {
     const startPts = clampInt(root.querySelector('#sf-start-pts')?.value, 50, 999, 200);
-    const pool = shuffle(data.pokedex.filter((p) => {
-      const n = parseInt(p.num, 10);
-      return poolFilter === 'gen1' ? n <= 151 : poolFilter === 'gen2' ? (n >= 152 && n <= 251) : true;
-    }));
+    const pool = shuffle(data.pokedex.filter((p) => matchesPool(p.num, poolFilter)));
     sf = { startPts, budget: startPts, pool, idx: 0, caught: 0 };
     nextMon();
   }
@@ -113,12 +106,13 @@ export function createSafari({ mount, config, data, params = {}, onExit }) {
               el('button', { class: 'guess-btn', onClick: submitFromInput }, 'Catch'),
               el('div', { class: 'autocomplete-list', id: 'sf-ac' })),
             el('div', { class: 'sf-actions' },
-              el('button', { class: 'btn-bait', onClick: throwBait }, '\uD83C\uDF6F Bait (small clue, \u22121 pt)'),
-              el('button', { class: 'btn-rock', onClick: throwRock }, '\uD83E\uDEA8 Rock (big clue, \u22122 pts)'),
+              el('button', { class: 'btn-bait', onClick: throwBait }, '\uD83C\uDF6F Bait (random cheap clue)'),
+              el('button', { class: 'btn-rock', onClick: throwRock }, '\uD83E\uDEA8 Rock (random pricey clue)'),
               el('button', { class: 'btn-run', onClick: run }, '\uD83D\uDC5F Run')),
             el('div', { class: 'safari-discount-note' },
-              el('div', {}, '\uD83C\uDF6F ', el('b', {}, 'Bait'), ' reveals a random cheap clue (<4 pts) for 1 pt less.'),
-              el('div', {}, '\uD83E\uDEA8 ', el('b', {}, 'Rock'), ' reveals a random pricey clue (\u22654 pts) for 2 pts less.')),
+              el('div', {}, '\uD83C\uDF6F ', el('b', {}, 'Bait'), ' reveals a random cheap clue (<4 pts) at its normal cost.'),
+              el('div', {}, '\uD83E\uDEA8 ', el('b', {}, 'Rock'), ' reveals a random pricey clue (\u22654 pts) at its normal cost.'),
+              el('div', {}, '\uD83D\uDC46 ', el('b', {}, 'Choosing a clue yourself costs double'), ' \u2014 pay for the privilege of picking.')),
             el('div', { class: 'guess-feedback', id: 'sf-feedback' }),
             el('div', { class: 'revealed-summary', id: 'sf-revealed' }),
             el('div', { class: 'guess-log', id: 'sf-guesslog' })))),
@@ -222,44 +216,39 @@ export function createSafari({ mount, config, data, params = {}, onExit }) {
         el('div', { class: 'clue-unavail-note' }, 'Not available'));
       return card;
     }
-    if (round.pointsRemaining < cost) card.classList.add('cant-afford');
+    const manualCost = cost * 2;   // #12 — choosing a clue yourself costs double
+    if (round.pointsRemaining < manualCost) card.classList.add('cant-afford');
     if (isMulti && hist.length) { card.classList.add('revealed'); Object.assign(card.style, { background: cat.bg, borderColor: cat.color }); }
     card.append(el('div', { class: 'clue-top' },
       el('span', { class: 'clue-btn-name', style: isMulti && hist.length ? { color: cat.color } : {} }, clue.name),
-      el('span', { class: 'clue-cost-badge', style: { background: dynamicColor(cost) } }, `${cost}pt${cost !== 1 ? 's' : ''}`)));
+      el('span', { class: 'clue-cost-badge', style: { background: dynamicColor(manualCost) } }, `${manualCost}pt${manualCost !== 1 ? 's' : ''}`)));
     for (let i = 0; i < hist.length; i++) card.append(el('div', { class: 'clue-revealed-value', style: { fontSize: i ? '11px' : '12px', opacity: i ? '0.8' : '1' } }, (i ? `#${i + 1} ` : '') + hist[i]));
     card.addEventListener('click', () => buy(clue.id));
     return card;
   }
 
+  // Manual pick — costs DOUBLE (#12). Engine charges 1×; we deduct the 2nd ×.
   function buy(id) {
+    const cost = round.clueCurrentCost(id);
+    if (round.pointsRemaining < cost * 2) { feedback('Not enough points to choose that clue.', '#e06060'); return; }
     const res = round.buyClue(id);
     if (!res.ok) return;
+    round.state.pointsRemaining = Math.max(0, round.state.pointsRemaining - cost); // the extra ×1
     afterSpend();
   }
-  // Bait = reveal a random cheap clue (base cost < 4), 1 pt off
+  // Bait = random cheap clue (base cost < 4) at normal cost
   function throwBait() {
-    const pool = clues.filter((c) => c.cost < 4 && round.clueAvailable(c) && round.pointsRemaining >= Math.max(1, round.clueCurrentCost(c.id) - 1));
+    const pool = clues.filter((c) => c.cost < 4 && round.clueAvailable(c) && round.pointsRemaining >= round.clueCurrentCost(c.id));
     if (!pool.length) { feedback('No cheap clues available!', '#e06060'); return; }
     const c = pool[Math.floor(rng() * pool.length)];
-    if (discountedBuy(c.id, 1)) afterSpend();
+    if (round.buyClue(c.id).ok) afterSpend();
   }
-  // Rock = reveal a random costly clue (base cost >= 4), 2 pts off
+  // Rock = random costly clue (base cost >= 4) at normal cost
   function throwRock() {
-    const pool = clues.filter((c) => c.cost >= 4 && round.clueAvailable(c) && round.pointsRemaining >= Math.max(1, round.clueCurrentCost(c.id) - 2));
+    const pool = clues.filter((c) => c.cost >= 4 && round.clueAvailable(c) && round.pointsRemaining >= round.clueCurrentCost(c.id));
     if (!pool.length) { feedback('No costly clues available!', '#e04040'); return; }
     const c = pool[Math.floor(rng() * pool.length)];
-    if (discountedBuy(c.id, 2)) afterSpend();
-  }
-  // Grant the discount up front so the engine (which charges full price) nets the
-  // reduced cost; revert if the purchase somehow fails.
-  function discountedBuy(id, discount) {
-    const cost = round.clueCurrentCost(id);
-    if (round.pointsRemaining < cost - discount) return false;
-    round.state.pointsRemaining += discount;
-    const r = round.buyClue(id);
-    if (!r.ok) { round.state.pointsRemaining -= discount; return false; }
-    return true;
+    if (round.buyClue(c.id).ok) afterSpend();
   }
   function afterSpend() {
     renderClues();
@@ -271,7 +260,7 @@ export function createSafari({ mount, config, data, params = {}, onExit }) {
 
   function run() {
     if (!sf || round.gameOver) return;
-    markCatch(round.mystery.name, 'seen');
+    markSeen(round.mystery.name);
     feedback(`You ran! It was ${round.mystery.name}.`, '#e0a060');
     setTimeout(() => { if (sf) nextMon(); }, 1000);
   }
@@ -288,7 +277,7 @@ export function createSafari({ mount, config, data, params = {}, onExit }) {
     }
     if (normalizeName(val) === normalizeName(round.mystery.name)) {
       sf.caught++;
-      markCatch(round.mystery.name, 'caught');
+      markCaught(round.mystery.name);
       sf.budget = round.pointsRemaining;
       feedback(`\u2705 Caught ${round.mystery.name}!`, '#50cc80');
       updateBudget();
@@ -331,7 +320,7 @@ export function createSafari({ mount, config, data, params = {}, onExit }) {
   function endGame() {
     if (!sf) return;
     const exhausted = sf.idx >= sf.pool.length && round.pointsRemaining > 0;
-    if (round.mystery && !round.gameOver) markCatch(round.mystery.name, 'seen');
+    if (round.mystery && !round.gameOver) markSeen(round.mystery.name);
     // Submit to leaderboard
     const gen = data.id || 'gen2';
     submitScore(gen, 'safari', { score: done.caught, detail: `budget:${done.startPts} spent:${ptsUsed}` }).catch(() => {});
