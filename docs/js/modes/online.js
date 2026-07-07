@@ -1,8 +1,44 @@
 /**
  * @file        docs/js/modes/online.js
- * @version     1.4.0
- * @updated     2026-06-26
+ * @version     1.5.0
+ * @updated     2026-07-05
  * @changelog
+ *   1.5.0 — Host-disconnect resilience, extended beyond the existing
+ *           tick()-driven duties: the Lobby's "Start game" button and the
+ *           post-game "Start rematch" button were both still gated by a HARD
+ *           `room.hostUid === me.uid` check — meaning if the original host
+ *           disconnected before ever starting the game, or during the
+ *           post-game lobby before triggering a rematch, NOBODY could ever
+ *           act, permanently stuck. Both now use the existing isLeader()
+ *           (now backed by the shared mp-rules.leaderUid so it can't drift
+ *           from race.js's copy). Also fixed a related inconsistency:
+ *           resolveRematchCountdown()'s "nobody stayed opted in" alert was
+ *           gated on isHost() even though this function only ever runs when
+ *           isLeader() is already true (via tick()) — meaning a fallback
+ *           leader resolving the cancellation wouldn't have seen the alert;
+ *           now uses isLeader() consistently. isHost() itself is now unused
+ *           and removed. Added a host-left banner (visible in the lobby, the
+ *           main game screen, and the post-game lobby) telling every player
+ *           when the original host has disconnected and who has taken over.
+ *   1.4.2 — removed the "Skip guess → reveal" button from GTR's guess phase
+ *           (same reasoning as multiplayer.js 1.3.2 — undermined GTR's
+ *           guess-first premise). The unrelated "Skip to guess" button during
+ *           the REVEAL phase is untouched (already correctly GTR-gated).
+ *   1.4.1 — #19: GTR's reveal step (only reached after a wrong guess) let the
+ *           SAME player reveal indefinitely — revealOutcome() just kept the
+ *           phase at 'reveal' for GTR, and the turn only advanced if the
+ *           player happened to click the separate "Skip to guess" button,
+ *           which had no guard at all (could also end a turn with ZERO
+ *           reveals). Directly matches the reported symptom: letting a turn
+ *           expire, then the next player's wrong guess left them stuck
+ *           revealing random clues forever. New shared
+ *           applyRevealAndAdvanceIfGtr() makes GTR's reveal exactly one clue,
+ *           then auto-advances the turn (mirrors the #9 fix in hot-seat's
+ *           multiplayer.js); the "Skip to guess" option is suppressed during
+ *           GTR's mandatory reveal.
+ *           #7: the reveal-phase hints used a "↑" arrow implying the clue
+ *           grid sits above this hint — only true in a stacked mobile layout.
+ *           Dropped the arrow (matches the same fix in multiplayer.js).
  *   1.4.0 — #4 parity with hot-seat: added By-category clue selection, real Category Diversity (Force-Different/Cycle-All), the per-clue "Clue Availability" exclusion panel, and evolution auto-deduction — none of these existed in online at all before. Also fixed the SAME multi-use-clue bug found in multiplayer.js: Random/By-category reveal pools were permanently dropping a multi-use clue (e.g. Reveal One Weakness) after its first use instead of respecting its real cap. Known remaining gap: online’s clue cards use their own `.online-clue` CSS rather than the shared `.clue-btn` styling hot-seat uses, so they now BEHAVE identically but don’t yet LOOK pixel-identical — a further visual-unification pass would need to touch the card DOM structure, which felt like too much additional risk to bundle into the same change.
  *   1.3.0 — #2/#1f: persistent post-game lobby + opt-in rematch with a host-triggered 5s countdown (leader-driven resolution, resilient to the host disconnecting), replacing the old immediate one-click "Play again" that also never reset scores. "Leave room" → "Main menu".
  *   1.2.0 — #17: online never touched the catch tracker — every client now marks Caught/Seen for itself when a round resolves (via renderRoundOver/renderGameOver) or when leaving mid-round.
@@ -28,6 +64,7 @@ import { el, clear } from '../lib/dom.js';
 import {
   seedFor, buildEngine, applyReveals, revealOutcome, guessOutcome,
   nextTurnPos, weightedRandomClue, advanceAfterWin, champion, makeRoomCode, computeAutoDeducedIds,
+  leaderUid as sharedLeaderUid,
 } from '../lib/mp-rules.js';
 import { normalizeName, poolFilterForData } from '../lib/engine.js';
 import { markCaught, markSeen } from '../lib/catch-tracker.js';
@@ -96,17 +133,21 @@ export function createOnline({ mount, config, data, params = {}, onExit }) {
   }
 
   // ---------------------------------------------------------------- role
-  const isHost = () => room && room.hostUid === me.uid;
   const activeUid = () => room && room.turnOrder && room.turnOrder[room.currentTurnPos];
   const isMyTurn = () => room && room.status === 'playing' && activeUid() === me.uid;
-  function leaderUid() {
-    if (!room || !room.players) return null;
-    if (room.players[room.hostUid] && room.players[room.hostUid].connected) return room.hostUid;
-    const order = room.joinOrder || Object.keys(room.players);
-    for (const uid of order) if (room.players[uid] && room.players[uid].connected) return uid;
-    return order[0] || null;
-  }
+  const leaderUid = () => sharedLeaderUid(room);
   const isLeader = () => room && leaderUid() === me.uid;
+  // Host-disconnect resilience: true once the ORIGINAL host (room.hostUid) is
+  // no longer connected and a different player has taken over host duties.
+  const hostHasLeft = () => room && room.hostUid && room.players && room.players[room.hostUid] && !room.players[room.hostUid].connected;
+  function hostLeftBanner() {
+    if (!hostHasLeft()) return null;
+    const origHost = room.players[room.hostUid];
+    const leader = leaderUid();
+    const leaderName = leader === me.uid ? 'you are' : `${(room.players[leader] || {}).name || 'another player'} is`;
+    return el('div', { class: 'host-left-banner' },
+      `\u26A0\uFE0F ${origHost.name || 'The host'} has disconnected \u2014 ${leaderName} now in control.`);
+  }
 
   // ===================================================================== ENTRY
   function showEntry() {
@@ -320,7 +361,8 @@ export function createOnline({ mount, config, data, params = {}, onExit }) {
           `${room.settings.gameMode.toUpperCase()} \u00b7 ${room.settings.clueMode} clues \u00b7 win at ${room.settings.winTarget} pts`),
         el('div', { class: 'mp-form-label', style: { marginTop: '14px' } }, `Players (${n})`),
         playerList(),
-        isHost()
+        hostLeftBanner(),
+        isLeader()
           ? el('button', { class: 'btn-primary', style: { marginTop: '16px', width: '100%' }, disabled: n < 2, onClick: () => startRound(1) }, n < 2 ? 'Waiting for 1+ more\u2026' : 'Start game \u25b6')
           : el('p', { class: 'mp-phase-hint', style: { marginTop: '16px' } }, 'Waiting for the host to start\u2026')));
   }
@@ -343,6 +385,7 @@ export function createOnline({ mount, config, data, params = {}, onExit }) {
     put(root, 
       topbar(el('div', { style: { fontSize: '11px', color: 'var(--text-dim)' } }, `Round ${room.roundNum}`)),
       banner,
+      hostLeftBanner(),
       el('div', { class: 'online-statusbar' },
         el('div', { class: 'points-number' }, `${room.pool} pts`),
         el('div', { class: 'online-turn' },
@@ -429,24 +472,28 @@ export function createOnline({ mount, config, data, params = {}, onExit }) {
     if (!mine) return el('div', { class: 'mp-phase-hint', style: { textAlign: 'center' } }, 'Watching\u2026 it\u2019s not your turn.');
     const block = el('div', { class: 'online-action' });
     if (room.phase === 'reveal') {
+      // #19 — GTR's reveal phase (only reached after a wrong guess) is now
+      // exactly ONE mandatory clue, auto-advancing the turn afterward (see
+      // applyRevealAndAdvanceIfGtr) — so there's nothing to "skip to guess"
+      // for; showing that option was also how a turn could end with ZERO
+      // reveals. RTG's own skip behavior (unreported, unrelated) is unchanged.
+      const gtrForcedReveal = room.settings.gameMode === 'gtr';
       if (room.settings.clueMode === 'random') {
-        put(block,
-          el('button', { class: 'btn-bait', style: { width: '100%' }, onClick: revealRandom }, '\uD83C\uDF6F Reveal a random clue'),
-          el('button', { class: 'btn-secondary', style: { width: '100%', marginTop: '8px' }, onClick: () => skipToGuess() }, 'Skip to guess \u25b6'));
+        put(block, el('button', { class: 'btn-bait', style: { width: '100%' }, onClick: revealRandom }, '\uD83C\uDF6F Reveal a random clue'),
+          gtrForcedReveal ? null : el('button', { class: 'btn-secondary', style: { width: '100%', marginTop: '8px' }, onClick: () => skipToGuess() }, 'Skip to guess \u25b6'));
       } else if (room.settings.clueMode === 'category') {
-        put(block, el('p', { class: 'mp-phase-hint' }, '\u2191 Tap a category to reveal a random clue from it'),
-          el('button', { class: 'btn-secondary', style: { width: '100%' }, onClick: () => skipToGuess() }, 'Skip to guess \u25b6'));
+        put(block, el('p', { class: 'mp-phase-hint' }, 'Tap a category to reveal a random clue from it'),
+          gtrForcedReveal ? null : el('button', { class: 'btn-secondary', style: { width: '100%' }, onClick: () => skipToGuess() }, 'Skip to guess \u25b6'));
       } else {
-        put(block, el('p', { class: 'mp-phase-hint' }, '\u2191 Tap a clue to reveal it'),
-          el('button', { class: 'btn-secondary', style: { width: '100%' }, onClick: () => skipToGuess() }, 'Skip to guess \u25b6'));
+        put(block, el('p', { class: 'mp-phase-hint' }, 'Tap a clue to reveal it'),
+          gtrForcedReveal ? null : el('button', { class: 'btn-secondary', style: { width: '100%' }, onClick: () => skipToGuess() }, 'Skip to guess \u25b6'));
       }
     } else {
       const ds = dsCache[room.settings.gen === 'gen1' ? 1 : 2];
       const input = el('input', { id: 'online-typing', class: 'guess-input', type: 'text', placeholder: 'Which Pok\u00e9mon?', autocomplete: 'off', list: 'online-names', onKeydown: (e) => { if (e.key === 'Enter') doGuess(input.value); } });
       put(block,
         el('div', { class: 'guess-input-wrap' }, input, el('button', { class: 'guess-btn', onClick: () => doGuess(input.value) }, 'Guess')),
-        el('datalist', { id: 'online-names' }, ...ds.data.pokedex.map((p) => el('option', { value: p.name }))),
-        room.settings.gameMode === 'gtr' ? el('button', { class: 'btn-secondary', style: { width: '100%', marginTop: '8px' }, onClick: () => { fb.update(`/rooms/${code}`, { phase: 'reveal' }); } }, 'Skip guess \u2192 reveal') : null);
+        el('datalist', { id: 'online-names' }, ...ds.data.pokedex.map((p) => el('option', { value: p.name }))));
       setTimeout(() => input.focus(), 30);
     }
     return block;
@@ -480,6 +527,27 @@ export function createOnline({ mount, config, data, params = {}, onExit }) {
     });
   }
 
+  // #19 — GTR's reveal step is only ever reached after a wrong guess, and is
+  // exactly ONE mandatory clue: the turn must pass immediately to the next
+  // player afterward (mirrors the #9 fix in hot-seat's multiplayer.js).
+  // Previously revealOutcome's phase for GTR just stayed 'reveal', so the
+  // SAME player could reveal again and again, and the turn only ever advanced
+  // if they happened to click the separate "Skip to guess" button — which had
+  // no guard at all, so it could ALSO end a turn with zero reveals.
+  async function applyRevealAndAdvanceIfGtr(out, deduced, extra = {}) {
+    if (room.settings.gameMode === 'gtr') {
+      const order = room.turnOrder || [];
+      const pos = nextTurnPos(room.currentTurnPos || 0, order.length);
+      await fb.update(`/rooms/${code}`, {
+        pool: out.pool, revealedClueIds: [...out.revealedClueIds, ...deduced], ...extra,
+        currentTurnPos: pos, phase: 'guess', turnDeadline: Date.now() + TURN_MS,
+        updatedAt: Date.now(),
+      });
+    } else {
+      await fb.update(`/rooms/${code}`, { pool: out.pool, revealedClueIds: [...out.revealedClueIds, ...deduced], phase: out.phase, ...extra, updatedAt: Date.now() });
+    }
+  }
+
   async function revealClue(id) {
     if (!isMyTurn() || room.phase !== 'reveal' || room.settings.clueMode !== 'choose') return;
     const excluded = excludedSet();
@@ -495,7 +563,7 @@ export function createOnline({ mount, config, data, params = {}, onExit }) {
     eng.round.buyClue(id, { auto: true });
     const deduced = computeAutoDeducedIds(eng.round, excluded); // #4 — evolution auto-deduction parity
     engineCache.roundNum = -1; // force rebuild next render
-    await fb.update(`/rooms/${code}`, { pool: out.pool, revealedClueIds: [...out.revealedClueIds, ...deduced], phase: out.phase, updatedAt: Date.now() });
+    await applyRevealAndAdvanceIfGtr(out, deduced);
   }
 
   async function revealRandom() {
@@ -517,7 +585,7 @@ export function createOnline({ mount, config, data, params = {}, onExit }) {
     eng.round.buyClue(pick.id, { auto: true });
     const deduced = computeAutoDeducedIds(eng.round, excluded);
     engineCache.roundNum = -1;
-    await fb.update(`/rooms/${code}`, { pool: out.pool, revealedClueIds: [...out.revealedClueIds, ...deduced], phase: out.phase, lastRandomRevealCat: pick.cat, updatedAt: Date.now() });
+    await applyRevealAndAdvanceIfGtr(out, deduced, { lastRandomRevealCat: pick.cat });
   }
 
   // #4 parity — "By category" clue selection (hot-seat already has this).
@@ -536,7 +604,7 @@ export function createOnline({ mount, config, data, params = {}, onExit }) {
     eng.round.buyClue(pick.id, { auto: true });
     const deduced = computeAutoDeducedIds(eng.round, excluded);
     engineCache.roundNum = -1;
-    await fb.update(`/rooms/${code}`, { pool: out.pool, revealedClueIds: [...out.revealedClueIds, ...deduced], phase: out.phase, lastRandomRevealCat: pick.cat, updatedAt: Date.now() });
+    await applyRevealAndAdvanceIfGtr(out, deduced, { lastRandomRevealCat: pick.cat });
   }
 
   function skipToGuess() {
@@ -645,6 +713,7 @@ export function createOnline({ mount, config, data, params = {}, onExit }) {
           // Menu / leaving; Rematch is an opt-in count with a host-triggered
           // 5s countdown that only pulls in whoever is still opted in then.
           el('div', { class: 'identity-section' },
+            hostLeftBanner(),
             el('div', { class: 'identity-label' }, `Lobby \u2014 ${connected.length} still here`),
             el('div', { class: 'sp-start-row' },
               el('button', { class: 'btn-secondary' + (myPlayer.rematch ? ' active' : ''), onClick: toggleRematch },
@@ -652,7 +721,7 @@ export function createOnline({ mount, config, data, params = {}, onExit }) {
               el('span', { class: 'sf-intro' }, `${rematchers.length} player${rematchers.length === 1 ? '' : 's'} want a rematch`)),
             countdownActive
               ? el('div', { class: 'race-rematch-countdown' }, `\u23F3 Rematch starting in ${Math.ceil((room.rematchCountdownEndsAt - Date.now()) / 1000)}s\u2026 (stay opted in to join)`)
-              : (isHost()
+              : (isLeader()
                   ? el('button', { class: 'btn-primary', style: { marginTop: '8px' },
                       disabled: !(myPlayer.rematch && rematchers.some((p) => p.uid !== me.uid)),
                       onClick: startRematchCountdown },
@@ -680,7 +749,7 @@ export function createOnline({ mount, config, data, params = {}, onExit }) {
       .filter((p) => p.rematch && p.connected);
     if (participants.length < 2) {
       try { await fb.update(`/rooms/${code}`, { rematchCountdownEndsAt: null }); } catch { /* ok */ }
-      if (isHost()) { alert('Not enough players stayed opted in for a rematch.'); leaveRoom(); }
+      if (isLeader()) { alert('Not enough players stayed opted in for a rematch.'); leaveRoom(); }
       return;
     }
     const newPlayers = {};

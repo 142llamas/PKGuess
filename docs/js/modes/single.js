@@ -1,8 +1,19 @@
 /**
  * @file        js/modes/single.js
- * @version     1.2.0
- * @updated     2026-06-24
+ * @version     1.2.2
+ * @updated     2026-07-05
  * @changelog
+ *   1.2.2 — #5: leaderboard score now applies engine.js's SCORE_MULTIPLIERS —
+ *           harder settings (Forced Reveal, Random/By-category, stricter
+ *           category diversity) multiply the raw remaining-points score before
+ *           submission, on top of the existing per-difficulty points budget.
+ *           Custom stays unmultiplied and off the leaderboard (unchanged).
+ *           Summary screen now shows "raw × multiplier = final" for a win.
+ *   1.2.1 — #2/#3: fixed greyed-clue help text. "Reveal Second Type" showed
+ *           "Not available" instead of "Need to reveal first type"; the stat
+ *           with-value clues showed "Full spread already shown" even when the
+ *           full spread wasn't shown (the real reason is an unmet base-stat
+ *           prereq). unavailNote now distinguishes these cases. Text-only.
  *   1.2.0 — #17: Single Player never touched the catch tracker at all — a correct guess now marks Caught, and running out of points (via any path: a guess, a card click, or a random/category reveal) marks Seen, via one centralized checkGameOver() helper.
  *   1.1.0 — Gen 2 mode draws from the full dex (#13). Clue grid is now clueMode-aware: Random/By-category cards are read-only; a "Reveal a random clue" button (Random) and clickable category headers (By category) drive reveals instead; category-diversity violations are shown and blocked, not silently ignored (#10/#11/#15b/#15c).
  *   1.0.0 — Single Player screen controller on top of lib/engine.js. Faithful
@@ -21,7 +32,7 @@ import { el, clear, genBar } from '../lib/dom.js';
 import { statSpreadEl } from '../lib/dom.js';
 import { pokemonInfoHTML } from '../lib/pokeinfo.js';
 import { markCaught, markSeen } from '../lib/catch-tracker.js';
-import { PokeGuessRound, normalizeName, poolFilterForData, matchesPool } from '../lib/engine.js';
+import { PokeGuessRound, normalizeName, poolFilterForData, matchesPool, computeScoreMultiplier } from '../lib/engine.js';
 import { submitScore } from '../lib/leaderboard-data.js';
 
 export function createSingle({ mount, config, data, params = {}, onExit }) {
@@ -51,6 +62,7 @@ export function createSingle({ mount, config, data, params = {}, onExit }) {
   let round = null;
   let movelist = {};
   let acIndex = -1;
+  let lastScoreBreakdown = null; // #5 — {raw, mult, finalScore} for the summary screen, or null (custom)
 
   // ---- load movelist (for moveset clues), then show config ----------------
   fetch(`data/movelist-${data.id}.json`)
@@ -119,6 +131,7 @@ export function createSingle({ mount, config, data, params = {}, onExit }) {
   }
 
   function beginRound() {
+    lastScoreBreakdown = null; // #5 — clear any previous round's breakdown
     if (chosen.difficulty === 'custom') {
       chosen.points = clampInt(root.querySelector('#sp-custom-points')?.value, 1, 999, 50);
       chosen.guessCost = clampInt(root.querySelector('#sp-custom-guesscost')?.value, 0, 5, 1);
@@ -375,10 +388,25 @@ export function createSingle({ mount, config, data, params = {}, onExit }) {
   }
 
   function unavailNote(clue) {
+    const rv = round.state.revealedClues;
     if ([3, 4, 5, 6].includes(clue.id)) return 'Confirm \u201Ccaught in wild\u201D first';
     if (clue.id === 12) return 'Needs \u201Cevolves from\u201D = Yes';
     if (clue.id === 15) return 'Both types known';
-    if ([18, 19, 20, 21, 22].includes(clue.id)) return 'Full spread already shown';
+    // #2 — Reveal Second Type (17) requires Reveal One Type (16) first. Because
+    // clueAvailable() already fails on the unmet prereq, the generic
+    // "Requires:" branch in renderCard is never reached for it — so the reason
+    // must be given here rather than falling through to "Not available".
+    if (clue.id === 17) return 'Need to reveal first type';
+    // #3 — stat clues (18 BST range, 19/21 highest/lowest base stat, 20/22
+    // their with-value forms) are only truly blocked by "Full spread already
+    // shown" once the Full Stat Spread (23) is revealed. Otherwise a greyed
+    // with-value clue just needs its base-stat clue revealed first.
+    if ([18, 19, 20, 21, 22].includes(clue.id)) {
+      if (23 in rv) return 'Full spread already shown';
+      if (clue.id === 20) return 'Need highest base stat';
+      if (clue.id === 22) return 'Need lowest base stat';
+      return 'Not available';
+    }
     return 'Not available';
   }
 
@@ -468,10 +496,23 @@ export function createSingle({ mount, config, data, params = {}, onExit }) {
       return;
     }
     if (res.correct) { 
-      // Submit to leaderboard (fire-and-forget — never blocks the UI)
-      const gen = data.id || 'gen2';
-      const detail = `diff:${chosen.difficulty} clues:${totalReveals()} wrong:${round.wrongGuesses.length}`;
-      submitScore(gen, 'single', { score: round.pointsRemaining, detail }).catch(() => {});
+      // #5 — Custom difficulty has no defined multiplier and stays off the
+      // leaderboard entirely (its budget/rules are player-defined, not
+      // comparable to anyone else's) — same as the original design.
+      const mult = computeScoreMultiplier({
+        difficultyId: chosen.difficulty, guessMode: chosen.guessMode,
+        clueMode: chosen.clueMode, catDiversity: chosen.catDiversity,
+      });
+      if (mult != null) {
+        const finalScore = Math.round(round.pointsRemaining * mult);
+        const gen = data.id || 'gen2';
+        const detail = `diff:${chosen.difficulty} guess:${chosen.guessMode} clues:${chosen.clueMode} div:${chosen.catDiversity} raw:${round.pointsRemaining} x${mult.toFixed(2)} reveals:${totalReveals()} wrong:${round.wrongGuesses.length}`;
+        // Submit to leaderboard (fire-and-forget — never blocks the UI)
+        submitScore(gen, 'single', { score: finalScore, detail }).catch(() => {});
+        lastScoreBreakdown = { raw: round.pointsRemaining, mult, finalScore };
+      } else {
+        lastScoreBreakdown = null;
+      }
       markCaught(round.mystery.name); // #17a
       showSummary(); return; 
     }
@@ -554,7 +595,10 @@ export function createSingle({ mount, config, data, params = {}, onExit }) {
             el('div', { class: 'summary-result' }, win ? '\uD83C\uDF89 Correct!' : '\uD83D\uDCA5 Out of points'),
             el('div', { class: 'summary-mon' }, `#${m.num} ${m.name}`),
             el('div', { class: 'gen-bar-label', style: { marginTop: '2px' } }, genLabel),
-            win ? el('div', { class: 'summary-score' }, `Score: ${round.pointsRemaining} pts`) : null),
+            win ? el('div', { class: 'summary-score' },
+              lastScoreBreakdown
+                ? `Score: ${lastScoreBreakdown.finalScore} pts (${lastScoreBreakdown.raw} \u00d7 ${lastScoreBreakdown.mult.toFixed(2)})`
+                : `Score: ${round.pointsRemaining} pts`) : null),
           el('div', { class: 'summary-meta' },
             el('div', {}, `Wrong guesses: ${round.wrongGuesses.length}`),
             el('div', {}, `Clues revealed: ${totalReveals()}`))),

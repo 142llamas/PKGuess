@@ -1,8 +1,37 @@
 /**
  * @file        js/modes/victoryroad.js
- * @version     1.2.0
- * @updated     2026-06-24
+ * @version     1.3.0
+ * @updated     2026-07-05
  * @changelog
+ *   1.3.0 — #6: full tier rework, made slightly easier per spec.
+ *           (a) every tier's threshold shifted +1 (Tier 1 now covers up to
+ *           streak 5 instead of 4, Tier 2 up to 10 instead of 9, etc. — a flat
+ *           +1 per tier, not cumulative).
+ *           (b) Habitat now also shown in Tier 2 (was Tier 1 only); First
+ *           Anime Appearance now also shown in Tier 3 (was Tiers 1–2 only);
+ *           "Has an Immunity" added to Tiers 1–4 (brand new — required
+ *           ordering it BEFORE the type-reveal slots, since engine.js locks
+ *           that clue once both types are known, and the naive slot order
+ *           silently locked it out every time — caught via direct testing,
+ *           not just a code read); one-weakness/one-resistance reveals added
+ *           to Tiers 3–8 via a new combined round-robin helper
+ *           (revealUpToCombined) — a TOTAL of 6/5/4/3/2/1 per tier, drawn from
+ *           both multi-use clues so a mon short on one type still fills the
+ *           budget from the other; Highest/Lowest Base Stat (without value)
+ *           added to Tier 7.
+ *           (i) the two type clues now render as ONE chip on one line
+ *           ("Fire / Flying") instead of two separate chips.
+ *           (ii) egg moves now render as ONE chip listing every revealed move
+ *           instead of a separate chip per move.
+ *           (iii) weakness/resistance reveals render as ONE chip,
+ *           differentiated with "Weak:"/"Resist:" prefixes and color, instead
+ *           of (previously nonexistent) separate chips.
+ *           Also fixed, found while building (i)/(ii): buyClue's "No more X
+ *           to reveal" exhaustion sentinel was already leaking into
+ *           clueHistory (and therefore onto screen) for any multi-use clue
+ *           pre-revealed past what a mon actually has — pre-existing, just
+ *           less visible with one chip per entry; now filtered out of every
+ *           merged/consolidated display.
  *   1.2.0 — Gen 2 mode draws from the full dex (#13).
  *   1.1.0 — Tier rows expandable/collapsible: click to reveal clue names.
  *   1.0.0 — Victory Road, ported from the canonical screen. Endless streak
@@ -23,23 +52,39 @@ import { submitScore } from '../lib/leaderboard-data.js';
 // Tier definitions (streak thresholds + which clue specials/fields to pre-reveal).
 // Specials/fields listed in render order; the controller resolves them to actual
 // clue IDs at runtime so Gen 1 and Gen 2 work with the same tier table.
+// #6a — every tier's threshold is shifted +1 from the original (each tier now
+// covers one more Pokémon than before: Tier 1 goes up to streak 5 instead of 4,
+// Tier 2 up to 10 instead of 9, etc. — a flat +1 per tier, not cumulative).
+// #6b — made slightly easier per spec: habitat now also shown in Tier 2 (was
+// Tier 1 only); First Anime Appearance now also shown in Tier 3 (was Tiers
+// 1–2 only); "Has an Immunity" added to Tiers 1–4 (new); one-weakness/one-
+// resistance reveals added to Tiers 3–8 via `weakResistCap` (a COMBINED total
+// across both — 6/5/4/3/2/1, decreasing by 1 per tier — handled specially in
+// nextMon(), not as a plain slot, since the count is tier-dependent); Highest/
+// Lowest Base Stat (without value) added to Tier 7.
+// IMPORTANT — slot ORDER matters here: engine.js locks "Has an Immunity"
+// (clue id 15) once BOTH types are already known (a legitimate cross-
+// inference — you could deduce it yourself at that point), so `hasImmunity`
+// MUST be listed before `randomType`/`secondType` in every tier that has all
+// three, or the pre-reveal loop will find it already unavailable by the time
+// it gets there and it will silently never appear.
 const VR_TIERS = [
   { minStreak:   0, label: 'Tier 1',
-    slots: ['generation','evoStage','compMovesetMulti','bstRange','fullStats','randomType','secondType','habitat','eggMoveMulti','firstAnime','gymLeader','e4'] },
-  { minStreak:   5, label: 'Tier 2',
-    slots: ['generation','evoStage','compMovesetMulti','bstRange','fullStats','randomType','secondType','firstAnime','gymLeader','e4'] },
-  { minStreak:  10, label: 'Tier 3',
-    slots: ['generation','evoStage','compMovesetMulti','bstRange','fullStats','randomType','gymLeader','e4'] },
-  { minStreak:  20, label: 'Tier 4',
-    slots: ['generation','evoStage','compMovesetMulti','fullStats','randomType','gymLeader','e4'] },
-  { minStreak:  50, label: 'Tier 5',
-    slots: ['generation','evoStage','compMovesetMulti','fullStats'] },
-  { minStreak: 100, label: 'Tier 6',
-    slots: ['generation','evoStage','compMovesetMulti','highestStat','highestStatVal','lowestStat','lowestStatVal'] },
-  { minStreak: 175, label: 'Tier 7',
-    slots: ['generation','evoStage','compMovesetMulti'] },
-  { minStreak: 200, label: 'Tier 8',
-    slots: ['generation','evoStage','compMovesetMulti'] },
+    slots: ['generation','evoStage','compMovesetMulti','bstRange','fullStats','hasImmunity','randomType','secondType','habitat','eggMoveMulti','firstAnime','gymLeader','e4'] },
+  { minStreak:   6, label: 'Tier 2',
+    slots: ['generation','evoStage','compMovesetMulti','bstRange','fullStats','hasImmunity','randomType','secondType','habitat','firstAnime','gymLeader','e4'] },
+  { minStreak:  11, label: 'Tier 3',
+    slots: ['generation','evoStage','compMovesetMulti','bstRange','fullStats','hasImmunity','randomType','firstAnime','gymLeader','e4'], weakResistCap: 6 },
+  { minStreak:  21, label: 'Tier 4',
+    slots: ['generation','evoStage','compMovesetMulti','fullStats','hasImmunity','randomType','gymLeader','e4'], weakResistCap: 5 },
+  { minStreak:  51, label: 'Tier 5',
+    slots: ['generation','evoStage','compMovesetMulti','fullStats'], weakResistCap: 4 },
+  { minStreak: 101, label: 'Tier 6',
+    slots: ['generation','evoStage','compMovesetMulti','highestStat','highestStatVal','lowestStat','lowestStatVal'], weakResistCap: 3 },
+  { minStreak: 176, label: 'Tier 7',
+    slots: ['generation','evoStage','compMovesetMulti','highestStat','lowestStat'], weakResistCap: 2 },
+  { minStreak: 201, label: 'Tier 8',
+    slots: ['generation','evoStage','compMovesetMulti'], weakResistCap: 1 },
 ];
 
 function getTier(streak) {
@@ -87,6 +132,7 @@ export function createVictoryRoad({ mount, config, data, params = {}, onExit }) 
     randomType: ['randomType', 'type1'],
     secondType: ['secondType', 'type2'],
     battleTower: ['battleTower', 'exampleMovesetMulti', 'exampleMoveset'],
+    hasImmunity: ['immunityYesNo', 'immunities'], // #6 — new slot, added to Tiers 1–4
   };
   const resolveSlot = (slot) => {
     for (const key of (SLOT_ALIASES[slot] || [slot])) {
@@ -95,6 +141,34 @@ export function createVictoryRoad({ mount, config, data, params = {}, onExit }) 
     }
     return null;
   };
+  // #6b — looked up once per session for the combined weakness/resistance
+  // pre-reveal (Tiers 3–8); not a plain SLOT_ALIASES entry because it needs
+  // special round-robin handling, not a single buyClue() call.
+  const weaknessClue = clueBySpecial.get('weaknessMulti') || clueByField.get('allWeaknesses');
+  const resistanceClue = clueBySpecial.get('resistanceMulti') || clueByField.get('allResistances');
+
+  /** Reveal up to `capCount` clue values total, drawn round-robin from
+   *  `clueObjs` (each independently multi-use) — used for #6b's combined
+   *  weakness+resistance budget. Stops once the cap is reached OR every
+   *  candidate has genuinely run out (a full round-robin pass with no
+   *  successful reveal), so a mon with fewer weaknesses/resistances than the
+   *  cap doesn't get padded with fake repeats or stuck retrying forever. */
+  function revealUpToCombined(round, clueObjs, capCount) {
+    const objs = clueObjs.filter(Boolean);
+    if (!objs.length || !capCount) return;
+    const exhausted = new Set();
+    let revealed = 0, idx = 0, guard = 0;
+    while (revealed < capCount && exhausted.size < objs.length && guard < capCount * objs.length + objs.length) {
+      guard++;
+      const clue = objs[idx % objs.length];
+      idx++;
+      if (exhausted.has(clue.id)) continue;
+      if (!round.clueAvailable(clue)) { exhausted.add(clue.id); continue; }
+      const res = round.buyClue(clue.id, { auto: true });
+      if (res.ok && res.value && !String(res.value).startsWith('No more')) revealed++;
+      else exhausted.add(clue.id); // genuinely exhausted (or failed) — never retry this one
+    }
+  }
 
   fetch(`data/movelist-${data.id}.json`)
     .then((r) => (r.ok ? r.json() : {}))
@@ -195,6 +269,11 @@ export function createVictoryRoad({ mount, config, data, params = {}, onExit }) 
       if (r.clueAvailable(clue)) r.buyClue(clue.id, { auto: true });
       seen.add(clue.id);
     }
+    // #6b — weakness/resistance: a COMBINED total per tier (6/5/4/3/2/1 for
+    // Tiers 3–8), drawn round-robin from both multi-use clues so a mon short
+    // on one type still fills the budget from the other, stopping once the
+    // cap is hit or the mon genuinely has nothing left to reveal.
+    if (tier.weakResistCap) revealUpToCombined(r, [weaknessClue, resistanceClue], tier.weakResistCap);
     showGame();
   }
 
@@ -247,12 +326,12 @@ export function createVictoryRoad({ mount, config, data, params = {}, onExit }) 
   // ---- CLUE RIBBON ---------------------------------------------------------
   // Chips grouped by category, in the canonical ribbon order
   const RIBBON_ORDER_SPECIALS = [
-    'generation', 'evoStage', 'randomType', 'secondType', 'bstRange', 'habitat',
+    'generation', 'evoStage', 'randomType', 'secondType', 'weaknessMulti', 'resistanceMulti', 'immunityYesNo', 'bstRange', 'habitat',
     'gymLeader', 'e4', 'firstAnime', 'fullStats', 'highestStat', 'highestStatVal',
     'lowestStat', 'lowestStatVal', 'eggMoveMulti', 'compMovesetMulti',
   ];
   const RIBBON_ORDER_FIELDS = [
-    'generation', 'evoStage', 'type1', 'type2', 'bstRange', 'habitat',
+    'generation', 'evoStage', 'type1', 'type2', 'allWeaknesses', 'allResistances', 'immunities', 'bstRange', 'habitat',
     'gymLeader', 'e4Rival', 'e4RedCal', 'firstAnime', 'fullStats',
     'highestStat', 'highestStatVal', 'lowestStat', 'lowestStatVal',
   ];
@@ -283,6 +362,12 @@ export function createVictoryRoad({ mount, config, data, params = {}, onExit }) 
     const skip = new Set();
     const highValId = clueByField.get('highestStatVal')?.id;
     const lowValId = clueByField.get('lowestStatVal')?.id;
+    // #6i — merge the two type clues onto one line instead of two separate chips.
+    const typeAId = (clueBySpecial.get('randomType') || clueByField.get('type1'))?.id;
+    const typeBId = (clueBySpecial.get('secondType') || clueByField.get('type2'))?.id;
+    // #6iii — merge weakness+resistance reveals into one chip, differentiated.
+    const weaknessId = weaknessClue?.id;
+    const resistanceId = resistanceClue?.id;
     ids.forEach((id) => {
       const clue = r.clue(id); if (!clue) return;
       if (skip.has(id)) return;
@@ -290,7 +375,18 @@ export function createVictoryRoad({ mount, config, data, params = {}, onExit }) 
       const isEgg = clue.special === 'eggMoveMulti' || clue.special === 'eggMove';
       const isHighStat = clue.field === 'highestStat';
       const isLowStat = clue.field === 'lowestStat';
-      const entries = hist[id] || [rv[id]];
+      const isTypeA = typeAId != null && id === typeAId;
+      const isTypeB = typeBId != null && id === typeBId;
+      const isWeakness = weaknessId != null && id === weaknessId;
+      const isResistance = resistanceId != null && id === resistanceId;
+      // #6 finding: buyClue's exhaustion sentinel ("No more X to reveal") gets
+      // recorded in clueHistory like any other value when a multi-use clue's
+      // pre-reveal loop runs one call past what the mon actually has (e.g. a
+      // mon with 2 egg moves, pre-revealed up to 3) — this was ALREADY
+      // possible before this change, just less visible with one chip per
+      // entry; consolidating into one line would make it more prominent, so
+      // filter it out here rather than let it leak into the merged display.
+      const entries = (hist[id] || [rv[id]]).filter((v) => !String(v).startsWith('No more'));
 
       if (isComp) {
         entries.forEach((v, i) => {
@@ -301,12 +397,47 @@ export function createVictoryRoad({ mount, config, data, params = {}, onExit }) 
         });
         return;
       }
+      // #6ii — one chip listing every revealed egg move, instead of a
+      // separate chip per move (was taking up multiple lines).
       if (isEgg) {
-        entries.forEach((v, i) => {
-          ribbon.append(el('div', { class: 'vr-clue-chip' },
-            el('div', { class: 'vr-chip-label' }, entries.length > 1 ? `Egg Move ${i + 1}` : 'Egg Move'),
-            el('div', {}, v)));
-        });
+        if (!entries.length) return;
+        ribbon.append(el('div', { class: 'vr-clue-chip' },
+          el('div', { class: 'vr-chip-label' }, entries.length > 1 ? 'Egg Moves' : 'Egg Move'),
+          el('div', { class: 'vr-inline-list' }, entries.join(', '))));
+        return;
+      }
+      // #6i — one chip showing both types side by side ("Fire / Flying")
+      // instead of two separate chips each taking their own line.
+      if (isTypeA || isTypeB) {
+        if (isTypeA) skip.add(typeBId); else skip.add(typeAId);
+        const valA = typeAId != null && typeAId in rv ? rv[typeAId] : null;
+        const valB = typeBId != null && typeBId in rv ? rv[typeBId] : null;
+        if (valA == null && valB == null) return;
+        // secondType's own mono-type sentinel already reads "— (pure X-type)"
+        // — avoid an awkward, redundant "Fire / — (pure Fire-type)".
+        const display = (valA != null && valB != null)
+          ? (String(valB).startsWith('\u2014') ? `${valA} (pure)` : `${valA} / ${valB}`)
+          : (valA ?? valB);
+        ribbon.append(el('div', { class: 'vr-clue-chip' },
+          el('div', { class: 'vr-chip-label' }, 'Type'),
+          el('div', {}, display)));
+        return;
+      }
+      // #6iii — one chip for both weaknesses and resistances, clearly labeled
+      // per group, instead of separate chips (which could each grow to
+      // several lines on their own as more get revealed).
+      if (isWeakness || isResistance) {
+        if (isWeakness) skip.add(resistanceId); else skip.add(weaknessId);
+        const cleanList = (arr) => arr.filter((v) => !String(v).startsWith('No more'));
+        const weakVals = weaknessId != null && (weaknessId in rv) ? cleanList(hist[weaknessId] || [rv[weaknessId]]) : [];
+        const resistVals = resistanceId != null && (resistanceId in rv) ? cleanList(hist[resistanceId] || [rv[resistanceId]]) : [];
+        const parts = [];
+        if (weakVals.length) parts.push(el('span', { class: 'vr-matchup-weak' }, `Weak: ${weakVals.join(', ')}`));
+        if (resistVals.length) parts.push(el('span', { class: 'vr-matchup-resist' }, `Resist: ${resistVals.join(', ')}`));
+        if (!parts.length) return;
+        ribbon.append(el('div', { class: 'vr-clue-chip' },
+          el('div', { class: 'vr-chip-label' }, 'Type Matchups'),
+          el('div', { class: 'vr-matchup-row' }, ...parts)));
         return;
       }
       // Merge highest stat + value

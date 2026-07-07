@@ -1,8 +1,56 @@
 /**
  * @file        js/modes/draftbattle.js
- * @version     1.10.0
- * @updated     2026-06-26
+ * @version     1.12.1
+ * @updated     2026-07-05
  * @changelog
+ *   1.12.1 — #1: daily results' Share button now passes playerName (with a
+ *           stable Player_NNNNN fallback) and a dailyChallengeLink() deep
+ *           link into buildSummaryText, matching the exact spec'd format.
+ *   1.12.0 — #14/#15: replaced the old "challenge one throne at a time, claim,
+ *           share, repeat" flow with a single Elite-4 GAUNTLET. "Challenge the
+ *           Elite 4" (from Draft Complete or the status grid) now auto-battles
+ *           Will→Koga→Bruno→Lance→All-Time in strict order — ALWAYS starting
+ *           fresh at Will, so a new build can dethrone even the player's own
+ *           earlier champions — stopping at the first loss or after clearing
+ *           All-Time. One results screen (a row per matchup with an on-demand
+ *           "▶ Watch" replay reusing the existing battle-log playback UI, plus
+ *           a placement message), one Claim (of the highest spot reached —
+ *           still goes through the existing #14a cascade/#12 write-
+ *           verification unchanged), one Share. The status grid (throneCard/
+ *           renderThrones) is now pure status display (holder + History) with
+ *           a single gauntlet-entry button — no more per-tier unlock gating,
+ *           since the gauntlet no longer needs one (see below); the #12/#13
+ *           persisted progress rank is repurposed as a non-gating "🏅 Your
+ *           best" badge. startBattle() (only ever used by the old per-tier
+ *           flow) was removed as dead code.
+ *           #14: added a "📤 Share My Pokémon" button to Draft Complete —
+ *           renders a canvas card (name/types/stats/moves, via lib/share.js's
+ *           new drawMonCardToCanvas) and shares it (Web Share API with an
+ *           image file where supported, falling back to a PNG download +
+ *           copied caption). The gauntlet's consolidated Share reuses the same
+ *           card image alongside the new "took the Nth spot" placement text.
+ *   1.11.0 — #10: "View Results" (daily-gate) and "← Results" (post-battle)
+ *           buttons passed their bare onClick handler directly, so the click
+ *           MouseEvent was received as showDailyResults's dateStrOverride
+ *           argument — treated as a truthy historical date, which is why
+ *           re-opening results showed YESTERDAY's instead of today's. Both
+ *           now wrap the call so no argument is passed.
+ *           #12/#13: the Elite-4 unlock gate was based on "do you currently,
+ *           physically hold the previous tier's throne" — but the #14a
+ *           one-throne cascade AND every tier's own cadence reset both
+ *           legitimately vacate a throne the player already beat, silently
+ *           relocking everything above it. Unlock is now gated on a separate,
+ *           monotonic "highest tier ever reached" value persisted at
+ *           /draft/progress/{uid} (see draft.js's isTierUnlocked/
+ *           nextProgressRank) that a later vacate can't erase. claimThrone()
+ *           also now VERIFIES both the throne write and the progress write
+ *           with a follow-up read (mirroring submitDaily's existing pattern)
+ *           instead of reporting success on an unconfirmed write — directly
+ *           addresses "doesn't correctly let you claim the spot."
+ *           Also: added params._getFirebase/_getIdentity test-injection hooks
+ *           (the same seam race.js/online.js already use) so throne/daily
+ *           logic can be exercised against a real fake Firebase in tests
+ *           instead of only the "offline" no-op path.
  *   1.10.0 — #9: daily results now has a "See Yesterday’s Results" button (Central-Time date math reused from today’s), with a "Today’s Results" button to return; showDailyResults()/renderDailyResults() generalized to take an optional historical date instead of always reading ctx.dateStr.
  *   1.9.0 — #14a: claimThrone() now enforces the one-spot-per-Pokémon rule via draft.js’s resolveThroneCascade, with a distinct on-screen message for each outcome (claimed + vacated, or kept the existing higher spot). throneCard() now threads the defeated holder’s full mon/uid through to the battle result so the cascade has what it needs.
  *   1.8.0 — #7: each Elite-4 tier’s NPC now scales to a target base-stat-total band (Will 425–450, Koga 475–500, Bruno 525–550, Lance 575–600) instead of drafting with the same natural stat distribution a player gets. The All-Time Champion tier is intentionally left unscaled (the spec didn’t define a band for it).
@@ -44,11 +92,12 @@
 
 import { el, clear, statSpreadEl } from '../lib/dom.js';
 import {
-  DraftSession, autoDraft, autoDraftScaled, resolveThroneCascade, TIER_RANK, buildSpeciesList, buildLearnsetMap, runMatch, toRealStats,
+  DraftSession, autoDraft, autoDraftScaled, resolveThroneCascade, TIER_RANK, nextProgressRank,
+  buildSpeciesList, buildLearnsetMap, runMatch, toRealStats,
 } from '../lib/draft-adapter.js';
 import {
   centralDateStr, centralPeriodKey, seedFromDate, seedFromString, buildSummaryText,
-  copyToClipboard, shareWhatsApp,
+  copyToClipboard, shareWhatsApp, shareMonCardImage, draftBattleLink, dailyChallengeLink, stablePlayerFallbackName,
 } from '../lib/share.js';
 
 const STAT_LABELS = { hp: 'HP', atk: 'Atk', def: 'Def', spc: 'Spc', spa: 'SpA', spd: 'SpD', spe: 'Spe' };
@@ -67,9 +116,8 @@ const TIERS = [
   challengeLabel: t.stage ? `Elite 4 \u2013 Stage ${t.stage}` : 'Greatest Pok\u00e9mon of All Time',
   label: `${t.cadence} \u2013 ${t.npc}`,   // legacy fallback
 }));
+const TIER_KEYS_IN_ORDER = TIERS.map((t) => t.key);  // #12/#13 — used to map a progress rank back to a tier for the "personal best" badge
 const BATTLE_N = 501;          // SPEC-locked sample count
-const lazyIdentity = () => import('../lib/identity.js').then((m) => m.getIdentity());
-const lazyFirebase = () => import('../lib/firebase.js').then((m) => m.getFirebase());
 
 export function createDraftBattle({ mount, config, data, params = {}, onExit }) {
   const root = el('div', { class: 'draft-root' });
@@ -78,6 +126,13 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
 
   const variant = params.variant || 'freeplay';
   const isDaily = variant === 'daily';
+
+  // Testable: params._getFirebase / params._getIdentity inject fakes (same seam
+  // race.js and online.js already use) — falls back to the real lazy CDN import
+  // in production. This lets throne/daily logic (#10/#12/#13) be exercised
+  // against a real fake Firebase instead of only the "offline" no-op path.
+  const lazyFirebase = params._getFirebase || (() => import('../lib/firebase.js').then((m) => m.getFirebase()));
+  const lazyIdentity = params._getIdentity || (() => import('../lib/identity.js').then((m) => m.getIdentity()));
 
   let pendingPicks = [];   // [{type,key?,value?}] — cleared on confirm or reroll
   let toast = null;
@@ -139,7 +194,7 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
           el('p', { class: 'sf-intro', style: { textAlign: 'center' } },
             'You\u2019ve already completed today\u2019s draft challenge. Come back tomorrow for a new one!'),
           el('div', { class: 'summary-actions' },
-            el('button', { class: 'btn-primary', onClick: showDailyResults }, 'View Results'),
+            el('button', { class: 'btn-primary', onClick: () => showDailyResults() }, 'View Results'),
             el('button', { class: 'btn-secondary', onClick: () => onExit && onExit() }, '\u2190 Main Menu')))));
   }
 
@@ -396,7 +451,9 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
     const actions = isDaily
       ? [el('button', { class: 'btn-primary', onClick: submitDaily }, '\uD83D\uDCE4 Submit & See Results'),
          el('button', { class: 'btn-secondary', onClick: () => onExit && onExit() }, '\u2190 Main Menu')]
-      : [el('button', { class: 'btn-primary', onClick: showThrones }, '\u2694\uFE0F Challenge the Elite 4'),
+      : [el('button', { class: 'btn-primary', onClick: runGauntlet }, '\u2694\uFE0F Challenge the Elite 4'),
+         // #14 — share a card image of this exact build (name → types → stats → moves).
+         el('button', { class: 'btn-secondary', onClick: () => shareDraftedMon(result) }, '\uD83D\uDCE4 Share My Pok\u00e9mon'),
          el('button', { class: 'btn-secondary', onClick: () => onExit && onExit() }, '\u2190 Main Menu')];
 
     clear(root).append(
@@ -416,18 +473,42 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
           el('div', { class: 'summary-actions' }, ...actions))));
   }
 
+  // #14 — share a card image (canvas-rendered: name/types/stats/moves) of the
+  // player's current build, via the Web Share API where available, falling
+  // back to a PNG download + a copied caption.
+  async function shareDraftedMon(result) {
+    const text = `Check out my drafted Pok\u00e9mon!\n${result.name}\n${draftBattleLink()}`;
+    try {
+      const r = await shareMonCardImage(
+        { name: result.name, types: result.types, baseStats: result.baseStats, moves: result.moves },
+        text,
+      );
+      if (r.shared) flash('Shared!');
+      else if (r.downloaded && r.copied) flash('Image downloaded and caption copied \u2014 ready to post!');
+      else if (r.downloaded) flash('Image downloaded!');
+      else if (r.copied) flash('Caption copied! (Image sharing isn\u2019t supported on this browser.)');
+      else flash('Could not share \u2014 please try again.');
+    } catch { flash('Could not share \u2014 please try again.'); }
+  }
+
   // ===== THRONE (free-play) =================================================
   async function showThrones() {
     stopPlay();
     clear(root).append(spinner('Summoning the champions\u2026'));
-    let raw = null, connected = true;
+    let raw = null, connected = true, myProgressRank = 0;
     try {
       if (!firebase) firebase = await lazyFirebase();
       if (!identity) identity = await lazyIdentity();
       raw = await firebase.get('/draft/throne');   // null simply means "no one has claimed yet"
+      // #12/#13 — a player's UNLOCK progress is tracked separately from who
+      // currently, physically holds each throne (see isTierUnlocked's doc
+      // comment in draft.js for why: vacate-by-cascade and vacate-by-reset
+      // both erase "current holder" without erasing what the player earned).
+      const p = await firebase.get(`/draft/progress/${identity.uid}`);
+      myProgressRank = typeof p === 'number' ? p : 0;
     } catch { connected = false; raw = null; }
     const thrones = TIERS.map((tier) => resolveThrone(tier, raw && raw[tier.key]));
-    renderThrones(thrones, !connected || !firebase);
+    renderThrones(thrones, !connected || !firebase, myProgressRank);
   }
 
   function resolveThrone(tier, stored) {
@@ -444,51 +525,144 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
     return { tier, period, mon: storedFromResult(champ), holderName: tier.npc, holderUid: null, npc: true };
   }
 
-  function renderThrones(thrones, offline) {
-    const uid = identity && identity.uid;
-    const conquered = (t) => !!(t && t.holderUid && uid && t.holderUid === uid);
+  function renderThrones(thrones, offline, myProgressRank = 0) {
     const haveBuild = !!lastResult;
+    const bestTier = myProgressRank > 0 ? TIERS[Math.max(0, TIER_KEYS_IN_ORDER.findIndex((k) => TIER_RANK[k] === myProgressRank))] : null;
     clear(root).append(
       el('div', { class: 'summary-container' },
         el('div', { class: 'summary-card' },
           el('div', { class: 'summary-result', style: { textAlign: 'center', marginBottom: '6px' } }, '\u2694\uFE0F The Elite 4'),
           el('p', { class: 'sf-intro', style: { textAlign: 'center' } },
-            'Beat each member to take their spot \u2014 they must be challenged in order. '
-            + 'Each empties to a fresh champion at its reset \u2014 Day at midnight Central, Week end of Sunday, Month on the 1st, Year on Jan 1; All-Time never resets.'),
+            '\u201CChallenge the Elite 4\u201D battles Will, Koga, Bruno, Lance, and the All-Time Champion in order, '
+            + 'stopping at your first loss \u2014 every run starts fresh at Will, so a new Pok\u00e9mon can dethrone even your own past champions. '
+            + 'Each spot empties to a fresh champion at its own reset \u2014 Day at midnight Central, Week end of Sunday, Month on the 1st, Year on Jan 1; All-Time never resets.'),
           offline ? el('div', { class: 'battle-offline' }, '\u26A0\uFE0F Offline \u2014 showing practice champions; claims won\u2019t be saved.') : null,
+          bestTier ? el('div', { class: 'sf-intro', style: { textAlign: 'center' } }, `\uD83C\uDFC5 Your best: ${bestTier.cardLabel}`) : null,
           !haveBuild ? el('div', { class: 'sf-intro', style: { textAlign: 'center', color: 'var(--text-dim)' } }, 'Draft a team first to challenge them.') : null,
+          haveBuild ? el('div', { class: 'summary-actions', style: { marginBottom: '10px' } },
+            el('button', { class: 'btn-primary', onClick: runGauntlet }, '\u2694\uFE0F Challenge the Elite 4')) : null,
           el('div', { class: 'draft-throne-grid' },
-            ...thrones.map((t, i) => throneCard(t, {
-              // #2 — unlocked only if it's the first tier or you hold the one before it
-              unlocked: i === 0 || conquered(thrones[i - 1]),
-              prevName: i > 0 ? thrones[i - 1].tier.npc : null,
-              haveBuild,
-            }))),
+            ...thrones.map((t) => throneCard(t))),
           el('div', { class: 'summary-actions' },
             haveBuild ? el('button', { class: 'btn-secondary', onClick: () => renderBuild(lastResult) }, '\u2190 My Build') : null,
             el('button', { class: 'btn-secondary', onClick: () => onExit && onExit() }, 'Main Menu')))));
   }
 
-  function throneCard(t, opts = {}) {
+  function throneCard(t) {
     const monName = t.mon.species || t.mon.name;
-    const { unlocked = true, prevName = null, haveBuild = true } = opts;
-    const canChallenge = unlocked && haveBuild;
-    const challengeBtn = canChallenge
-      ? el('button', { class: 'btn-primary', style: { padding: '7px 12px', fontSize: '12px' },
-          onClick: () => { if (!canChallenge) return; startBattle(specFromResult(lastResult), specFromStored(t.mon),
-            { mode: 'throne', tier: t.tier, champLabel: t.holderName, npc: t.npc, champMon: monName, defeatedMon: t.mon, defeatedUid: t.holderUid }); } },
-          'Challenge')
-      : el('button', { class: 'btn-primary throne-locked-btn', disabled: true, style: { padding: '7px 12px', fontSize: '12px', opacity: 0.4, cursor: 'not-allowed', pointerEvents: 'none' } },
-          unlocked ? 'Challenge' : `\uD83D\uDD12 Beat ${prevName} first`);
-    return el('div', { class: 'throne-card' + (unlocked ? '' : ' throne-locked') },
+    return el('div', { class: 'throne-card' },
       el('div', { class: 'throne-tier' }, `${t.tier.icon} ${t.tier.cardLabel}`),
       el('div', { class: 'throne-holder' }, (t.npc ? '' : '\uD83D\uDC51 ') + t.holderName),
       el('div', { class: 'throne-mon' }, ...(t.mon.types || []).map((ty) => el('span', { class: `type-pill type-${ty.toLowerCase()}`, style: { fontSize: '9px', marginRight: '3px' } }, ty))),
       el('div', { class: 'throne-mon', style: { color: 'var(--text-dim)' } }, monName),
       el('div', { class: 'throne-card-btns' },
-        challengeBtn,
         el('button', { class: 'btn-secondary', style: { padding: '7px 10px', fontSize: '11px' },
           onClick: () => showThroneHistory(t.tier) }, 'History')));
+  }
+
+  // ===== ELITE 4 GAUNTLET (#15) ==============================================
+  // Replaces the old "challenge one throne, claim, share, repeat" loop: the
+  // player's CURRENT build auto-battles Will → Koga → Bruno → Lance →
+  // All-Time in strict order, ALWAYS starting fresh at Will (so a new
+  // Pokémon can dethrone even the player's own earlier champions), stopping
+  // at the first loss or after clearing All-Time. One results screen, one
+  // claim (of the highest spot reached), one share.
+  const ORDINALS = ['1st', '2nd', '3rd', '4th', 'Champion'];
+
+  async function runGauntlet() {
+    if (!lastResult) { flash('Draft a team first.'); return; }
+    stopPlay();
+    clear(root).append(spinner('Challenging the Elite 4\u2026'));
+    let raw = null;
+    try {
+      if (!firebase) firebase = await lazyFirebase();
+      if (!identity) identity = await lazyIdentity();
+      raw = await firebase.get('/draft/throne');
+    } catch { raw = null; }
+    const thrones = TIERS.map((tier) => resolveThrone(tier, raw && raw[tier.key]));
+    const challengerSpec = specFromResult(lastResult);
+    // defer so the spinner paints before the (synchronous) sim burst
+    setTimeout(() => {
+      const rows = [];
+      let highestIndex = -1;
+      for (let i = 0; i < TIERS.length; i++) {
+        const t = thrones[i];
+        const champSpec = specFromStored(t.mon);
+        // Same seed formula a direct one-off challenge would have used, so the
+        // outcome of "my mon vs this tier's current champion" is consistent
+        // regardless of how the player got to that matchup.
+        const seed = seedFromString(`${challengerSpec.name}|${champSpec.name}|${t.tier.key}`);
+        const res = runMatch(challengerSpec, champSpec, { gen: 2, moves: ctx.movestats, chart: ctx.chart, n: BATTLE_N, seed });
+        const pb = buildPlayback(res.sampleLog, challengerSpec, champSpec);
+        const beat = res.challengerBeatsChampion;
+        rows.push({ throne: t, champSpec, res, pb, beat });
+        if (beat) highestIndex = i; else break;
+      }
+      renderGauntletResults(rows, highestIndex, challengerSpec);
+    }, 30);
+  }
+
+  function renderGauntletResults(rows, highestIndex, challengerSpec) {
+    stopPlay();
+    const reachedAny = highestIndex >= 0;
+    const placementLabel = reachedAny ? ORDINALS[highestIndex] : null;
+
+    const rowEls = rows.map((row) => {
+      const pct = (row.res.challengerWinPct * 100).toFixed(1);
+      const oppLabel = row.throne.npc ? row.throne.holderName : `${row.throne.holderName}\u2019s ${row.throne.mon.species || row.throne.mon.name}`;
+      return el('tr', {},
+        el('td', {}, `${row.throne.tier.icon} ${row.throne.tier.cardLabel}`),
+        el('td', { style: { color: 'var(--text-dim)', fontSize: '11px' } }, oppLabel),
+        el('td', { style: { fontWeight: 700, color: row.beat ? '#29cc66' : '#e06060' } }, row.beat ? `\u2705 Won (${pct}%)` : `\u274C Lost (${pct}%)`),
+        el('td', {}, el('button', { class: 'btn-secondary', style: { padding: '5px 10px', fontSize: '11px' },
+          onClick: () => renderGauntletRow(row, challengerSpec, () => renderGauntletResults(rows, highestIndex, challengerSpec)) }, '\u25B6 Watch')));
+    });
+
+    const summaryMsg = reachedAny
+      ? `\uD83C\uDFC6 You took the ${placementLabel} spot on the Elite 4!`
+      : `You fell to ${rows[0].throne.tier.npc}.`;
+
+    async function doClaim() {
+      const row = rows[highestIndex];
+      const r = await claimThrone(row.throne.tier, {
+        defeatedUid: row.throne.holderUid, defeatedMon: row.throne.mon, champLabel: row.throne.holderName,
+      });
+      if (r.ok && r.keptHigherTier) {
+        const keptLabel = TIERS.find((t) => t.key === r.keptHigherTier)?.cardLabel || r.keptHigherTier;
+        flash(`You already hold a higher Elite 4 spot (${keptLabel}) \u2014 great run, but that spot stays as-is.`);
+      } else if (r.ok && r.vacatedTier) {
+        const vacatedLabel = TIERS.find((t) => t.key === r.vacatedTier)?.cardLabel || r.vacatedTier;
+        const vacateMsg = r.bumpedName ? `${r.bumpedName} was bumped down to the ${vacatedLabel} spot.` : `The ${vacatedLabel} spot is now open for a fresh challenger.`;
+        flash(`\uD83D\uDC51 You took the ${placementLabel} spot! (${vacateMsg})`);
+      } else if (r.ok) {
+        flash(`\uD83D\uDC51 You took the ${placementLabel} spot!`);
+      } else {
+        flash(r.msg || 'Could not claim the spot.');
+      }
+    }
+
+    clear(root).append(
+      el('div', { class: 'summary-container' },
+        el('div', { class: 'summary-card' },
+          el('div', { class: 'summary-result', style: { textAlign: 'center', marginBottom: '6px' } }, '\u2694\uFE0F Elite 4 Gauntlet Results'),
+          el('div', { class: 'lb-board' },
+            el('table', { class: 'lb-table' },
+              el('thead', {}, el('tr', {}, el('th', {}, 'Tier'), el('th', {}, 'Opponent'), el('th', {}, 'Result'), el('th', {}, ''))),
+              el('tbody', {}, ...rowEls))),
+          el('div', { class: 'summary-score', style: { textAlign: 'center', margin: '10px 0' } }, summaryMsg),
+          reachedAny ? el('div', { class: 'summary-actions', style: { marginBottom: '8px' } },
+            el('button', { class: 'btn-primary', onClick: doClaim }, `\uD83D\uDC51 Claim the ${placementLabel} spot`)) : null,
+          el('div', { class: 'summary-actions' },
+            reachedAny ? el('button', { class: 'btn-secondary', onClick: shareGauntletResult(placementLabel) }, '\uD83D\uDCE4 Share') : null,
+            el('button', { class: 'btn-secondary', onClick: () => renderBuild(lastResult) }, '\u2190 My Build'),
+            el('button', { class: 'btn-secondary', onClick: showThrones }, 'Elite 4 Status'),
+            el('button', { class: 'btn-secondary', onClick: () => onExit && onExit() }, 'Main Menu')))));
+  }
+
+  function renderGauntletRow(row, challengerSpec, onBack) {
+    renderBattle(challengerSpec, row.champSpec, row.res, row.pb, {
+      mode: 'gauntletRow', title: `\u2694\uFE0F ${row.throne.tier.challengeLabel}`, onBack,
+    });
   }
 
   // ===== CHAMPION HISTORY (#7) ==============================================
@@ -536,6 +710,28 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
       takenAt: Date.now(),
       period: centralPeriodKey(tier.key),
     };
+    // #12 — verify the throne write actually landed before reporting success to
+    // the player (mirrors submitDaily's existing post-write verification). A
+    // silent write failure previously still showed "You took the spot!" while
+    // nothing was actually saved — which is exactly what "doesn't unlock Koga"
+    // looks like from the outside.
+    async function verifiedSetThrone() {
+      await fb.set(`/draft/throne/${tier.key}`, rec);
+      const check = await fb.get(`/draft/throne/${tier.key}`);
+      return !!(check && check.holderUid === id.uid && check.period === rec.period);
+    }
+    // #12/#13 — persist the monotonic "highest tier ever reached" progress
+    // value (see isTierUnlocked/nextProgressRank in draft.js) and verify it
+    // the same way, so a partial failure here can't silently strand a player
+    // with earned progress that doesn't actually unlock anything.
+    async function verifiedSaveProgress() {
+      let current = 0;
+      try { const p = await fb.get(`/draft/progress/${id.uid}`); current = typeof p === 'number' ? p : 0; } catch { current = 0; }
+      const next = nextProgressRank(current, tier.key, TIER_RANK);
+      await fb.set(`/draft/progress/${id.uid}`, next);
+      const check = await fb.get(`/draft/progress/${id.uid}`);
+      return check === next;
+    }
     try {
       // #14a — a single Pok\u00e9mon/session can only hold ONE Elite-4 spot at a
       // time. The DECISION (who ends up where) is a pure function so it's
@@ -552,7 +748,8 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
           defeatedUid: opts.defeatedUid, defeatedMon: opts.defeatedMon, champLabel: opts.champLabel,
         });
         if (decision.action === 'claimNewVacateOld') {
-          await fb.set(`/draft/throne/${tier.key}`, rec);
+          if (!(await verifiedSetThrone())) return { ok: false, msg: 'Could not verify the throne was saved. Please try again.' };
+          if (!(await verifiedSaveProgress())) return { ok: false, msg: 'Could not verify your progress was saved. Please try again.' };
           if (decision.bump) {
             await fb.set(`/draft/throne/${decision.vacatedTier}`, {
               mon: decision.bump.mon, holderUid: decision.bump.holderUid,
@@ -570,24 +767,18 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
         return { ok: true, keptHigherTier: decision.keptTier };
       }
 
-      await fb.set(`/draft/throne/${tier.key}`, rec);
+      if (!(await verifiedSetThrone())) return { ok: false, msg: 'Could not verify the throne was saved. Please try again.' };
+      if (!(await verifiedSaveProgress())) return { ok: false, msg: 'Could not verify your progress was saved. Please try again.' };
       try { await fb.push(`/draft/thronehistory/${tier.key}`, { name: rec.holderName, mon: { name: lastResult ? lastResult.name : (rec.mon && rec.mon.name) || '', types: (rec.mon && rec.mon.types) || [], baseStats: (rec.mon && rec.mon.baseStats) || [] }, at: rec.takenAt, period: rec.period }); } catch { /* history is best-effort */ }
       return { ok: true };
     } catch (e) { return { ok: false, msg: 'Save failed: ' + (e.message || e) }; }
   }
 
   // ===== BATTLE =============================================================
-  function startBattle(aSpec, bSpec, opts) {
-    stopPlay();
-    clear(root).append(spinner('Running the battle\u2026'));
-    // defer so the spinner paints before the (synchronous) sim burst
-    setTimeout(() => {
-      const seed = seedFromString(`${aSpec.name}|${bSpec.name}|${opts.tier ? opts.tier.key : 'x'}`);
-      const res = runMatch(aSpec, bSpec, { gen: 2, moves: ctx.movestats, chart: ctx.chart, n: BATTLE_N, seed });
-      const pb = buildPlayback(res.sampleLog, aSpec, bSpec);
-      renderBattle(aSpec, bSpec, res, pb, opts);
-    }, 30);
-  }
+  // (startBattle was removed here — the gauntlet computes each matchup
+  // directly via runMatch/buildPlayback; see runGauntlet above. buildPlayback
+  // and renderBattle below are still used, for the gauntlet's per-row "Watch"
+  // on-demand replay.)
 
   function buildPlayback(sample, aSpec, bSpec) {
     const maxA = aSpec.stats.hp, maxB = bSpec.stats.hp;
@@ -707,29 +898,12 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
       // contextual actions at the end
       const after = el('div', { class: 'battle-after' });
       if (atEnd) {
-        if (opts.mode === 'throne') {
-          if (beat) {
-            const beatName = opts.npc ? opts.tier.npc : opts.champLabel;
-            after.append(el('button', { class: 'btn-primary', onClick: async () => {
-              const r = await claimThrone(opts.tier, opts);
-              if (r.ok && r.keptHigherTier) {
-                const keptLabel = TIERS.find((t) => t.key === r.keptHigherTier)?.cardLabel || r.keptHigherTier;
-                flash(`You already hold a higher Elite 4 spot (${keptLabel}) \u2014 this one stays open for the next challenger.`);
-                showThrones();
-              } else if (r.ok && r.vacatedTier) {
-                const vacatedLabel = TIERS.find((t) => t.key === r.vacatedTier)?.cardLabel || r.vacatedTier;
-                const vacateMsg = r.bumpedName ? `${r.bumpedName} was bumped down to the ${vacatedLabel} spot.` : `The ${vacatedLabel} spot is now open for a fresh challenger.`;
-                flash(`\uD83D\uDC51 You took ${beatName}\u2019s spot in the Elite 4! (${vacateMsg})`);
-                showThrones();
-              } else if (r.ok) { flash(`\uD83D\uDC51 You took ${beatName}\u2019s spot in the Elite 4!`); showThrones(); }
-              else flash(r.msg || 'Could not claim the spot.');
-            } }, `\uD83D\uDC51 Claim ${beatName}\u2019s spot in the Elite 4`));
-          }
-          after.append(
-            el('button', { class: 'btn-secondary', onClick: shareThrone(opts, pct, beat) }, '\uD83D\uDCE4 Share'),
-            el('button', { class: 'btn-secondary', onClick: showThrones }, '\u2190 Elite 4'));
+        if (opts.mode === 'gauntletRow') {
+          // #15 — individual gauntlet matchups are viewed on demand from the
+          // results screen; claiming/sharing happens ONCE there, not per-battle.
+          after.append(el('button', { class: 'btn-secondary', onClick: opts.onBack }, '\u2190 Back to Results'));
         } else if (opts.mode === 'daily') {
-          after.append(el('button', { class: 'btn-secondary', onClick: showDailyResults }, '\u2190 Results'));
+          after.append(el('button', { class: 'btn-secondary', onClick: () => showDailyResults() }, '\u2190 Results'));
         }
       }
       controls.append(after);
@@ -739,23 +913,31 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
       el('div', { class: 'summary-container' },
         el('div', { class: 'summary-card' },
           el('div', { class: 'summary-result', style: { textAlign: 'center', marginBottom: '4px', fontSize: '13px' } },
-            opts.mode === 'throne' ? `\u2694\uFE0F ${opts.tier.challengeLabel}` : '\u2694\uFE0F Battle'),
+            opts.title || (opts.mode === 'gauntletRow' ? `\u2694\uFE0F ${opts.tier.challengeLabel}` : '\u2694\uFE0F Battle')),
           stage, verdict,
           el('div', { class: 'battle-log' }, logBox),
           controls)));
     paint();
   }
 
-  function shareThrone(opts, pct, beat) {
+  // #15 — ONE share after a full gauntlet run (not per-victory): the placement
+  // text PLUS the same drafted-mon card image from #14, in one action.
+  function shareGauntletResult(placementLabel) {
     return async () => {
-      // Who did you beat? The Elite-4 member if it was still NPC-held; otherwise
-      // the player you dethroned (and their Pokémon).
-      const beatName = opts.npc ? opts.champLabel
-        : `${opts.champLabel}\u2019s ${opts.champMon || 'champion'}`;
       const text = buildSummaryText({
-        kind: 'throne', tierLabel: opts.tier.challengeLabel, claimed: beat, beatName,
-        monName: lastResult ? lastResult.name : undefined, winPct: pct,
+        kind: 'gauntlet', placementLabel, monName: lastResult ? lastResult.name : undefined,
+        link: draftBattleLink('thrones'),
       });
+      if (lastResult) {
+        try {
+          const r = await shareMonCardImage(
+            { name: lastResult.name, types: lastResult.types, baseStats: lastResult.baseStats, moves: lastResult.moves },
+            text,
+          );
+          if (r.shared) { flash('Shared!'); return; }
+          if (r.downloaded || r.copied) { showShareSheet(text, r.copied); return; }
+        } catch { /* fall through to text-only share sheet */ }
+      }
       const ok = await copyToClipboard(text);
       showShareSheet(text, ok);
     };
@@ -858,11 +1040,17 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
     const me = myIndex >= 0 ? ranked[myIndex] : null;
     const hasOpponents = ranked.length >= 2;
 
+    // #1 — share text now leads with a deep link into today's Daily Challenge
+    // and shows the PLAYER's name (falling back to a stable "Player_NNNNN"
+    // if they haven't set one, so it doesn't change on every share) instead
+    // of the drafted mon's name.
     const shareText = me ? buildSummaryText({
-      kind: 'daily', dateStr, monName: me.mon.name,
+      kind: 'daily', dateStr,
+      playerName: (identity && identity.name) || stablePlayerFallbackName(myUid),
       rank: hasOpponents ? myIndex + 1 : undefined,
       total: hasOpponents ? ranked.length : undefined,
       winPct: hasOpponents ? me.avg : undefined,
+      link: dailyChallengeLink(),
     }) : '';
 
     const rows = ranked.length

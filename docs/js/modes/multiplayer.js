@@ -1,8 +1,25 @@
 /**
  * @file        js/modes/multiplayer.js
- * @version     1.3.0
- * @updated     2026-06-24
+ * @version     1.3.2
+ * @updated     2026-07-05
  * @changelog
+ *   1.3.2 — removed the "Skip guess / go to reveal" button from GTR's guess
+ *           phase — it let a player skip guessing entirely, undermining
+ *           GTR's whole premise (guess cold, only reveal if wrong).
+ *   1.3.1 — #7: the reveal-phase hint text claimed clues were positioned
+ *           "above" (and used an ↑ arrow) — only true in mobile's stacked
+ *           layout; on desktop the clue grid sits to the LEFT of the side
+ *           panel where this hint lives. Dropped the layout-dependent
+ *           direction entirely ("Click a clue to reveal it") so it's correct
+ *           regardless of viewport. Same fix applied to the sibling
+ *           "by category" hint.
+ *           #9: GTR's reveal step (only ever reached after a wrong guess) let
+ *           the SAME player reveal as many clues as they wanted (revealClue()
+ *           only advanced the phase for RTG, never GTR) and offered a "Skip
+ *           to guess"/"Skip reveal" option that could end a turn with ZERO
+ *           reveals. Now exactly one mandatory reveal, then the turn passes
+ *           automatically to the next player; all skip options are suppressed
+ *           during GTR's reveal phase.
  *   1.3.0 — #4: applyEvoDeductions() now delegates to the shared mp-rules.computeAutoDeducedIds (same logic, single source of truth with online.js).
  *   1.2.0 — #17: hotseat never touched the catch tracker — a round's winner now marks the mystery Caught, and quitting mid-round marks it Seen. Fixed finding: Random/By-category reveal pools permanently dropped a multi-use clue (e.g. Reveal One Weakness) after its FIRST use instead of respecting its real use cap — mpCard() also now shows per-use reveal history instead of collapsing multi-use clues to their latest value only. Cost checks use the live current cost, not the stale base cost.
  *   1.1.0 — Gen 2 mode draws from the full dex (#13). Added "By category" clue selection + a real Category Diversity setting (previously never reached the engine, so Force-Different/Cycle-All were silent no-ops in hotseat). Random/By-category cards are now read-only; manual reveals are subject to the diversity rule instead of always bypassing it (#10/#11/#15b/#15c).
@@ -399,6 +416,13 @@ export function createMultiplayer({ mount, config, data, params = {}, onExit }) 
     cur.clueCount++; cur.clueCostTotal += clue.cost;
     mp.turnHasRevealed = true;
     applyEvoDeductions();
+    if (mp.gameMode === 'gtr') {
+      // #9 — GTR's reveal phase is only ever reached after a wrong guess, and
+      // is exactly ONE mandatory clue: the turn passes immediately to the next
+      // player. No further reveals, no skipping back to guess yourself.
+      nextTurn();
+      return;
+    }
     if (mp.gameMode === 'rtg') mp.phase = 'guess';
     updatePool();
     renderCluePanel();
@@ -461,18 +485,25 @@ export function createMultiplayer({ mount, config, data, params = {}, onExit }) 
       `${cur.name}\u2019s turn \u2014 `, el('span', { class: 'mp-phase-label' },
         mp.phase === 'reveal' ? 'reveal a clue' : 'make a guess')));
     if (mp.phase === 'reveal') {
+      // #9 — GTR's reveal phase (only reached after a wrong guess) must yield
+      // exactly one reveal: no "skip reveal" (which would let the turn end
+      // with ZERO reveals) and no "skip to guess" (which would let the SAME
+      // player guess again instead of passing the turn, or stop short of the
+      // reveal revealClue() now forces automatically anyway).
+      const gtrForcedReveal = mp.gameMode === 'gtr';
       if (mp.clueMode === 'random') {
-        block.append(
-          el('button', { class: 'btn-bait', style: { width: '100%' }, onClick: revealRandom }, '\uD83C\uDF6F Reveal a random clue'),
-          el('button', { class: 'btn-secondary', style: { width: '100%', marginTop: '8px', fontSize: '12px' }, onClick: skipReveal }, 'Skip reveal'));
+        block.append(el('button', { class: 'btn-bait', style: { width: '100%' }, onClick: revealRandom }, '\uD83C\uDF6F Reveal a random clue'));
+        if (!gtrForcedReveal) {
+          block.append(el('button', { class: 'btn-secondary', style: { width: '100%', marginTop: '8px', fontSize: '12px' }, onClick: skipReveal }, 'Skip reveal'));
+        }
       } else if (mp.clueMode === 'category') {
-        block.append(el('p', { class: 'mp-phase-hint' }, '\u2191 Click a category above to reveal a random clue from it'));
-        if (mp.turnHasRevealed) {
+        block.append(el('p', { class: 'mp-phase-hint' }, 'Click a category to reveal a random clue from it'));
+        if (!gtrForcedReveal && mp.turnHasRevealed) {
           block.append(el('button', { class: 'btn-secondary', style: { width: '100%', fontSize: '12px' }, onClick: () => { mp.phase = 'guess'; renderActionBlock(); renderCluePanel(); } }, 'Skip to guess \u25b6'));
         }
       } else {
-        block.append(el('p', { class: 'mp-phase-hint' }, '\u2191 Click a clue above to reveal it'));
-        if (mp.turnHasRevealed) {
+        block.append(el('p', { class: 'mp-phase-hint' }, 'Click a clue to reveal it'));
+        if (!gtrForcedReveal && mp.turnHasRevealed) {
           block.append(el('button', { class: 'btn-secondary', style: { width: '100%', fontSize: '12px' }, onClick: () => { mp.phase = 'guess'; renderActionBlock(); renderCluePanel(); } }, 'Skip to guess \u25b6'));
         }
       }
@@ -486,9 +517,7 @@ export function createMultiplayer({ mount, config, data, params = {}, onExit }) 
           inp,
           el('button', { class: 'guess-btn', onClick: submitFromInput }, 'Guess'),
           el('div', { class: 'autocomplete-list', id: 'mp-ac' })),
-        el('div', { class: 'guess-feedback', id: 'mp-feedback' }),
-        ...(mp.gameMode === 'gtr' ? [el('button', { class: 'btn-secondary', style: { width: '100%', marginTop: '8px', fontSize: '12px' },
-          onClick: () => { mp.phase = 'reveal'; renderActionBlock(); renderCluePanel(); } }, 'Skip guess / go to reveal')] : []));
+        el('div', { class: 'guess-feedback', id: 'mp-feedback' }));
       setTimeout(() => inp.focus(), 30);
     }
   }

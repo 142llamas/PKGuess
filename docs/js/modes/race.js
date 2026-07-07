@@ -1,8 +1,64 @@
 /**
  * @file        docs/js/modes/race.js
- * @version     2.1.0
- * @updated     2026-07-01
+ * @version     2.2.0
+ * @updated     2026-07-05
  * @changelog
+ *   2.2.0 — Host-disconnect resilience, ported from online.js's isLeader()
+ *           pattern via the newly-shared mp-rules.leaderUid() (previously a
+ *           known, disclosed gap: race.js used a hard `room.hostUid ===
+ *           me.uid` check everywhere). Every action previously gated on that
+ *           hard check now goes through isLeader() instead: the individual
+ *           and team-builder lobbies' "Start" buttons, the individual and
+ *           team post-game "Start rematch" buttons, the turn-timeout/round-
+ *           ending duties (maybeEndGameAsHost/maybeEndTeamGameAsHost), and
+ *           the rematch-countdown resolution trigger. `room.hostUid` itself
+ *           is untouched — it still identifies the original creator for the
+ *           crown-icon display; only WHO currently has authority to act
+ *           changes. Added a host-left banner (lobby, team lobby, and both
+ *           game-over screens) telling every player when the original host
+ *           has disconnected and who has taken over.
+ *           Found and fixed along the way: `renderTeamGameOver()` was
+ *           missing its own `bestByCol`/`worstByCol` array declaration
+ *           entirely (renderGameOver's individual-mode copy had it;
+ *           renderTeamGameOver's did not) — a `ReferenceError` thrown the
+ *           moment BOTH teams' game-over screen tried to render. This was
+ *           newly EXPOSED (not introduced) by the earlier #17 fix: before
+ *           that fix, the shared cap-timer interval never correctly called
+ *           team mode's own ending logic, so this exact code path was
+ *           unreachable via that route. Root-caused via direct instrumentation
+ *           after ruling out every host-resilience change individually as the
+ *           cause (none of them were) — confirmed by reverting ALL of this
+ *           entry's changes and finding race-teams.smoke.mjs's #17 assertion
+ *           still failing, which is what led to finding the real bug instead
+ *           of continuing to chase a false lead. Also hardened
+ *           race.smoke.mjs's and race-teams.smoke.mjs's fake Firebase: a
+ *           write triggered synchronously from within another write's own
+ *           listener callback was being silently dropped by a bare
+ *           reentrancy guard (`if (notifying) return;`) instead of queued —
+ *           real Firebase is eventually consistent but never loses a write.
+ *   2.1.2 — #17: startCapTimer()'s shared 1-second interval unconditionally
+ *           called the INDIVIDUAL-mode renderProgressStrip()/
+ *           maybeEndGameAsHost() even in a team game (both render() and
+ *           renderTeam() start the SAME timer) — hijacking the standings
+ *           strip with a bogus "everyone stuck at 0/target" per-player
+ *           display (team progress lives in teamState, never in a player's
+ *           own `solved`), and giving the game-over check no CORRECT,
+ *           periodic second chance to run. Root-caused via a deterministic
+ *           multi-client repro: if the reactive end-of-game write from one
+ *           client's winning guess doesn't reach every other listener on the
+ *           first try, an individual client could get stuck showing a stale
+ *           "waiting for the other team" screen indefinitely, even though the
+ *           game had genuinely ended — matching "correctly guessing the
+ *           pokemon not recognized." Interval now dispatches to the correct
+ *           team-aware or individual pair of functions every second, exactly
+ *           like render()/renderTeam() already do, so it self-heals within a
+ *           second even if a reactive update is ever missed.
+ *   2.1.1 — #16: individual (non-team) room create AND join failed with "Could
+ *           not create/join the room" because the player object was written with
+ *           `team: undefined`, and the Firebase RTDB SDK throws synchronously on
+ *           any undefined value in a set()/update(). Team mode wrote `team:null`
+ *           (legal), which is why only team mode worked. Fix: omit `team` unless
+ *           team mode is on. (No behavior change to team mode.)
  *   2.1.0 — #3 Team Mode: a "Team Mode" toggle on room creation; a
  *           team-builder lobby (manual assign per player + a Randomize Teams
  *           button, even split or n/n+1 for odd counts); each team shares ONE
@@ -48,7 +104,7 @@
 
 import { el, clear } from '../lib/dom.js';
 import { normalizeName } from '../lib/engine.js';
-import { makeRoomCode, seedFor, buildRevealSequence, makeRng } from '../lib/mp-rules.js';
+import { makeRoomCode, seedFor, buildRevealSequence, makeRng, leaderUid as sharedLeaderUid } from '../lib/mp-rules.js';
 
 const MAX_PLAYERS = 12;
 const REVEAL_INTERVAL_MS = 5000;
@@ -188,8 +244,12 @@ export function createRace({ mount, config, data, params = {}, onExit }) {
   async function createRoom(settings) {
     code = makeRoomCode();
     const seed = (Math.random() * 2 ** 31) | 0;
-    const player = { name: me.name, connected: true, left: false, solved: 0, splits: [], finishedAt: null, rematch: false, joinedAt: Date.now(),
-      team: settings.teams ? null : undefined }; // #3 — unassigned until the lobby team-builder sets it
+    // #16 — NEVER put `undefined` in a value written to Firebase: the RTDB SDK
+    // throws synchronously on any undefined child, which is what made individual
+    // (non-team) room creation fail while team mode (team:null) worked. Only set
+    // `team` when team mode is on; otherwise omit the key entirely.
+    const player = { name: me.name, connected: true, left: false, solved: 0, splits: [], finishedAt: null, rematch: false, joinedAt: Date.now() };
+    if (settings.teams) player.team = null; // #3 — unassigned until the lobby team-builder sets it
     const initial = {
       code, seed, game: 'race', hostUid: me.uid, status: 'lobby', settings,
       players: { [me.uid]: player }, joinOrder: [me.uid],
@@ -231,8 +291,10 @@ export function createRace({ mount, config, data, params = {}, onExit }) {
     code = c;
     try {
       if (!rejoin) {
-        const player = { name: me.name, connected: true, left: false, solved: 0, splits: [], finishedAt: null, rematch: false, joinedAt: Date.now(),
-          team: snap.settings.teams ? null : undefined };
+        // #16 — same undefined-in-Firebase pitfall as createRoom(): omit `team`
+        // entirely for individual mode instead of writing `undefined`.
+        const player = { name: me.name, connected: true, left: false, solved: 0, splits: [], finishedAt: null, rematch: false, joinedAt: Date.now() };
+        if (snap.settings.teams) player.team = null;
         await fb.update(`/rooms/${code}/players/${me.uid}`, player);
         await fb.set(`/rooms/${code}/joinOrder`, [...(snap.joinOrder || []), me.uid]);
       } else {
@@ -257,6 +319,27 @@ export function createRace({ mount, config, data, params = {}, onExit }) {
     return jo.map((uid) => ({ uid, ...(room.players[uid] || {}) })).filter((p) => p.name);
   }
   function activePlayers() { return connectedPlayers().filter((p) => p.connected && !p.left); }
+
+  // ---- host-disconnect resilience --------------------------------------------
+  // Ported from online.js's isLeader() pattern, via the SHARED leaderUid() in
+  // mp-rules.js so the two controllers can't drift apart on this. Every
+  // previously-hard `room.hostUid === me.uid` check that GATES an action
+  // (starting the game/rematch, the turn-timeout/round-advance/rematch-
+  // resolution duties) now goes through this instead, so the room survives
+  // the original host disconnecting rather than getting permanently stuck.
+  // `room.hostUid` itself is left untouched — it still identifies the
+  // original creator for the crown-icon display.
+  const leaderUid = () => sharedLeaderUid(room);
+  const isLeader = () => room && leaderUid() === me.uid;
+  const hostHasLeft = () => room && room.hostUid && room.players && room.players[room.hostUid] && !room.players[room.hostUid].connected;
+  function hostLeftBanner() {
+    if (!hostHasLeft()) return null;
+    const origHost = room.players[room.hostUid];
+    const leader = leaderUid();
+    const leaderName = leader === me.uid ? 'you are' : `${(room.players[leader] || {}).name || 'another player'} is`;
+    return el('div', { class: 'host-left-banner' },
+      `\u26A0\uFE0F ${origHost.name || 'The host'} has disconnected \u2014 ${leaderName} now in control.`);
+  }
 
   // ===== RENDER ROUTING ========================================================
   let waitingScreenShown = false;
@@ -284,13 +367,14 @@ export function createRace({ mount, config, data, params = {}, onExit }) {
   function renderLobby() {
     if (room.settings.teams) return renderTeamLobby();
     const players = connectedPlayers();
-    const isHost = room.hostUid === me.uid;
+    const isHost = isLeader();
     const canStart = isHost && players.filter((p) => p.connected).length >= 1;
     put(root,
       topbar('\uD83C\uDFC1 Cycling Road Lobby'),
       el('div', { class: 'online-room-meta' },
         el('div', { class: 'online-code-big' }, `Code: ${code}`),
         el('div', { class: 'sf-intro' }, `${room.settings.target} Pok\u00e9mon \u00b7 ${genLabel} \u00b7 ${players.length}/${MAX_PLAYERS} in the room`)),
+      hostLeftBanner(),
       el('div', { class: 'online-players' },
         ...players.map((p) => el('div', { class: 'online-player' + (p.connected ? '' : ' offline') },
           el('span', {}, p.name + (p.uid === room.hostUid ? ' \uD83D\uDC51' : '') + (p.uid === me.uid ? ' (you)' : '')),
@@ -305,7 +389,7 @@ export function createRace({ mount, config, data, params = {}, onExit }) {
   // #3b — team-builder lobby: assign players to Team Red/Blue, or randomize.
   function renderTeamLobby() {
     const players = connectedPlayers();
-    const isHost = room.hostUid === me.uid;
+    const isHost = isLeader();
     const teamOf = (uid) => { const p = room.players[uid]; return p ? p.team : null; };
     const unassigned = players.filter((p) => p.connected && teamOf(p.uid) == null);
     const teamRoster = (t) => players.filter((p) => teamOf(p.uid) === t);
@@ -325,6 +409,7 @@ export function createRace({ mount, config, data, params = {}, onExit }) {
       el('div', { class: 'online-room-meta' },
         el('div', { class: 'online-code-big' }, `Code: ${code}`),
         el('div', { class: 'sf-intro' }, `${room.settings.target} Pok\u00e9mon \u00b7 ${genLabel} \u00b7 ${players.length}/${MAX_PLAYERS} in the room`)),
+      hostLeftBanner(),
       isHost ? el('div', { class: 'sp-start-row', style: { justifyContent: 'center', margin: '10px 0' } },
         el('button', { class: 'btn-secondary', onClick: randomizeTeamsNow }, '\uD83C\uDFB2 Randomize Teams')) : null,
       unassigned.length ? el('div', { class: 'identity-section' },
@@ -517,14 +602,26 @@ export function createRace({ mount, config, data, params = {}, onExit }) {
   }
 
   // ---- room-wide ending conditions (#1d.i) — host-driven, idempotent --------
+  // #17 — this interval used to unconditionally call the INDIVIDUAL-mode
+  // renderProgressStrip()/maybeEndGameAsHost(), even in team games (both
+  // render() and renderTeam() start the SAME capTimer). In a team game every
+  // PLAYER's own `solved` field is never touched (team progress lives at
+  // room.teamState[team].solved instead), so this was hijacking the shared
+  // #race-progress element once a second with a bogus "everyone at 0/target"
+  // individual standings display, and running an irrelevant individual
+  // game-over check. Now dispatches the same way render()/renderTeam() do.
   function startCapTimer() {
     if (capTimer) return;
-    capTimer = setInterval(() => { if (!destroyed && room && room.status === 'playing') { renderProgressStrip(); maybeEndGameAsHost(); } }, 1000);
+    capTimer = setInterval(() => {
+      if (destroyed || !room || room.status !== 'playing') return;
+      if (room.settings.teams) { renderTeamProgressStrip(); maybeEndTeamGameAsHost(); }
+      else { renderProgressStrip(); maybeEndGameAsHost(); }
+    }, 1000);
   }
   function stopCapTimer() { if (capTimer) { clearInterval(capTimer); capTimer = null; } }
 
   function maybeEndGameAsHost() {
-    if (!room || room.status !== 'playing' || room.hostUid !== me.uid || !room.gameStartedAt) return;
+    if (!room || room.status !== 'playing' || !isLeader() || !room.gameStartedAt) return;
     const target = room.settings.target;
     const capMs = target * TIME_CAP_MS_PER_MYSTERY;
     const capHit = Date.now() - room.gameStartedAt >= capMs;
@@ -547,9 +644,7 @@ export function createRace({ mount, config, data, params = {}, onExit }) {
       ...unfinished.slice().sort((a, b) => (b.solved || 0) - (a.solved || 0)),
     ];
     const iWon = ranked[0] && ranked[0].uid === me.uid && ranked[0].finishedAt;
-    const isHost = room.hostUid === me.uid;
-
-    // fastest/slowest split PER MYSTERY COLUMN, across players who reached it
+    const isHost = isLeader();
     const bestByCol = [], worstByCol = [];
     for (let c = 0; c < target; c++) {
       const vals = players.map((p) => (p.splits || [])[c]).filter((v) => v != null);
@@ -582,6 +677,7 @@ export function createRace({ mount, config, data, params = {}, onExit }) {
             el('div', { class: 'summary-result' }, iWon ? '\uD83C\uDFC6 You had the fastest time!' : `\uD83C\uDFC1 Results`)),
           el('div', { style: { overflowX: 'auto' } }, table),
           el('div', { class: 'identity-section' },
+            hostLeftBanner(),
             el('div', { class: 'identity-label' }, `Lobby \u2014 ${players.filter((p) => p.connected).length}/${MAX_PLAYERS} still here`),
             el('div', { class: 'sp-start-row' },
               el('button', { class: 'btn-secondary' + (myPlayer.rematch ? ' active' : ''), onClick: toggleRematch },
@@ -612,7 +708,7 @@ export function createRace({ mount, config, data, params = {}, onExit }) {
       rematchTickTimer = null;
       if (destroyed || !room || room.status !== 'gameOver') return;
       if (room.rematchCountdownEndsAt && room.rematchCountdownEndsAt <= Date.now()) {
-        if (room.hostUid === me.uid) resolveRematchCountdown();
+        if (isLeader()) resolveRematchCountdown();
       } else {
         renderGameOver();
       }
@@ -806,7 +902,7 @@ export function createRace({ mount, config, data, params = {}, onExit }) {
   }
 
   function maybeEndTeamGameAsHost() {
-    if (!room || room.status !== 'playing' || room.hostUid !== me.uid || !room.gameStartedAt) return;
+    if (!room || room.status !== 'playing' || !isLeader() || !room.gameStartedAt) return;
     const target = room.settings.target;
     const capMs = target * TIME_CAP_MS_PER_MYSTERY;
     const capHit = Date.now() - room.gameStartedAt >= capMs;
@@ -830,8 +926,7 @@ export function createRace({ mount, config, data, params = {}, onExit }) {
     });
     const myTeam = myTeamIndex();
     const iWonTeam = ranked[0] === myTeam && teamState(ranked[0]).finishedAt;
-    const isHost = room.hostUid === me.uid;
-
+    const isHost = isLeader();
     const bestByCol = [], worstByCol = [];
     for (let c = 0; c < target; c++) {
       const vals = [0, 1].map((t) => (teamState(t).splits || [])[c]).filter((v) => v != null);
@@ -867,6 +962,7 @@ export function createRace({ mount, config, data, params = {}, onExit }) {
             el('div', { class: 'summary-result' }, iWonTeam ? `\uD83C\uDFC6 ${TEAM_LABELS[myTeam]} had the fastest time!` : '\uD83C\uDFC1 Results')),
           el('div', { style: { overflowX: 'auto' } }, table),
           el('div', { class: 'identity-section' },
+            hostLeftBanner(),
             el('div', { class: 'identity-label' }, `Lobby \u2014 ${allConnected.length} still here`),
             el('div', { class: 'sp-start-row' },
               el('button', { class: 'btn-secondary' + (myPlayer.rematch ? ' active' : ''), onClick: toggleRematch },

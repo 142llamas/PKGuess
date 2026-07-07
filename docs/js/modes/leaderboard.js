@@ -1,8 +1,12 @@
 /**
  * @file        js/modes/leaderboard.js
- * @version     1.1.0
- * @updated     2026-06-24
+ * @version     1.2.0
+ * @updated     2026-07-05
  * @changelog
+ *   1.2.0 — #11: added prominent Elite 4 Standings / Daily Challenge Results
+ *           links at the top of the screen — draft results live in their own
+ *           screens (throne status, daily rankings), not in the score tables
+ *           here, and Leaderboard is often the first place a player looks.
  *   1.1.0 — Wait for Firebase auth before reading (fixes empty board). Start
  *           on the tab matching the gen the player navigated from. Stat spread
  *           values now show abbreviation labels.
@@ -44,6 +48,14 @@ export function createLeaderboard({ mount, config, data, params, onExit }) {
   function render() {
     clear(root).append(
       el('div', { class: 'sp-section-title' }, '\uD83C\uDFC6 Leaderboards'),
+      // #11 — draft results live in their own screens (Elite 4 standings,
+      // Daily Challenge rankings), not in the score tables below — since
+      // Leaderboard is often the first place a player looks for them, link
+      // straight there instead of leaving them to hunt through the main menu.
+      el('div', { class: 'lb-draft-links' },
+        el('span', { class: 'sf-intro', style: { margin: 0 } }, 'Looking for Draft Battle results?'),
+        el('button', { class: 'btn-secondary', onClick: () => { location.hash = '#/draftbattle/2/thrones'; } }, '\u2694\uFE0F Elite 4 Standings'),
+        el('button', { class: 'btn-secondary', onClick: () => { location.hash = '#/dailychallenge/2/results'; } }, '\uD83D\uDCC5 Daily Challenge Results')),
       el('div', { class: 'lb-tabs' },
         ...BOARDS.map((b, i) =>
           el('button', {
