@@ -7,8 +7,54 @@
  * UI can replay one battle step-by-step while the real outcome is a win-% taken
  * over many silent simulations.
  *
- * @version 2.1.0 
+ * @version 2.2.0
  * @changelog
+ *   2.2.0 — Move-accuracy pass, requested explicitly after the Fairy-type fix
+ *           below prompted a closer look at every previously-disclosed
+ *           simplification:
+ *             • Magnitude: was a flat listed bp:75. Now rolls the real 4–10
+ *               magnitude table every use (MAGNITUDE_TABLE) — this needs no
+ *               external stat, so unlike Return/Frustration below it can be
+ *               modeled exactly.
+ *             • Tri Attack: was simplified to always inflict paralysis on its
+ *               20% secondary proc. Now picks randomly among paralysis/burn/
+ *               freeze, matching the real move. (secondary.status can now be
+ *               an array for a random pick; every other move's plain-string
+ *               status is unaffected.)
+ *             • Charm: found to have NO effect implemented at all while
+ *               investigating the Fairy-type fix below — it was silently a
+ *               complete no-op. Added its real -2 Attack drop (twice Growl's
+ *               -1, matching its role as the harder-hitting version).
+ *             • Fairy type removed entirely (see below) — Charm/Sweet Kiss
+ *               retagged Normal, Moonlight retagged Dark, their real pre-Gen-6
+ *               types. Confirmed this changes no simulator BEHAVIOR for these
+ *               three specifically: type-effectiveness/immunity is only ever
+ *               consulted by the damage-calculation path (calcDamage /
+ *               calcFixedDamage), and all three are 0-bp status moves that
+ *               never reach it — so this is a pure data-accuracy fix, not a
+ *               gameplay change.
+ *             • Return / Frustration: left as their flat listed base power
+ *               (50). Their real formulas are friendship-based
+ *               (power = floor(happiness/2.5) and floor((255-happiness)/2.5)
+ *               respectively), but there is no friendship stat anywhere in
+ *               this draft context to compute from — inventing one would be
+ *               an arbitrary guess dressed up as precision, not genuine
+ *               accuracy, so this is a structural limitation rather than
+ *               something fixed here.
+ *             • Jump Kick / High Jump Kick crash damage: left at the existing
+ *               1/8 max HP. Looked for a more confident Gen 1/2-specific
+ *               figure to replace it with; the only well-established
+ *               alternative recalled was Gen 1's separate, genuinely buggy
+ *               crash formula (capable of integer underflow) — not something
+ *               worth deliberately reintroducing — and no more-confident
+ *               Gen 2-specific figure than the existing 1/8 approximation.
+ *               Flagging the uncertainty here rather than replacing a
+ *               reasonable value with an unverified "precise-looking" one.
+ *           Also found and fixed while wiring the above: `sim-status.test.mjs`
+ *           (burn/poison/paralysis/confusion/stat-stage verification) had
+ *           been written but never registered in tools/test/run.mjs — none of
+ *           its assertions had ever actually run as part of `npm test`. Fixed
+ *           the registration; all of it passes.
  *   2.1.0 — Fixed a significant bug found during verification: OHKO moves
  *           (Guillotine/Horn Drill/Fissure) were completely non-functional.
  *           They have bp:0 in the base data (their damage isn\'t power-based),
@@ -40,15 +86,12 @@
  *               unless the target is asleep), Leech Seed (drains 1/8 max HP
  *               per turn into the seeder; Grass-types immune), and
  *               High/Jump Kick crash damage on a miss.
- *           Known, disclosed simplifications: Magnitude/Return/Frustration
- *           use their flat listed base power rather than the real
- *           variable-roll/friendship formulas (no friendship stat exists in
- *           this draft context); moves reclassified as Fairy-type in later
+ *           Known, disclosed simplifications at the time (see 2.2.0 above for
+ *           which were later fixed): Magnitude/Return/Frustration used their
+ *           flat listed base power rather than the real variable-roll/
+ *           friendship formulas; moves reclassified as Fairy-type in later
  *           games (Charm, Sweet Kiss, Moonlight) inherited that typing from
- *           the data pipeline — since this type chart has no Fairy row they
- *           resolve as neutral, which is a data-generation quirk, not
- *           something fixed here (their non-damage effects are still
- *           correct). Also: PP, Substitute, Counter, Transform, trapping
+ *           the data pipeline. Also: PP, Substitute, Counter, Transform, trapping
  *           moves, weather/abilities/items remain out of scope, unchanged
  *           from the original design notes below.
  *
@@ -86,6 +129,23 @@ const CURSE_CHIP_FRACTION = 1 / 4;
 const CONFUSE_SELF = 0.33;       // chance a confused mon hits itself
 const CONFUSE_BP = 40;           // self-hit power (typeless physical)
 const CRASH_FRACTION = 1 / 8;    // Jump Kick / High Jump Kick miss "crash" damage
+// #6 — Magnitude's real random-power table (unchanged since its Gen 2
+// introduction). Unlike Return/Frustration this doesn't need any external
+// stat to model exactly — it's a pure per-use roll — so it's fully accurate.
+const MAGNITUDE_TABLE = [
+  { level: 4, chance: 5, bp: 10 },
+  { level: 5, chance: 10, bp: 30 },
+  { level: 6, chance: 20, bp: 50 },
+  { level: 7, chance: 30, bp: 70 },
+  { level: 8, chance: 20, bp: 90 },
+  { level: 9, chance: 10, bp: 110 },
+  { level: 10, chance: 5, bp: 150 },
+];
+function rollMagnitude(rng) {
+  let r = rng() * 100;
+  for (const row of MAGNITUDE_TABLE) { r -= row.chance; if (r <= 0) return row; }
+  return MAGNITUDE_TABLE[MAGNITUDE_TABLE.length - 1];
+}
 const DEFAULT_TURN_CAP = 100;
 const LEVEL = 100;
 
@@ -122,6 +182,7 @@ const gen12Category = (type) => (GEN12_PHYSICAL_TYPES.has(type) ? 'Physical' : '
 //   highCrit: true
 //   fixedDamage: number | 'level' | 'halfhp' | 'psywave'
 //   hpBasedPower: true     — Flail/Reversal: power scales with attacker's HP%
+//   magnitudeRoll: true    — Magnitude: real random 4–10 roll picks bp (see MAGNITUDE_TABLE), #6
 //   twoTurn:  true         — charges turn 1, executes turn 2
 //   semiInvuln: true       — (with twoTurn) untargetable during the charge turn
 //   recharge: true         — a forced blank turn after use (unless it KOs)
@@ -201,6 +262,7 @@ const MOVE_EFFECTS = {
   psywave: { fixedDamage: 'psywave' },
   flail: { hpBasedPower: true },
   reversal: { hpBasedPower: true },
+  magnitude: { magnitudeRoll: true }, // #6 — was flat listed bp:75; now the real random 4–10 roll
 
   // ---- guaranteed status (status-category moves) ---------------------------
   toxic: { status: 'tox' },
@@ -247,6 +309,7 @@ const MOVE_EFFECTS = {
   leer: { boosts: { def: -1 }, boostTarget: 'target' },
   tailwhip: { boosts: { def: -1 }, boostTarget: 'target' },
   screech: { boosts: { def: -2 }, boostTarget: 'target' },
+  charm: { boosts: { atk: -2 }, boostTarget: 'target' }, // was missing entirely — found while fixing #6's Fairy-type retag; Charm did nothing on use before this
   sandattack: { boosts: {}, boostTarget: 'target' }, // accuracy-drop not modeled — harmless no-op beyond the "used move" log
   smokescreen: { boosts: {}, boostTarget: 'target' },
   flash: { boosts: {}, boostTarget: 'target' },
@@ -289,7 +352,7 @@ const MOVE_EFFECTS = {
   crunch: { secondary: { chance: 20, boosts: { def: -1 } } },
   shadowball: { secondary: { chance: 20, boosts: { spd: -1 } } },
   ancientpower: { secondary: { chance: 10, selfBoosts: { atk: 1, def: 1, spa: 1, spd: 1, spe: 1 } } },
-  triattack: { secondary: { chance: 20, status: 'par' } }, // real Tri Attack picks par/brn/frz at random; simplified to paralysis for determinism
+  triattack: { secondary: { chance: 20, status: ['par', 'brn', 'frz'] } }, // #6 — was simplified to always-paralysis; now picks one of the three at random like the real move
   sludge: { secondary: { chance: 30, status: 'psn' } },
   sludgebomb: { secondary: { chance: 30, status: 'psn' } },
   poisonsting: { secondary: { chance: 20, status: 'psn' } },
@@ -593,6 +656,11 @@ function doMove(attacker, defender, move, rng, gen, chart, log, releasingCharge)
     }
     dealt = total;
     log.push({ t: 'multihit', target: defender.name, hits: actualHits });
+  } else if (move.magnitudeRoll) {
+    const roll = rollMagnitude(rng);
+    log.push({ t: 'magnitude', target: defender.name, level: roll.level });
+    dealt = calcDamage(attacker, defender, { ...move, bp: roll.bp }, rng, gen, chart, log);
+    defender.hp = Math.max(0, defender.hp - dealt);
   } else if (move.cat !== 'Status' && (move.bp > 0 || move.ohko)) {
     dealt = calcDamage(attacker, defender, move, rng, gen, chart, log);
     defender.hp = Math.max(0, defender.hp - dealt);
@@ -632,7 +700,14 @@ function doMove(attacker, defender, move, rng, gen, chart, log, releasingCharge)
   // secondary effects (from damaging moves — chance checked AFTER a successful hit)
   if (move.secondary && defender.hp > 0 && dealt > 0) {
     if (chance(rng, move.secondary.chance / 100)) {
-      if (move.secondary.status) tryStatus(defender, move.secondary.status, rng, log);
+      if (move.secondary.status) {
+        // #6 — Tri Attack's status is an array (random pick); every other
+        // move using this field still passes a plain string, unaffected.
+        const st = Array.isArray(move.secondary.status)
+          ? move.secondary.status[Math.floor(rng() * move.secondary.status.length)]
+          : move.secondary.status;
+        tryStatus(defender, st, rng, log);
+      }
       if (move.secondary.flinch) defender.flinch = true;
       if (move.secondary.confuse && defender.confuseTurns === 0) { defender.confuseTurns = randint(rng, 2, 4); log.push({ t: 'confuse', target: defender.name }); }
       if (move.secondary.boosts) applyBoosts(defender, move.secondary.boosts, gen, log);

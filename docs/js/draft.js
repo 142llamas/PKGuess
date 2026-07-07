@@ -1,8 +1,17 @@
 /**
  * @file        docs/js/draft.js   (PokeGuess — Draft Battle engine)
- * @version     0.7.0
- * @updated     2026-06-25
+ * @version     0.8.0
+ * @updated     2026-07-05
  * @changelog
+ *   0.8.0 — #12/#13: added isTierUnlocked + nextProgressRank. The Elite-4 unlock
+ *           gate was based on "do you CURRENTLY hold the previous tier's
+ *           throne," which the #14a one-throne cascade AND every tier's own
+ *           cadence reset both silently break (moving up — or just time
+ *           passing — vacates a lower throne, relocking everything above it
+ *           even though the player genuinely already beat it). Progress is now
+ *           tracked as a separate, monotonic "highest tier ever reached" value
+ *           (draftbattle.js persists it at /draft/progress/{uid}), so vacating
+ *           a lower throne can no longer erase earned progress.
  *   0.7.0 — #14a: added resolveThroneCascade (pure decision logic) + TIER_RANK. A single Pokémon/session can only hold one Elite-4 spot: claiming a higher throne while already holding a lower one vacates the lower one (bumping the just-defeated holder down into it if they were human, or leaving it for a fresh NPC if not); trying to claim a lower throne while already holding a higher one keeps the higher one instead.
  *   0.6.0 — #7: added autoDraftScaled — rejection-samples autoDraft with a deterministic incrementing sub-seed until the resulting base-stat total lands in a target band (e.g. 525–550 for Bruno), preserving the "every stat is a real Pokémon’s real stat" design rather than mutating totals directly. Falls back to the closest-fit result if a band is unreachable within maxAttempts.
  *   0.5.0 — TWO PICKS PER CARD (authorised engine change; supersedes the
@@ -353,6 +362,44 @@ export function resolveThroneCascade({ newTierKey, oldTierKey, tierRank, defeate
 }
 
 export const TIER_RANK = { day: 1, week: 2, month: 3, year: 4, all: 5 };
+
+/**
+ * #12/#13 — throne unlock gate, corrected.
+ *
+ * Previously, "have you beaten tier i-1" was computed as "does tier i-1's
+ * throne CURRENTLY show your uid as holder." That's unreliable in two real
+ * situations, both of which silently erase progress the player already
+ * earned:
+ *   1. The one-Pok\u00e9mon-one-throne cascade (#14a) itself: claiming a HIGHER
+ *      tier vacates whatever lower tier you held, so the immediately-lower
+ *      tier stops showing you as its holder the moment you move past it —
+ *      relocking every tier above it as a side effect.
+ *   2. A tier's own cadence reset (Day at midnight CT, Week/Month/Year on
+ *      their own schedules): the throne you conquered can revert to a fresh
+ *      NPC purely due to time passing, with the identical relocking effect.
+ *
+ * Fix: track the highest tier rank a player has EVER reached as a separate,
+ * monotonic, persisted value (see claimThrone's write to /draft/progress).
+ * Unlocking a tier now asks "have I EVER reached the tier just below this
+ * one," not "do I physically hold it RIGHT NOW" — so vacating a lower throne
+ * (by cascade or by reset) can no longer relock tiers above it.
+ *
+ * @param {number} tierIndex index into the TIERS display array (0 = Will/day)
+ * @param {number} myProgressRank the player's persisted highest-ever rank (0 if none)
+ * @param {string[]} tierKeysInOrder TIERS.map(t => t.key), in display order
+ * @param {Record<string, number>} tierRank TIER_RANK
+ */
+export function isTierUnlocked(tierIndex, myProgressRank, tierKeysInOrder, tierRank) {
+  if (tierIndex <= 0) return true;
+  const prevKey = tierKeysInOrder[tierIndex - 1];
+  return (myProgressRank || 0) >= (tierRank[prevKey] || 0);
+}
+
+/** The new persisted progress value after claiming `claimedTierKey` — monotonic
+ *  (never decreases), so a later vacate/reset of that same throne can't undo it. */
+export function nextProgressRank(currentRank, claimedTierKey, tierRank) {
+  return Math.max(currentRank || 0, tierRank[claimedTierKey] || 0);
+}
 
 // ===========================================================================
 //  DATA ADAPTERS  (unchanged from 0.4.1)
