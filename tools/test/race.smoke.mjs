@@ -1,6 +1,6 @@
 // Cycling Road v2 smoke test (#1): predetermined synced clue order,
 // independent per-player advancement + toasts, room cap, time cap, splits
-// summary, rematch flow (success + "not enough players" failure).
+// summary, rematch flow (success + "not enough players" failure). 
 //
 // Each simulated player gets its OWN JSDOM window/document (a shared document
 // caused a confirmed jsdom quirk: duplicate ids across two "players" made
@@ -51,15 +51,30 @@ const tick = async (n = 8) => { for (let i = 0; i < n; i++) await Promise.resolv
 function makeFakeFB() {
   const tree = {};
   const listeners = [];
+  // #16 — real Firebase RTDB throws synchronously if any value written via
+  // set()/update() contains `undefined` (at any depth). The old fake used
+  // JSON.stringify, which SILENTLY DROPS undefined keys — which is exactly why
+  // the individual-room `team: undefined` bug passed the smoke undetected.
+  // Mirror the real SDK so that class of bug fails loudly here.
+  const assertNoUndefined = (v, path) => {
+    if (v === undefined) throw new Error(`set failed: value argument contains undefined in property '${path}'`);
+    if (v && typeof v === 'object') for (const k of Object.keys(v)) assertNoUndefined(v[k], `${path}/${k}`);
+  };
   const clone = (v) => (v === undefined ? null : JSON.parse(JSON.stringify(v)));
   const parts = (p) => p.split('/').filter(Boolean);
   function snap(path) { let n = tree; for (const k of parts(path)) { if (n == null || typeof n !== 'object') return null; n = n[k]; } return clone(n); }
   function setDeep(path, val) { const ks = parts(path); let n = tree; for (let i = 0; i < ks.length - 1; i++) { if (typeof n[ks[i]] !== 'object' || n[ks[i]] == null) n[ks[i]] = {}; n = n[ks[i]]; } n[ks[ks.length - 1]] = clone(val); }
-  let notifying = false;
-  function notify() { if (notifying) return; notifying = true; try { for (const l of listeners) l.cb(snap(l.path)); } finally { notifying = false; } }
+  let notifying = false, pendingNotify = false;
+  function notify() {
+    if (notifying) { pendingNotify = true; return; }
+    notifying = true;
+    try {
+      do { pendingNotify = false; for (const l of listeners) l.cb(snap(l.path)); } while (pendingNotify);
+    } finally { notifying = false; }
+  }
   return {
-    async set(p, v) { setDeep(p, v); notify(); return true; },
-    async update(p, o) { const cur = snap(p) || {}; setDeep(p, { ...cur, ...o }); notify(); return true; },
+    async set(p, v) { assertNoUndefined(v, p); setDeep(p, v); notify(); return true; },
+    async update(p, o) { assertNoUndefined(o, p); const cur = snap(p) || {}; setDeep(p, { ...cur, ...o }); notify(); return true; },
     async get(p) { return snap(p); },
     onValue(p, cb) { const l = { path: p, cb }; listeners.push(l); cb(snap(p)); return () => { const i = listeners.indexOf(l); if (i >= 0) listeners.splice(i, 1); }; },
     onDisconnectSet() {},
@@ -147,6 +162,11 @@ let code;
   ok(!!code, 'room created with a code');
   const room0 = await fb.get('/rooms/' + code);
   eq(room0.settings.target, 3, 'custom target of 3 was applied');
+  // #16 — individual (non-team) create must succeed WITHOUT writing `team:undefined`
+  // (real RTDB throws on undefined; the hardened fake FB above now does too).
+  ok(room0.settings.teams === false, 'individual mode: teams=false');
+  ok(!('team' in room0.players.uidA), '#16: individual-mode player has no `team` key (no undefined written)');
+  ok(room0.status === 'lobby', '#16: individual room created and sits in lobby');
   A.destroy();
 }
 
@@ -249,6 +269,13 @@ console.log('— Persistent post-game lobby + rematch (#1f): both opt in, host s
   B.click(B.btn('rematch')); await tick();
   room = await fb.get('/rooms/' + code);
   ok(room.players.uidA.rematch && room.players.uidB.rematch, 'both players are marked rematch:true');
+  // #18 — check what's actually DISPLAYED on each client's own screen, not
+  // just the underlying database state (which the DB-only check above cannot
+  // distinguish from a display bug on either client).
+  ok(A.text().includes('2 players want a rematch'), `#18: HOST\u2019s (Ash) own screen shows BOTH opt-ins, not just their own (text: ${A.text().match(/\d+ players? want a rematch/)})`);
+  ok(B.text().includes('2 players want a rematch'), `#18: GUEST\u2019s (Brock) own screen shows BOTH opt-ins (text: ${B.text().match(/\d+ players? want a rematch/)})`);
+  const startBtn = A.btn('Start rematch');
+  ok(!!startBtn && !startBtn.disabled, '#18: host\u2019s Start-rematch button is enabled once the guest has ALSO opted in');
   A.click(A.btn('Start rematch')); await tick();
   room = await fb.get('/rooms/' + code);
   ok(!!room.rematchCountdownEndsAt, 'host starting the rematch sets a countdown deadline');
@@ -323,6 +350,46 @@ console.log('— Rematch with nobody else opted in: host sees an error and retur
   await tick(6);
   ok(E2.exited, 'the host is returned to the main menu when nobody else stayed opted in');
   E2.destroy();
+}
+
+console.log('\n— Host-disconnect resilience: the room survives the original host leaving, and everyone is told —');
+{
+  const H = await mkClient('uidH', 'Hilda');
+  const I = await mkClient('uidI', 'Iris');
+  const codesBefore4 = Object.keys((await fb.get('/rooms')) || {});
+  H.click(H.btn('Create a room')); await tick();
+  const tinput = H.q('input[type=number]'); tinput.value = '2'; H.fireInput(tinput);
+  H.click(H.btn('Create room')); await tick();
+  const code4 = Object.keys(await fb.get('/rooms')).find((k) => !codesBefore4.includes(k));
+  I.click(I.btn('Join with a code')); await tick();
+  const codeInput = I.q('input'); codeInput.value = code4; I.fireInput(codeInput);
+  I.click(I.btn('Join')); await tick();
+
+  ok(!I.btn('Start'), 'before any disconnect, only the host (Hilda) can start the game');
+  ok(I.mount.textContent.includes('Waiting for the host'), 'I correctly sees "waiting for the host" while H is still connected');
+
+  // The original host (H) disconnects BEFORE the game ever starts.
+  await fb.update(`/rooms/${code4}/players/uidH`, { connected: false });
+  await tick();
+
+  ok(I.mount.textContent.includes('has disconnected'), 'I is told the host has disconnected');
+  ok(I.mount.textContent.includes('you are'), 'the banner tells I that THEY are now in control (I is the only other connected player)');
+  const startBtnI = I.btn('Start');
+  ok(!!startBtnI, 'I (the new leader) can now start the game \u2014 the room is not permanently stuck');
+
+  I.click(startBtnI); await tick();
+  let r4 = await fb.get(`/rooms/${code4}`);
+  ok(r4.status === 'playing', 'the game actually started, driven by the fallback leader');
+
+  // Mid-game: let the room-wide time cap elapse with the original host still
+  // disconnected, and confirm the leader-driven capTimer duty still enforces
+  // it \u2014 the core resilience this was all for.
+  clock.advance(2 * 120000 + 1000); // room-wide time cap for target=2
+  await tick();
+  r4 = await fb.get(`/rooms/${code4}`);
+  ok(r4.status === 'gameOver', 'the room-wide time cap is still enforced mid-game with the original host disconnected (fallback leader\u2019s capTimer drives it)');
+
+  H.destroy(); I.destroy();
 }
 
 A.destroy(); B.destroy();

@@ -1,5 +1,5 @@
 /**
- * @file tools/test/sim-status.test.mjs
+ * @file tools/test/sim-status.test.mjs 
  * @version 1.0.0
  * Deep, exact verification of status effects and stat-changing mechanics in
  * sim.js — requested explicitly: "check that stat changing moves and actual
@@ -249,5 +249,43 @@ export default function (t) {
     t.ok(atkB && atkB.delta === 1, 'Curse (non-Ghost) raises the user\u2019s Attack by 1');
     t.ok(defB && defB.delta === 1, 'Curse (non-Ghost) raises the user\u2019s Defense by 1');
     t.ok(speB && speB.delta === -1, 'Curse (non-Ghost) lowers the user\u2019s own Speed by 1');
+  }
+
+  t.section('sim.js stat stages \u2014 Charm lowers the TARGET\u2019s Attack by 2 stages (#6 \u2014 was silently a complete no-op before this fix)');
+  {
+    const charmer = mono('Charmer', 'Charm');
+    const res = simulateBattle(charmer, mono('Target', 'Tackle'), { ...opts, seed: 1, turnCap: 4 });
+    const drop = res.log.find((e) => e.t === 'boost' && e.target === 'Target' && e.stat === 'atk');
+    t.ok(!!drop, '#6: Charm now actually lowers the TARGET\u2019s Attack (previously did nothing at all)');
+    t.eq(drop && drop.delta, -2, 'Charm lowers Attack by exactly 2 stages (stronger than Growl\u2019s -1)');
+    t.ok(!res.log.some((e) => e.t === 'boost' && e.target === 'Charmer'), 'Charm never touches the USER\u2019s own stats');
+  }
+
+  t.section('sim.js \u2014 Magnitude: real random 4\u201310 power roll, not a flat listed base power (#6)');
+  {
+    const magUser = mono('MagUser', 'Magnitude', atkStats, ['Ground']);
+    const victim = spec('Victim', roundHpStats, ['Normal'], ['Splash', 'Splash', 'Splash', 'Splash']);
+    const levelsSeen = new Set();
+    for (let seed = 1; seed <= 200; seed++) {
+      const res = simulateBattle(magUser, victim, { ...opts, seed, turnCap: 1 });
+      const magEvt = res.log.find((e) => e.t === 'magnitude');
+      if (magEvt) levelsSeen.add(magEvt.level);
+    }
+    t.ok(levelsSeen.size >= 4, `#6: multiple distinct magnitude levels rolled across 200 uses (saw ${levelsSeen.size} distinct levels: ${[...levelsSeen].sort().join(',')}) \u2014 proves it's a real per-use roll, not a fixed value`);
+    for (const lvl of levelsSeen) t.ok(lvl >= 4 && lvl <= 10, `magnitude level ${lvl} is within the real 4\u201310 range`);
+  }
+
+  t.section('sim.js \u2014 Tri Attack: secondary status is randomly par/brn/frz, not always paralysis (#6)');
+  {
+    const triUser = mono('TriUser', 'Tri Attack');
+    const victim = spec('Victim', roundHpStats, ['Normal'], ['Splash', 'Splash', 'Splash', 'Splash']);
+    const statusesSeen = new Set();
+    for (let seed = 1; seed <= 300; seed++) {
+      const res = simulateBattle(triUser, victim, { ...opts, seed, turnCap: 1 });
+      const statusEvt = res.log.find((e) => e.t === 'status' && e.target === 'Victim');
+      if (statusEvt) statusesSeen.add(statusEvt.status);
+    }
+    t.ok(statusesSeen.size >= 2, `#6: Tri Attack's proc produced more than one distinct status across 300 uses (saw: ${[...statusesSeen].join(',')}) \u2014 proves it's randomized, not always paralysis`);
+    for (const st of statusesSeen) t.ok(['par', 'brn', 'frz'].includes(st), `status "${st}" is one of the three real Tri Attack outcomes`);
   }
 }

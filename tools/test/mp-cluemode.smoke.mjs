@@ -1,6 +1,6 @@
 // Clue-selection-mode smoke for multiplayer.js hotseat (#10/#11/#15b/#15c).
 // Run: node tools/test/mp-cluemode.smoke.mjs
-import { JSDOM } from 'jsdom';
+import { JSDOM } from 'jsdom'; 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
@@ -135,33 +135,38 @@ console.log('— Multi-use clue re-offer: a multi-use clue survives its first re
   // eventually parks on a multi-use clue (id 13, "Reveal One Weakness",
   // maxUses 6) for several consecutive picks before moving on — proving it's
   // genuinely re-offered rather than vanishing after its first use.
+  //
+  // Uses the DEFAULT game mode (RTG). #9 fixed GTR (and RTG already enforced
+  // this) so that a mode's reveal step yields exactly one clue before the
+  // turn changes — there is no longer any mode where one player can reveal
+  // repeatedly forever. Instead, this cycles through many turns (reveal once,
+  // then an intentionally wrong guess to advance to the next player), relying
+  // on the fact that revealed clues accumulate in the SHARED round state
+  // regardless of which player revealed them — so many turns still add up to
+  // many reveals against the one mystery.
   const mount = window.document.createElement('div'); window.document.body.appendChild(mount);
   const ctrl = createMultiplayer({ mount, config: {}, data: gen2, params: { gen: 2, modeId: 'multiplayer', rng: () => 0 }, onExit: () => {} });
   await tick();
   const rows = [...mount.querySelectorAll('.mp-form-section')];
   const clueRow = rows.find((r) => r.textContent.includes('Clue Selection'));
   click([...clueRow.querySelectorAll('button')].find((b) => b.textContent.includes('Random Clues')));
-  const modeRow = rows.find((r) => r.textContent.includes('Guess') && r.querySelector('button'));
-  const gtrBtn = modeRow ? [...modeRow.querySelectorAll('button')].find((b) => b.textContent.includes('Guess, then Reveal')) : null;
-  ok(!!gtrBtn, 'GTR (Guess, then Reveal) option found');
-  click(gtrBtn);
   await tick();
   click([...mount.querySelectorAll('button')].find((b) => b.textContent.includes('Start Multiplayer')));
   await tick();
-  // GTR starts in the guess phase; one wrong guess flips into the reveal
-  // phase, where it stays for repeated reveals without forcing another guess.
-  const gi = mount.querySelector('#mp-guess');
-  if (gi) gi.value = 'Definitely-Not-The-Mystery-Xyzzy';
-  click([...mount.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Guess'));
-  await tick();
   let sawMultiUseHistory = false, sawUseBadge = false;
   for (let i = 0; i < 20; i++) {
-    const btn = [...mount.querySelectorAll('button')].find((b) => b.textContent.includes('Reveal a random clue'));
-    if (!btn) break;
-    click(btn);
-    await tick();
+    const revealBtn = [...mount.querySelectorAll('button')].find((b) => b.textContent.includes('Reveal a random clue'));
+    if (revealBtn) { click(revealBtn); await tick(); }
     if ([...mount.querySelectorAll('.clue-btn')].some((c) => c.querySelectorAll('.clue-revealed-value').length >= 2)) sawMultiUseHistory = true;
     if (mount.querySelector('.clue-use-badge')) sawUseBadge = true;
+    // RTG auto-advances to the guess phase after that one reveal — submit an
+    // intentionally wrong guess to move to the NEXT player's turn (which
+    // starts fresh in the reveal phase), so the loop keeps accumulating
+    // reveals against the shared mystery across many simulated turns.
+    const gi = mount.querySelector('#mp-guess');
+    if (gi) gi.value = 'Definitely-Not-The-Mystery-Xyzzy';
+    const guessBtn = [...mount.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Guess');
+    if (guessBtn) { click(guessBtn); await tick(); }
   }
   // Checked DURING the sequence, not just at the end — once a multi-use clue
   // is fully exhausted its card collapses to showing only the last value
@@ -169,6 +174,49 @@ console.log('— Multi-use clue re-offer: a multi-use clue survives its first re
   // so the multi-reveal moment must be caught while it's still happening.
   ok(sawMultiUseHistory, 'at some point during repeated random picks, a card showed 2+ reveal values (re-offered, not vanished after 1 use)');
   ok(sawUseBadge, 'a re-offered multi-use card showed a "use N" badge at some point');
+  ctrl.destroy();
+}
+
+console.log('— #9: GTR yields exactly ONE reveal per turn, no skip option, then auto-advances —');
+{
+  const mount = window.document.createElement('div'); window.document.body.appendChild(mount);
+  const ctrl = createMultiplayer({ mount, config: {}, data: gen2, params: { gen: 2, modeId: 'multiplayer', rng: () => 0 }, onExit: () => {} });
+  await tick();
+  const rows = [...mount.querySelectorAll('.mp-form-section')];
+  const clueRow = rows.find((r) => r.textContent.includes('Clue Selection'));
+  click([...clueRow.querySelectorAll('button')].find((b) => b.textContent.includes('Random Clues')));
+  await tick();
+  const modeRow = rows.find((r) => r.textContent.includes('Guess') && r.querySelector('button'));
+  const gtrBtn = modeRow ? [...modeRow.querySelectorAll('button')].find((b) => b.textContent.includes('Guess, then Reveal')) : null;
+  ok(!!gtrBtn, 'GTR (Guess, then Reveal) option found');
+  click(gtrBtn);
+  await tick();
+  click([...mount.querySelectorAll('button')].find((b) => b.textContent.includes('Start Multiplayer')));
+  await tick();
+  const namePill1 = mount.querySelector('.mp-active-player')?.textContent || '';
+  // GTR starts in the guess phase — an intentionally wrong guess flips into
+  // the mandatory single-reveal phase.
+  ok(!mount.querySelector('#mp-guess') || ![...mount.querySelectorAll('button')].some((b) => b.textContent.includes('Skip guess')), 'GTR\u2019s guess phase has no "Skip guess" option (removed \u2014 it undermined the guess-first design)');
+  const gi = mount.querySelector('#mp-guess');
+  if (gi) gi.value = 'Definitely-Not-The-Mystery-Xyzzy';
+  click([...mount.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Guess'));
+  await tick();
+  ok(mount.textContent.includes('reveal a clue'), 'after a wrong guess in GTR, the SAME player is prompted to reveal (mandatory)');
+  ok(!mount.querySelector('button')?.parentElement || ![...mount.querySelectorAll('button')].some((b) => b.textContent.includes('Skip reveal')), '#9: no "Skip reveal" option during GTR\u2019s mandatory reveal (would let a turn end with ZERO reveals)');
+  ok(![...mount.querySelectorAll('button')].some((b) => b.textContent.includes('Skip to guess')), '#9: no "Skip to guess" option during GTR\u2019s mandatory reveal');
+  const clueCountBefore = mount.querySelectorAll('.clue-revealed-value').length;
+  const revealBtn = [...mount.querySelectorAll('button')].find((b) => b.textContent.includes('Reveal a random clue'));
+  ok(!!revealBtn, 'a reveal action is available');
+  click(revealBtn);
+  await tick();
+  const clueCountAfter = mount.querySelectorAll('.clue-revealed-value').length;
+  ok(clueCountAfter > clueCountBefore, 'exactly one clue was revealed');
+  // #9 — the turn must have passed to the NEXT player automatically (not
+  // stayed on the same player, and not offered another reveal).
+  const namePill2 = mount.querySelector('.mp-active-player')?.textContent || '';
+  ok(namePill2 !== namePill1, '#9: after the single mandatory reveal, the turn automatically passed to the NEXT player');
+  ok(mount.textContent.includes('make a guess'), '#9: the next player lands in the guess phase (not another reveal opportunity)');
+  ok(!mount.querySelector('button[disabled]')?.textContent?.includes('Reveal'), 'no reveal button is offered to the next player before they\u2019ve guessed');
   ctrl.destroy();
 }
 

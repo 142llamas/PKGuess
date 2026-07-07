@@ -1,10 +1,10 @@
-import { JSDOM } from 'jsdom';
+import { JSDOM } from 'jsdom'; 
 import { readFileSync } from 'node:fs';
 const dom = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>', { url:'https://example.com/' });
 const { window } = dom;
 const def=(k,v)=>{try{Object.defineProperty(globalThis,k,{value:v,configurable:true,writable:true});}catch{}};
 global.window=window; global.document=window.document;
-def('navigator',window.navigator); def('Node',window.Node); def('HTMLElement',window.HTMLElement); def('MouseEvent',window.MouseEvent);
+def('navigator',window.navigator); def('Node',window.Node); def('HTMLElement',window.HTMLElement); def('MouseEvent',window.MouseEvent); def('location',window.location);
 const files={'data/movelist-gen2.json':'./data/movelist-gen2.json','data/movestats-gen2.json':'./data/movestats-gen2.json','data/draftpool-gen2.json':'./data/draftpool-gen2.json','data/typechart-gen2.json':'./data/typechart-gen2.json'};
 global.fetch=async(u)=>{const p=files[u]; if(!p) return {ok:false,json:async()=>({})}; return {ok:true,json:async()=>JSON.parse(readFileSync(p,'utf8'))};};
 const gen2=JSON.parse(readFileSync('./data/gen2.json','utf8'));
@@ -32,6 +32,16 @@ console.log('Provisional/offline note:', !!document.querySelector('.battle-offli
 console.log('My line:', document.querySelector('.daily-myline') ? document.querySelector('.daily-myline').textContent.trim() : '(none)');
 console.log('Ranking rows:', q('.lb-table tbody tr').length);
 console.log('Actions:', [...q('.summary-actions button')].map(b=>b.textContent.trim()).join(' | '));
+
+// #1 — daily share text: leading deep link + exact spec'd 4-line format
+const shareBtn = [...q('.summary-actions button')].find(b=>b.textContent.includes('Share'));
+click(shareBtn);
+await wait(50);
+const toastText = document.querySelector('.draft-toast')?.textContent || '';
+console.log('#1 Share toast contains dailychallenge link:', toastText.includes('#/dailychallenge/2'));
+console.log('#1 Share toast contains "PokeGuess Daily Draft":', toastText.includes('PokeGuess Daily Draft'));
+console.log('#1 Share toast contains "Overall Win Rate" or a player line (no opponents yet is also valid):', toastText.includes('Overall Win Rate') || toastText.includes('Player'));
+console.log('#1 Share toast text (for manual inspection):', toastText.replace(/\s+/g, ' ').slice(0, 200));
 
 // #9 — "See Yesterday's Results" round trip
 const yesterdayBtn = [...q('.summary-actions button')].find(b=>b.textContent.includes('Yesterday'));

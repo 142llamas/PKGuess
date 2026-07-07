@@ -1,5 +1,5 @@
 /**
- * @file tools/test/identity.test.mjs
+ * @file tools/test/identity.test.mjs 
  * @version 1.0.0
  * Unit tests for docs/js/lib/identity.js (#16): name claim / collision
  * detection / cross-device reclaim. Uses a fake in-memory Firebase (async

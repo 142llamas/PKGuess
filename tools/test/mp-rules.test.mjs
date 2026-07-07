@@ -1,6 +1,6 @@
 /**
  * @file tools/test/mp-rules.test.mjs
- * @version 1.0.0
+ * @version 1.0.0 
  * Unit tests for the pure multiplayer rules (docs/js/lib/mp-rules.js): seed
  * determinism, room codes, seed→same-mystery (the no-answer-transmitted basis),
  * reveal/guess outcomes, turn rotation, win advance, and champion detection.
@@ -10,7 +10,9 @@ import { fileURLToPath } from 'node:url';
 import {
   seedFor, buildEngine, applyReveals, revealOutcome, guessOutcome,
   nextTurnPos, weightedRandomClue, advanceAfterWin, champion, makeRoomCode, buildRevealSequence,
+  computeAutoDeducedIds, leaderUid,
 } from '../../docs/js/lib/mp-rules.js';
+import { PokeGuessRound } from '../../docs/js/lib/engine.js';
 
 const load = (rel) => JSON.parse(readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8'));
 const gen2 = load('../../docs/data/gen2.json');
@@ -125,5 +127,66 @@ export default function (t) {
 
     // Every entry is a usable {id, value} pair.
     t.ok(seqA.every((s) => typeof s.id === 'number' && typeof s.value === 'string' && s.value.length > 0), 'every sequence entry has a numeric id and a non-empty string value');
+  }
+
+  t.section('mp-rules — computeAutoDeducedIds (#8: no leak of undetermined evolution clues)');
+  {
+    const mk = (name) => {
+      const m = gen2.pokedex.find((p) => p.name === name);
+      const r = new PokeGuessRound({ genData: gen2, movelist: {}, rng: () => 0.5 });
+      r.start({ difficultyId: 'custom', mystery: m, custom: { points: 999, guessCost: 0, startClueMode: 'none' } });
+      return r;
+    };
+    // Revealing "Can Evolve" (10) alone determines NOTHING about family size or
+    // stage — the mon could be a standalone, or the final form of a 2/3 family.
+    for (const name of ['Tauros', 'Venusaur', 'Ivysaur']) {
+      const r = mk(name);
+      r.buyClue(10);
+      const ded = computeAutoDeducedIds(r, new Set());
+      t.ok(!(8 in r.revealedClues), `${name}: Can Evolve alone does NOT reveal family size (#8)`);
+      t.ok(!(9 in r.revealedClues), `${name}: Can Evolve alone does NOT reveal evolution stage (#8)`);
+      t.ok(ded.every((id) => id in r.revealedClues), `${name}: returned ids match what was actually revealed`);
+    }
+    // The helper never reveals a clue the engine considers determined (it blocks
+    // buying those), so it must not over-report either — it only returns ids it
+    // genuinely applied.
+    const r2 = mk('Venusaur');
+    r2.buyClue(9); // reveal stage=final; canEvolve/evolvesFrom become engine-determined (blocked)
+    const ded2 = computeAutoDeducedIds(r2, new Set());
+    t.ok(ded2.every((id) => id in r2.revealedClues), 'never reports an id it did not actually reveal');
+  }
+
+  t.section('mp-rules.js \u2014 leaderUid: host-disconnect resilience, single source of truth for online.js + race.js');
+  {
+    const room = (overrides) => ({
+      hostUid: 'uidA',
+      joinOrder: ['uidA', 'uidB', 'uidC'],
+      players: {
+        uidA: { name: 'Ash', connected: true },
+        uidB: { name: 'Brock', connected: true },
+        uidC: { name: 'Cathy', connected: true },
+      },
+      ...overrides,
+    });
+
+    t.eq(leaderUid(room()), 'uidA', 'original host, still connected \u2192 leader');
+
+    t.eq(leaderUid(room({ players: { uidA: { name: 'Ash', connected: false }, uidB: { name: 'Brock', connected: true }, uidC: { name: 'Cathy', connected: true } } })),
+      'uidB', 'host disconnected \u2192 falls back to the earliest-JOINED still-connected player (not just any connected player)');
+
+    t.eq(leaderUid(room({ joinOrder: ['uidA', 'uidC', 'uidB'], players: { uidA: { name: 'Ash', connected: false }, uidB: { name: 'Brock', connected: true }, uidC: { name: 'Cathy', connected: true } } })),
+      'uidC', 'the fallback genuinely follows joinOrder, not object key order (uidC joined before uidB here)');
+
+    t.eq(leaderUid(room({ players: { uidA: { name: 'Ash', connected: false }, uidB: { name: 'Brock', connected: false }, uidC: { name: 'Cathy', connected: true } } })),
+      'uidC', 'skips MULTIPLE disconnected players to find the first who is still connected');
+
+    t.eq(leaderUid(room({ players: { uidA: { name: 'Ash', connected: false }, uidB: { name: 'Brock', connected: false }, uidC: { name: 'Cathy', connected: false } } })),
+      'uidA', 'if literally nobody is connected, falls back to the first joiner rather than returning null (never leaves a room leaderless)');
+
+    t.eq(leaderUid(room({ joinOrder: undefined, players: { uidA: { name: 'Ash', connected: false }, uidB: { name: 'Brock', connected: true } } })),
+      'uidB', 'falls back to Object.keys(players) when joinOrder is missing entirely');
+
+    t.eq(leaderUid(null), null, 'a missing room returns null rather than throwing');
+    t.eq(leaderUid({}), null, 'a room with no players object returns null rather than throwing');
   }
 }

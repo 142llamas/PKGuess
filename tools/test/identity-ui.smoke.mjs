@@ -1,4 +1,4 @@
-// identity-ui.js render/interaction smoke (#16). Exercises the real DOM panel
+// identity-ui.js render/interaction smoke (#16). Exercises the real DOM panel 
 // against a fake identity object (mirrors identity.js's real async contract).
 // Run: node tools/test/identity-ui.smoke.mjs
 import { JSDOM } from 'jsdom';

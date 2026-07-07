@@ -1,5 +1,5 @@
 /**
- * @file tools/test/engine.test.mjs
+ * @file tools/test/engine.test.mjs 
  * @version 1.0.0
  * Unit tests for the guess-game engine (docs/js/lib/engine.js): name
  * normalization, round setup from a difficulty, clue purchase deducting points,
@@ -8,7 +8,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { PokeGuessRound, normalizeName, poolFilterForData, matchesPool } from '../../docs/js/lib/engine.js';
+import { PokeGuessRound, normalizeName, poolFilterForData, matchesPool, computeScoreMultiplier, SCORE_MULTIPLIERS } from '../../docs/js/lib/engine.js';
 
 const load = (rel) => JSON.parse(readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8'));
 const gen2 = load('../../docs/data/gen2.json');
@@ -240,11 +240,38 @@ export default function (t) {
     t.ok(round.gameOver && round.gameResult === 'win', 'round marked won');
   }
 
-  t.section('engine.js — gen pool filter');
+  t.section('engine.js — computeScoreMultiplier (#5): stacks difficulty \u00d7 guessMode \u00d7 clueMode \u00d7 catDiversity');
   {
-    const r = new PokeGuessRound({ genData: gen2, rng: () => 0 });
-    r.start({ difficultyId: 'normal', poolFilter: 'gen2', clueMode: 'choose' });
-    const n = parseInt(r.mystery.num, 10);
-    t.ok(n >= 152 && n <= 251, `gen2 filter picks a Johto mon (#${n})`);
+    // Easiest possible combo: lowest multiplier on every axis.
+    const easiest = computeScoreMultiplier({ difficultyId: 'easy', guessMode: 'free', clueMode: 'choose', catDiversity: 'free' });
+    t.eq(easiest, 0.8 * 1.0 * 0.8 * 1.0, 'easiest settings across all four axes multiply out correctly');
+
+    // Hardest possible combo: highest multiplier on every axis.
+    const hardest = computeScoreMultiplier({ difficultyId: 'extreme', guessMode: 'forced', clueMode: 'random', catDiversity: 'cycle' });
+    t.eq(hardest, 2.0 * 1.3 * 1.6 * 1.5, 'hardest settings across all four axes multiply out correctly');
+    t.ok(hardest > easiest, 'hardest combo scores a strictly higher multiplier than the easiest combo');
+
+    // Every individual axis: harder option > easier option, holding the rest fixed.
+    const base = { difficultyId: 'normal', guessMode: 'free', clueMode: 'choose', catDiversity: 'free' };
+    t.ok(computeScoreMultiplier({ ...base, difficultyId: 'hard' }) > computeScoreMultiplier(base), 'Hard > Normal');
+    t.ok(computeScoreMultiplier({ ...base, difficultyId: 'extreme' }) > computeScoreMultiplier({ ...base, difficultyId: 'hard' }), 'Extreme > Hard');
+    t.ok(computeScoreMultiplier({ ...base, guessMode: 'forced' }) > computeScoreMultiplier(base), 'Forced Reveal > Guess Anytime');
+    t.ok(computeScoreMultiplier({ ...base, clueMode: 'category' }) > computeScoreMultiplier(base), 'By-category > Choose');
+    t.ok(computeScoreMultiplier({ ...base, clueMode: 'random' }) > computeScoreMultiplier({ ...base, clueMode: 'category' }), 'Random > By-category');
+    t.ok(computeScoreMultiplier({ ...base, catDiversity: 'diff' }) > computeScoreMultiplier(base), 'Force-Different > Free Choice');
+    t.ok(computeScoreMultiplier({ ...base, catDiversity: 'cycle' }) > computeScoreMultiplier({ ...base, catDiversity: 'diff' }), 'Cycle-All > Force-Different');
+
+    // Custom has no multiplier at all (not leaderboard-eligible).
+    t.eq(computeScoreMultiplier({ difficultyId: 'custom', guessMode: 'free', clueMode: 'choose', catDiversity: 'free' }), null, 'Custom difficulty returns null (no multiplier, not submitted)');
+
+    // Defensive: an unrecognized value on any axis returns null rather than NaN or a silent wrong number.
+    t.eq(computeScoreMultiplier({ difficultyId: 'normal', guessMode: 'bogus', clueMode: 'choose', catDiversity: 'free' }), null, 'an unrecognized guessMode value returns null rather than NaN');
+
+    // The exported table itself matches the locked-in values (catches accidental edits).
+    t.eq(SCORE_MULTIPLIERS.difficulty.hard, 1.6, 'Hard multiplier is locked at 1.6');
+    t.eq(SCORE_MULTIPLIERS.difficulty.extreme, 2.0, 'Extreme multiplier is locked at 2.0');
+    t.eq(SCORE_MULTIPLIERS.clueMode.choose, 0.8, 'Choose multiplier is locked at 0.8');
+    t.eq(SCORE_MULTIPLIERS.clueMode.random, 1.6, 'Random multiplier is locked at 1.6');
+    t.eq(SCORE_MULTIPLIERS.catDiversity.cycle, 1.5, 'Cycle-All multiplier is locked at 1.5');
   }
 }

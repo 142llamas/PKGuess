@@ -1,12 +1,12 @@
 import { JSDOM } from 'jsdom';
 import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath } from 'node:url'; 
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'https://example.com/' });
 const { window } = dom;
 const def = (k, v) => { try { Object.defineProperty(globalThis, k, { value: v, configurable: true, writable: true }); } catch {} };
 global.window = window; global.document = window.document;
-def('navigator', window.navigator); def('Node', window.Node); def('HTMLElement', window.HTMLElement); def('MouseEvent', window.MouseEvent);
+def('navigator', window.navigator); def('Node', window.Node); def('HTMLElement', window.HTMLElement); def('MouseEvent', window.MouseEvent); def('location', window.location);
 def('localStorage', { _d: {}, getItem(k) { return this._d[k] ?? null; }, setItem(k, v) { this._d[k] = String(v); }, removeItem(k) { delete this._d[k]; } });
 global.setTimeout = (fn) => { try { fn(); } catch {} return 0; };
 
@@ -33,7 +33,7 @@ async function run(name, importPath, factoryName, checks) {
   try {
     ctrl = factory({ mount, config: { genLabels: { 1: 'Gen 1', 2: 'Gen 2' } }, data: gen2, params: { gen: 2, modeId: name }, onExit: () => {} });
     await tick();
-    checks(mount);
+    await checks(mount);
   } catch (e) { fail++; console.log(`  THREW in ${name}: ${e.message}`); }
   try { ctrl && ctrl.destroy && ctrl.destroy(); } catch {}
 }
@@ -145,6 +145,67 @@ await run('pokedex', '../../docs/js/modes/pokedex.js', 'createPokedex', (m) => {
   ok(!statuses.includes('caught'), 'single: nothing was incorrectly marked "caught" on a loss');
   ctrl.destroy && ctrl.destroy();
   localStorage.removeItem('pokeGuess_catchTracker');
+}
+
+// #5 — leaderboard score multiplier: a deterministic win (rng:()=>0 always
+// picks gen2.json's pokedex[0] = Bulbasaur as the mystery, so it can be
+// guessed correctly on the very first action) on the HARDEST settings
+// combination must show "raw \u00d7 multiplier = final" on the summary screen,
+// with the exact expected numbers — not just "some multiplier was applied".
+{
+  const mod = await import('../../docs/js/modes/single.js');
+  const mount = mk();
+  const clickEl = (n) => n && n.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  const ctrl = mod.createSingle({ mount, config: {}, data: gen2, params: { gen: 2, modeId: 'single', rng: () => 0 }, onExit: () => {} });
+  await tick();
+  clickEl(mount.querySelector('.diff-card[data-diff="hard"]'));
+  clickEl(mount.querySelector('.sp-opt-btn[data-name="guessMode"][data-val="forced"]'));
+  clickEl(mount.querySelector('.sp-opt-btn[data-name="clueMode"][data-val="random"]'));
+  clickEl(mount.querySelector('.sp-opt-btn[data-name="catDiversity"][data-val="cycle"]'));
+  clickEl([...mount.querySelectorAll('button')].find((b) => b.textContent.includes('Start game')));
+  await tick();
+  // Forced-reveal mode starts in the GUESS phase, so the very first action can
+  // be a correct guess with zero clues spent \u2014 raw score = Hard's full 45 pts.
+  const input = mount.querySelector('#guess-input');
+  ok(!!input, 'single: guess input present at game start');
+  input.value = 'Bulbasaur';
+  clickEl(mount.querySelector('.guess-btn'));
+  await tick();
+  ok(!!mount.querySelector('.summary-container'), 'single: correct first guess reaches the summary screen');
+  const scoreText = mount.querySelector('.summary-score')?.textContent || '';
+  const expectedMult = 1.6 * 1.3 * 1.6 * 1.5; // Extreme-tier settings: Hard \u00d7 Forced \u00d7 Random \u00d7 Cycle-All
+  const expectedFinal = Math.round(45 * expectedMult);
+  ok(scoreText.includes(`${expectedFinal} pts`), `single: #5 final score is ${expectedFinal} (raw 45 \u00d7 ${expectedMult.toFixed(2)}) \u2014 got "${scoreText}"`);
+  ok(scoreText.includes('45') && scoreText.includes(expectedMult.toFixed(2)), `single: #5 summary shows the raw/multiplier breakdown, not just the final number \u2014 got "${scoreText}"`);
+  ctrl.destroy && ctrl.destroy();
+}
+
+await run('leaderboard', '../../docs/js/modes/leaderboard.js', 'createLeaderboard', async (m) => {
+  await tick(); await tick(); await tick(); // getIdentity()'s dynamic import() rejection needs more ticks than the default tick() gives
+  ok(!!m.querySelector('.lb-tabs'), 'leaderboard: score tabs render');
+});
+
+// #11 — Leaderboard needs a way to reach Draft Battle / Daily Challenge
+// results, since it's often the first place a player looks for them.
+{
+  const mod = await import('../../docs/js/modes/leaderboard.js');
+  const mount = mk();
+  location.hash = '';
+  let ctrl;
+  try {
+    ctrl = mod.createLeaderboard({ mount, config: {}, data: gen2, params: { gen: 2, modeId: 'leaderboard' }, onExit: () => {} });
+    await tick(); await tick(); await tick();
+    const elite4Btn = [...mount.querySelectorAll('button')].find((b) => b.textContent.includes('Elite 4 Standings'));
+    const dailyBtn = [...mount.querySelectorAll('button')].find((b) => b.textContent.includes('Daily Challenge Results'));
+    ok(!!elite4Btn, '#11: an Elite 4 Standings link is present on the Leaderboard screen');
+    ok(!!dailyBtn, '#11: a Daily Challenge Results link is present on the Leaderboard screen');
+    elite4Btn.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    ok(location.hash === '#/draftbattle/2/thrones', `#11: clicking Elite 4 Standings navigates to the Elite 4 status screen (got hash: "${location.hash}")`);
+    dailyBtn.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    ok(location.hash === '#/dailychallenge/2/results', `#11: clicking Daily Challenge Results navigates to today's daily results (got hash: "${location.hash}")`);
+  } catch (e) { fail++; console.log(`  THREW in leaderboard draft-links test: ${e.message}`); }
+  try { ctrl && ctrl.destroy && ctrl.destroy(); } catch {}
+  location.hash = '';
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

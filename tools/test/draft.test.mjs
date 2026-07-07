@@ -1,5 +1,5 @@
 /**
- * @file tools/test/draft.test.mjs
+ * @file tools/test/draft.test.mjs 
  * @version 1.0.0
  * Unit tests for the reworked draft engine (docs/js/draft.js v0.5.0): two picks
  * per card sourced from the CORRECT card, type-drafted-twice → mono, "—" picks,
@@ -8,7 +8,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { DraftSession, autoDraft, autoDraftScaled, resolveThroneCascade, TIER_RANK, buildSpeciesList, buildLearnsetMap } from '../../docs/js/draft.js';
+import { DraftSession, autoDraft, autoDraftScaled, resolveThroneCascade, TIER_RANK, isTierUnlocked, nextProgressRank, buildSpeciesList, buildLearnsetMap } from '../../docs/js/draft.js';
 
 const load = (rel) => JSON.parse(readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8'));
 const gen2 = load('../../docs/data/gen2.json');
@@ -245,5 +245,36 @@ export default function (t) {
     const d = resolveThroneCascade({ newTierKey: 'all', oldTierKey: 'year', tierRank: TIER_RANK, defeatedUid: null, defeatedMon: null, champLabel: null });
     t.eq(d.action, 'claimNewVacateOld', 'winning All-Time while holding Lance (year) claims All-Time and vacates Lance \u2014 All-Time outranks every numbered stage');
     t.eq(d.vacatedTier, 'year', 'Lance (year) is correctly identified as the vacated (lower) tier');
+  }
+
+  t.section('draft.js — nextProgressRank (#12/#13): monotonic, never decreases');
+  {
+    t.eq(nextProgressRank(0, 'day', TIER_RANK), 1, 'first-ever claim (Will/day) sets rank to 1');
+    t.eq(nextProgressRank(1, 'week', TIER_RANK), 2, 'claiming the next tier up advances rank');
+    t.eq(nextProgressRank(3, 'day', TIER_RANK), 3, 're-claiming a LOWER tier than already reached does not lower rank');
+    t.eq(nextProgressRank(5, 'day', TIER_RANK), 5, 'already at the max (All-Time) — re-claiming Will keeps rank at 5');
+    t.eq(nextProgressRank(undefined, 'day', TIER_RANK), 1, 'undefined/missing current rank treated as 0');
+  }
+
+  t.section('draft.js — isTierUnlocked (#12/#13): gated on progress rank, NOT on who currently holds the previous throne');
+  {
+    const KEYS = ['day', 'week', 'month', 'year', 'all'];
+    // Will (index 0) is always unlocked, regardless of progress.
+    t.ok(isTierUnlocked(0, 0, KEYS, TIER_RANK), 'Will (index 0) is unlocked even at rank 0');
+    // A brand-new player: nothing past Will is unlocked yet.
+    t.ok(!isTierUnlocked(1, 0, KEYS, TIER_RANK), 'Koga locked at rank 0');
+    t.ok(!isTierUnlocked(4, 0, KEYS, TIER_RANK), 'All-Time locked at rank 0');
+    // Exactly reached Will (rank 1) → Koga (needs rank>=1) unlocks, Bruno doesn't yet.
+    t.ok(isTierUnlocked(1, 1, KEYS, TIER_RANK), 'Koga unlocked once Will (rank 1) is reached');
+    t.ok(!isTierUnlocked(2, 1, KEYS, TIER_RANK), 'Bruno still locked at rank 1');
+    // THE actual bug being fixed: a player who has reached All-Time (rank 5)
+    // must see every tier as unlocked even though the #14a cascade (or a
+    // cadence reset) has vacated every lower throne they no longer physically
+    // hold — this is exactly the scenario the OLD "conquered(previous throne's
+    // CURRENT holder)" check got wrong.
+    for (let i = 0; i <= 4; i++) t.ok(isTierUnlocked(i, 5, KEYS, TIER_RANK), `tier index ${i} stays unlocked at max progress (rank 5), independent of who currently holds any throne`);
+    // A mid-ladder player (reached Bruno, rank 3) sees exactly the right frontier.
+    t.ok(isTierUnlocked(3, 3, KEYS, TIER_RANK), 'Lance unlocked at rank 3 (just beat Bruno)');
+    t.ok(!isTierUnlocked(4, 3, KEYS, TIER_RANK), 'All-Time still locked at rank 3');
   }
 }

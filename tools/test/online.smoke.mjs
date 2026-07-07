@@ -1,6 +1,6 @@
 import { JSDOM } from 'jsdom';
 import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath } from 'node:url'; 
 
 const dom = new JSDOM('<!doctype html><html><body><div id="A"></div><div id="B"></div></body></html>', { url: 'https://example.com/' });
 const { window } = dom;
@@ -279,22 +279,24 @@ console.log('\n— #4: category mode + diversity + exclusion + evo-deduction (on
 
 function eq2(a, b, m) { ok(a === b, `${m} (expected ${JSON.stringify(b)}, got ${JSON.stringify(a)})`); }
 
-// Evolution auto-deduction + multi-use re-offer, verified directly against
-// the shared engine primitives (same primitives online.js's revealClue now
-// calls) rather than fighting the UI for a specific deduction scenario.
-console.log('\n— #4: evolution auto-deduction + multi-use clue re-offer use the SAME shared helper as hot-seat —');
+// Evolution auto-deduction (#8 corrected): the shared helper must NOT reveal a
+// clue the player hasn't actually earned. Revealing "Can Evolve = No" alone does
+// not determine family size or stage (a mon can be the final form of a 2- or
+// 3-member family), so nothing may be auto-revealed from it.
+console.log('\n— #8: shared evo-deduction helper does not leak undetermined clues (online \u2194 hot-seat) —');
 {
   const { computeAutoDeducedIds } = await import('../../docs/js/lib/mp-rules.js');
   const { PokeGuessRound } = await import('../../docs/js/lib/engine.js');
-  const dragonite = gen2Data.pokedex.find((p) => p.name === 'Dragonite');
+  const dragonite = gen2Data.pokedex.find((p) => p.name === 'Dragonite'); // fam 3, final, canEvolve No
   const r = new PokeGuessRound({ genData: gen2Data, rng: Math.random });
   r.start({ difficultyId: 'custom', mystery: dragonite, clueMode: 'choose', custom: { points: 999, guessCost: 0, startClueMode: 'none' } });
-  r.buyClue(10); // reveal "Can Evolve" manually
+  r.buyClue(10); // reveal "Can Evolve" = No manually
   const deduced = computeAutoDeducedIds(r, new Set());
-  ok(deduced.length > 0, `revealing "Can Evolve" auto-deduces further evolution clues (got ids: ${deduced})`);
-  ok(deduced.every((id) => id in r.revealedClues), 'every deduced id is actually reflected in the round\u2019s revealedClues');
+  ok(!(8 in r.revealedClues), 'revealing "Can Evolve" alone does NOT leak family size (#8)');
+  ok(!(9 in r.revealedClues), 'revealing "Can Evolve" alone does NOT leak evolution stage (#8)');
+  ok(deduced.every((id) => id in r.revealedClues), 'any deduced id is actually reflected in revealedClues');
 
-  // exclusion respected
+  // exclusion respected (still honored by the same shared helper online.js uses)
   const r2 = new PokeGuessRound({ genData: gen2Data, rng: Math.random });
   r2.start({ difficultyId: 'custom', mystery: dragonite, clueMode: 'choose', custom: { points: 999, guessCost: 0, startClueMode: 'none' } });
   r2.buyClue(10);
@@ -302,7 +304,122 @@ console.log('\n— #4: evolution auto-deduction + multi-use clue re-offer use th
   ok(deduced2.length === 0, 'excludedIds are honored by the SAME shared deduction helper online.js now uses');
 }
 
+// ---------------------------------------------------------------------------
+// #19 — online GTR: after a player's turn expires and the NEXT player then
+// guesses wrong, that player's mandatory reveal step must yield exactly ONE
+// clue (no "reveal as many as you want", no "Skip to guess" with zero
+// reveals) and then the turn must pass back automatically — it must not get
+// stuck on the same player forever. Uses a fresh isolated room.
+console.log('\n— #19: online GTR after a turn-expiry — exactly one reveal, then auto-advance —');
+{
+  const idF = { uid: 'uidF', name: 'Brock' };
+  const idG = { uid: 'uidG', name: 'Gary' };
+  const fDiv = document.createElement('div'); fDiv.id = 'F'; document.body.appendChild(fDiv);
+  const gDiv = document.createElement('div'); gDiv.id = 'G'; document.body.appendChild(gDiv);
+  const F = createOnline({ mount: fDiv, config: {}, data: gen2Data, params: mkParams(idF), onExit: () => {} });
+  const G = createOnline({ mount: gDiv, config: {}, data: gen2Data, params: mkParams(idG), onExit: () => {} });
+  await settle();
+
+  const codesBefore = Object.keys((await db.get('/rooms')) || {});
+  click(findBtn('F', 'Create a room')); await settle();
+  // Random clue picking (matches the exact reported scenario: "reveal random
+  // clues") + Guess \u2192 Reveal (GTR) turn order.
+  click([...q('F', '.online-seg-btn')].find((b) => b.textContent.includes('Random')));
+  click([...q('F', '.online-seg-btn')].find((b) => b.textContent.includes('Guess \u2192 Reveal')));
+  click(findBtn('F', 'Create room')); await settle();
+  const codeG = Object.keys(await db.get('/rooms')).find((k) => !codesBefore.includes(k));
+  ok(!!codeG, 'GTR room created');
+  ok((await db.get(`/rooms/${codeG}`)).settings.gameMode === 'gtr', 'room settings recorded gameMode:gtr');
+
+  click(findBtn('G', 'Join with a code')); await settle();
+  const codeInputG = [...q('G', 'input')][0];
+  codeInputG.value = codeG; codeInputG.dispatchEvent(new window.Event('input', { bubbles: true }));
+  click(findBtn('G', 'Join')); await settle();
+  click(findBtn('F', 'Start game')); await settle();
+
+  let sg = await db.get(`/rooms/${codeG}`);
+  ok(sg.status === 'playing', 'GTR room started');
+  ok(sg.turnOrder[sg.currentTurnPos] === 'uidF', 'F acts first');
+  ok(sg.phase === 'guess', 'GTR starts in the GUESS phase (not reveal)');
+  ok(!findBtn('F', 'Skip guess'), 'GTR\u2019s guess phase has no "Skip guess" option (removed \u2014 it undermined the guess-first design)');
+
+  // "I let the first player's turn expire" — advance the clock past the turn
+  // deadline + grace period.
+  await advance(63000);
+  sg = await db.get(`/rooms/${codeG}`);
+  ok(sg.turnOrder[sg.currentTurnPos] === 'uidG', 'after F\u2019s turn expires, G becomes active');
+  ok(sg.phase === 'guess', 'G starts in the guess phase (GTR)');
+
+  // G guesses wrong \u2192 mandatory single-reveal phase, SAME player.
+  const gInput = document.getElementById('G').querySelector('#online-typing');
+  gInput.value = 'Magikarp-not-the-answer';
+  click(findBtn('G', 'Guess')); await settle();
+  sg = await db.get(`/rooms/${codeG}`);
+  ok(sg.phase === 'reveal', 'a wrong guess in GTR moves G into the reveal phase');
+  ok(sg.turnOrder[sg.currentTurnPos] === 'uidG', 'still G\u2019s turn during the mandatory reveal');
+  ok(!!findBtn('G', 'Reveal a random clue'), 'G is offered a reveal action');
+  ok(!findBtn('G', 'Skip to guess'), '#19: no "Skip to guess" option during GTR\u2019s mandatory reveal (would let a turn end with ZERO reveals)');
+
+  const revealedBefore = (sg.revealedClueIds || []).length;
+  click(findBtn('G', 'Reveal a random clue')); await settle();
+  sg = await db.get(`/rooms/${codeG}`);
+  eq2((sg.revealedClueIds || []).length, revealedBefore + 1, 'exactly one clue was revealed');
+  ok(sg.turnOrder[sg.currentTurnPos] === 'uidF', '#19: the turn passed back to F automatically \u2014 it did not stay stuck on G');
+  ok(sg.phase === 'guess', '#19: F lands in the guess phase (GTR), not another reveal opportunity');
+
+  // Confirm G genuinely cannot reveal again now that it's F's turn.
+  ok(!findBtn('G', 'Reveal a random clue'), 'G no longer has a reveal action once the turn has passed');
+
+  F.destroy(); G.destroy();
+}
+
+console.log('\n— Host-disconnect resilience: the room survives the original host leaving, and everyone is told —');
+{
+  const idH = { uid: 'uidH', name: 'Hilda' };
+  const idI = { uid: 'uidI', name: 'Iris' };
+  const hDiv = document.createElement('div'); hDiv.id = 'H'; document.body.appendChild(hDiv);
+  const iDiv = document.createElement('div'); iDiv.id = 'I'; document.body.appendChild(iDiv);
+  const H = createOnline({ mount: hDiv, config: {}, data: gen2Data, params: mkParams(idH), onExit: () => {} });
+  const Ic = createOnline({ mount: iDiv, config: {}, data: gen2Data, params: mkParams(idI), onExit: () => {} });
+  await settle();
+
+  const codesBefore = Object.keys((await db.get('/rooms')) || {});
+  click(findBtn('H', 'Create a room')); await settle();
+  click(findBtn('H', 'Create room')); await settle();
+  const codeHI = Object.keys(await db.get('/rooms')).find((k) => !codesBefore.includes(k));
+  ok(!!codeHI, 'room created');
+
+  click(findBtn('I', 'Join with a code')); await settle();
+  const codeInputI = [...q('I', 'input')][0];
+  codeInputI.value = codeHI; codeInputI.dispatchEvent(new window.Event('input', { bubbles: true }));
+  click(findBtn('I', 'Join')); await settle();
+
+  ok(!findBtn('I', 'Start game'), 'before any disconnect, only the host (H) can start the game');
+  ok(document.getElementById('I').textContent.includes('Waiting for the host'), 'I correctly sees "waiting for the host" while H is still connected');
+
+  // The original host (H) disconnects BEFORE the game ever starts.
+  await db.update(`/rooms/${codeHI}/players/uidH`, { connected: false });
+  await settle();
+
+  ok(document.getElementById('I').textContent.includes('has disconnected'), 'I is told the host has disconnected');
+  ok(document.getElementById('I').textContent.includes('you are'), 'the banner tells I that THEY are now in control (I is the only other connected player)');
+  ok(!!findBtn('I', 'Start game'), 'I (the new leader) can now start the game — the room is not permanently stuck');
+
+  click(findBtn('I', 'Start game')); await settle();
+  let hi = await db.get(`/rooms/${codeHI}`);
+  ok(hi.status === 'playing', 'the game actually started, driven by the fallback leader');
+
+  // Mid-game: let the (leaderless, since H is still disconnected) active
+  // player's turn time out, and confirm the leader-driven tick() still
+  // advances it — the core resilience duty this was all for.
+  const activeBefore = hi.turnOrder[hi.currentTurnPos];
+  await advance(63000);
+  hi = await db.get(`/rooms/${codeHI}`);
+  ok(hi.turnOrder[hi.currentTurnPos] !== activeBefore || hi.roundNum > 1 || hi.status !== 'playing', 'a turn-timeout is still enforced mid-game even with the original host disconnected (fallback leader\u2019s tick() drives it)');
+
+  H.destroy(); Ic.destroy();
+}
+
 A.destroy(); B.destroy();
 console.log(`\n${pass} passed, ${fail} failed`);
-process.exit(fail ? 0 : 0); // report only; non-fatal exit for the harness
-if (fail) process.exitCode = 1;
+process.exit(fail ? 1 : 0);

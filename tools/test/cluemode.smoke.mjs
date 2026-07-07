@@ -1,7 +1,7 @@
 // Clue-selection-mode smoke for single.js (#10/#11/#15b/#15c).
 // Exercises real DOM clicks against the actual controller — not just engine
 // unit tests — so a UI wiring mistake (missing class, stray click handler)
-// would be caught here even if the engine itself is correct.
+// would be caught here even if the engine itself is correct. 
 // Run: node tools/test/cluemode.smoke.mjs
 import { JSDOM } from 'jsdom';
 import { readFileSync } from 'node:fs';
@@ -144,6 +144,19 @@ console.log('— Forced + Random: no button is shown; wrong guess auto-reveals �
   // Either we won (rare) or a clue auto-revealed — both are valid outcomes of "the engine acted".
   ok(after !== before || mount.querySelector('.summary-container'), 'something happened after the forced+random guess (auto-reveal or a win)');
   ctrl.destroy();
+}
+
+// #4 — the moveset purchase-limit note must carry a styled class. single.js
+// renders it as `clue-limit-note`; styles.css must define that rule (it was
+// missing entirely, so the note rendered at default large/white). Bind the two
+// so they can't drift apart again.
+{
+  const singleSrc = readFileSync(P('../../docs/js/modes/single.js'), 'utf8');
+  const cssSrc = readFileSync(P('../../docs/css/styles.css'), 'utf8');
+  ok(/['"]clue-limit-note['"]/.test(singleSrc) || /clue-limit-note/.test(singleSrc), '#4: single.js still renders the limit note with class clue-limit-note');
+  const rule = cssSrc.match(/\.clue-limit-note\s*\{([^}]*)\}/);
+  ok(!!rule, '#4: styles.css defines a .clue-limit-note rule (was missing)');
+  ok(!!rule && /font-size\s*:/.test(rule[1]), '#4: .clue-limit-note sets a font-size (not default large text)');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

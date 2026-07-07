@@ -1,6 +1,6 @@
 // Cycling Road v2 smoke test (#1): predetermined synced clue order,
 // independent per-player advancement + toasts, room cap, time cap, splits
-// summary, rematch flow (success + "not enough players" failure).
+// summary, rematch flow (success + "not enough players" failure). 
 //
 // Each simulated player gets its OWN JSDOM window/document (a shared document
 // caused a confirmed jsdom quirk: duplicate ids across two "players" made
@@ -55,8 +55,19 @@ function makeFakeFB() {
   const parts = (p) => p.split('/').filter(Boolean);
   function snap(path) { let n = tree; for (const k of parts(path)) { if (n == null || typeof n !== 'object') return null; n = n[k]; } return clone(n); }
   function setDeep(path, val) { const ks = parts(path); let n = tree; for (let i = 0; i < ks.length - 1; i++) { if (typeof n[ks[i]] !== 'object' || n[ks[i]] == null) n[ks[i]] = {}; n = n[ks[i]]; } n[ks[ks.length - 1]] = clone(val); }
-  let notifying = false;
-  function notify() { if (notifying) return; notifying = true; try { for (const l of listeners) l.cb(snap(l.path)); } finally { notifying = false; } }
+  // A write triggered synchronously from WITHIN another write's own listener
+  // callback must never be silently dropped (real Firebase is eventually
+  // consistent but never loses a write) — queue it and re-run the full
+  // listener pass once the current one finishes, rather than a bare
+  // reentrancy guard that discards the nested notification outright.
+  let notifying = false, pendingNotify = false;
+  function notify() {
+    if (notifying) { pendingNotify = true; return; }
+    notifying = true;
+    try {
+      do { pendingNotify = false; for (const l of listeners) l.cb(snap(l.path)); } while (pendingNotify);
+    } finally { notifying = false; }
+  }
   return {
     async set(p, v) { setDeep(p, v); notify(); return true; },
     async update(p, o) { const cur = snap(p) || {}; setDeep(p, { ...cur, ...o }); notify(); return true; },
@@ -266,7 +277,35 @@ console.log('— "Team X advanced to round N" toast goes to the OTHER team, not 
   eq(redToast, '', 'Team Red does NOT get toasted about its own advancement');
 }
 
-console.log('— Team Blue solves its mystery too; game ends once BOTH teams finish (#1d.i for teams) —');
+console.log('— #17: the shared 1s cap-timer interval stays team-aware (was hijacking the progress strip) —');
+{
+  // Before the fix, startCapTimer()'s interval unconditionally called the
+  // INDIVIDUAL-mode renderProgressStrip()/maybeEndGameAsHost() every second,
+  // even in a team game — replacing the correct "Team Red / Team Blue"
+  // standings with a bogus per-PLAYER display (everyone stuck at 0/target,
+  // since team progress lives in teamState, not each player's own `solved`).
+  // A deeper consequence: maybeEndGameAsHost() (individual) can never detect
+  // a team game finishing (it only checks each player's own `solved`, which
+  // team mode never touches) — so it never gives the CORRECT team-ending
+  // check (maybeEndTeamGameAsHost) a periodic second chance to run. If the
+  // reactive end-of-game write ever doesn't reach every listener on the first
+  // try, an individual client can get stuck showing a stale "waiting for the
+  // other team" screen indefinitely, even though the game has genuinely
+  // ended — which matches the reported symptom of a correct final guess not
+  // visibly being recognized. The fix makes this interval poll the CORRECT,
+  // team-aware pair of functions every second as a self-healing safety net.
+  const beforeText = A.q('#race-progress')?.textContent || '';
+  ok(beforeText.includes('Team Red') && beforeText.includes('Team Blue'), `progress strip shows TEAM labels right after a solve (got: "${beforeText}")`);
+  clock.advance(3000); // three cap-timer ticks
+  await tick();
+  const afterText = A.q('#race-progress')?.textContent || '';
+  ok(afterText.includes('Team Red') && afterText.includes('Team Blue'), `#17: progress strip STILL shows TEAM labels after the cap-timer has ticked several times (got: "${afterText}")`);
+  ok(!afterText.includes('Ash') && !afterText.includes('Brock'), '#17: progress strip does NOT fall back to per-player names in a team game');
+  // The reveal feed must also be completely unaffected by the cap-timer tick.
+  ok(!!A.q('#race-revealed'), 'the revealed-clues box is still present and unaffected');
+}
+
+console.log('— Team Blue solves its mystery too; game ends once BOTH teams finish, and EVERY client (not just whoever triggered it) sees it (#1d.i / #17) —');
 {
   const cInput = C.q('#race-guess');
   ok(!!cInput, 'Cathy (first in Team Blue\u2019s order) can answer');
@@ -289,10 +328,13 @@ console.log('— Team Blue solves its mystery too; game ends once BOTH teams fin
   room = await fb.get('/rooms/' + code);
   eq(room.teamState[0].solved, 2, 'Team Red finished (2/2)');
   eq(room.teamState[1].solved, 2, 'Team Blue finished (2/2)');
+  // #17 — the cap-timer's periodic (now team-aware) poll is what reliably
+  // surfaces the ending on every client, a beat after the winning guess.
   clock.advance(1100);
   await tick();
   room = await fb.get('/rooms/' + code);
   eq(room.status, 'gameOver', 'game ends once BOTH teams have finished');
+  ok(!A.text().includes('Waiting for the other team'), '#17: Ash (Team Red, finished first) is NOT stuck on the stale "waiting" screen once the game has genuinely ended');
 }
 
 console.log('— Results show TEAM totals + splits (#1e for teams) —');
@@ -326,6 +368,54 @@ console.log('— Team Mode rematch requires ALL players opted in, not just 2 (#3
   eq(room.status, 'playing', 'rematch auto-started after the countdown');
   eq(room.teamState[0].solved, 0, 'Team Red reset to 0 solved');
   eq(room.players.uidA.team, 0, 'team assignments are preserved across a rematch');
+}
+
+console.log('\n— Team Mode host-disconnect resilience: the room survives the original host leaving, and everyone is told —');
+{
+  const J = await mkClient('uidJ', 'Jasmine');
+  const K = await mkClient('uidK', 'Karen');
+  const L = await mkClient('uidL', 'Lorelei');
+  const M = await mkClient('uidM', 'Morty');
+  const codesBefore = Object.keys((await fb.get('/rooms')) || {});
+  J.click(J.btn('Create a room')); await tick();
+  J.click(J.btn('Team Mode: Off')); await tick();
+  const tinputJ = J.q('input[type=number]'); tinputJ.value = '2'; tinputJ.dispatchEvent(new J.win.Event('input', { bubbles: true }));
+  J.click(J.btn('Create room')); await tick();
+  const codeJ = Object.keys(await fb.get('/rooms')).find((k) => !codesBefore.includes(k));
+  ok(!!codeJ, 'team room created');
+
+  for (const client of [K, L, M]) {
+    client.click(client.btn('Join with a code')); await tick();
+    const i = client.q('input'); i.value = codeJ; client.click(client.btn('Join')); await tick();
+  }
+
+  ok(!K.btn('Randomize Teams'), 'before any disconnect, only the host (Jasmine) sees the team-builder controls');
+
+  // The original host (J) disconnects BEFORE the game ever starts.
+  await fb.update(`/rooms/${codeJ}/players/uidJ`, { connected: false });
+  await tick();
+
+  ok(K.text().includes('has disconnected'), 'K is told the host has disconnected');
+  ok(K.text().includes('you are'), 'the banner tells K that THEY are now in control (K is the earliest-joined still-connected player)');
+  const randomizeBtn = K.btn('Randomize Teams');
+  ok(!!randomizeBtn, 'K (the new leader) now sees the team-builder controls \u2014 the room is not permanently stuck');
+
+  K.click(randomizeBtn); await tick();
+  const startBtnK = K.btn('Start');
+  ok(!!startBtnK && !startBtnK.disabled, 'K can start the game once everyone has a team');
+  K.click(startBtnK); await tick();
+  let roomJ = await fb.get(`/rooms/${codeJ}`);
+  ok(roomJ.status === 'playing', 'the team game actually started, driven by the fallback leader');
+
+  // Mid-game: let the room-wide time cap elapse with the original host still
+  // disconnected, and confirm the leader-driven capTimer duty (team variant)
+  // still enforces it.
+  clock.advance(2 * 120000 + 1000);
+  await tick();
+  roomJ = await fb.get(`/rooms/${codeJ}`);
+  ok(roomJ.status === 'gameOver', 'the room-wide time cap is still enforced mid-game with the original host disconnected (fallback leader\u2019s capTimer drives it, team variant)');
+
+  J.destroy(); K.destroy(); L.destroy(); M.destroy();
 }
 
 A.destroy(); B.destroy(); C.destroy(); D.destroy();
