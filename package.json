@@ -1,0 +1,13 @@
+{
+  "name": "pokeguess-online",
+  "private": true,
+  "type": "module",
+  "description": "Test tooling only — the app itself is a static site with no build step (see docs/).",
+  "devDependencies": {
+    "jsdom": "^24.0.0"
+  },
+  "scripts": {
+    "test": "node tools/test/run.mjs",
+    "test:smoke": "for f in tools/test/*.smoke.mjs; do node \"$f\" || exit 1; done"
+  }
+}

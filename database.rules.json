@@ -49,6 +49,13 @@
           ".validate": "($tier === 'day' || $tier === 'week' || $tier === 'month' || $tier === 'year' || $tier === 'all') && newData.hasChildren(['holderUid', 'holderName', 'takenAt'])"
         }
       },
+      "progress": {
+        "$uid": {
+          ".read": "auth !== null",
+          ".write": "auth !== null && auth.uid === $uid",
+          ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 5"
+        }
+      },
       "thronehistory": {
         "$tier": {
           ".read": "auth !== null",

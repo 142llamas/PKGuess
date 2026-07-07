@@ -3,16 +3,29 @@
 A single static website (vanilla JS ES modules, no build step) hosting three
 games over Gens I & II:
 
-- **Gen 1 Guess** and **Gen 2 Guess** — buy clues to identify a mystery Pokémon
-  (Single Player, Pokédex, Safari Zone, Victory Road, hot-seat Multiplayer,
-  Leaderboards).
+- **Gen 1 Guess** and **Gen 2 Guess** — buy clues to identify a mystery Pokémon.
+  Single Player, Pokédex, Safari Zone, and Victory Road (an endless streak
+  gauntlet, 8 tiers, fewer clues as the streak climbs). Multiplayer comes in
+  two forms: hot-seat pass-and-play, and real-time **Online** rooms (Firebase-
+  backed, RTG/GTR turn modes, By-Category/Random clue selection, category
+  diversity). **Cycling Road** is a separate synced-timer race mode (solo or
+  2-team) where every player in a room races the same predetermined mystery
+  sequence independently, with live standings and a persistent post-game
+  rematch lobby. All online modes (Online guess multiplayer, Cycling Road)
+  survive the room host disconnecting — a fallback leader (the earliest-joined
+  still-connected player) transparently takes over host duties, with a banner
+  telling everyone when this has happened.
 - **Draft Battle (Gen 2)** — draft a "Frankenstein" Pokémon two attributes at a
-  time, then battle: free-play **Throne** challenges and a once-a-day **Daily
-  Challenge** ranked by average win %.
+  time, then battle: a free-play **Elite 4 gauntlet** (auto-battles Will →
+  Koga → Bruno → Lance → the All-Time Champion, stopping at your first loss)
+  and a once-a-day **Daily Challenge** ranked by average win %. The battle
+  simulator models real Gen 1/2 move mechanics (multi-hit, two-turn/recharge
+  moves, status effects, stat stages, and move-specific special cases like
+  Curse, Belly Drum, and Leech Seed) rather than plain damage-only combat.
 
-Identity, leaderboards, thrones and the daily are backed by **Firebase Realtime
-Database** + **Anonymous Auth**, loaded lazily so offline modes never fetch the
-SDK.
+Identity, leaderboards, online rooms, thrones, and the daily are backed by
+**Firebase Realtime Database** + **Anonymous Auth**, loaded lazily so offline
+modes never fetch the SDK.
 
 ---
 
@@ -25,13 +38,19 @@ GitHub Pages serves the **`docs/`** folder. Keep this structure exactly
 <repo root>/
 ├─ MANIFEST.md                 # authoritative file inventory (versions live in files)
 ├─ README.md                   # this file
+├─ CHANGE_TRACKER_v3.md         # decision history — start here in a new chat
+├─ TESTING_CHECKLIST.md        # hands-on QA checklist, kept in sync with the app
 ├─ database.rules.json         # Firebase RTDB security rules (paste into console)
 ├─ tools/                      # build + test scripts (NOT served)
 │   ├─ generate-data.mjs
 │   ├─ generate-movestats.mjs
 │   ├─ apply-movestats.mjs
-│   └─ test/                   # zero-dependency unit tests
-│       ├─ run.mjs  _harness.mjs  sim.test.mjs  draft.test.mjs  engine.test.mjs
+│   └─ test/                   # zero-dependency unit tests + jsdom smoke tests
+│       ├─ run.mjs  _harness.mjs                    # unit runner
+│       ├─ sim.test.mjs  sim-status.test.mjs        # battle simulator
+│       ├─ draft.test.mjs  engine.test.mjs  mp-rules.test.mjs
+│       ├─ identity.test.mjs  catch-tracker.test.mjs  share.test.mjs
+│       └─ *.smoke.mjs                              # jsdom UI smokes (see "Run the tests")
 └─ docs/                       # ← GitHub Pages root
     ├─ index.html
     ├─ .nojekyll               # empty; stops Pages stripping js/-prefixed paths
@@ -40,11 +59,13 @@ GitHub Pages serves the **`docs/`** folder. Keep this structure exactly
     │   ├─ main.js  modes.js
     │   ├─ draft.js  sim.js    # ← in docs/js/ (NOT lib/); the adapter imports ../draft.js
     │   ├─ lib/                # shared logic
-    │   │   ├─ dom.js  draft-adapter.js  engine.js  firebase.js
-    │   │   ├─ identity.js  leaderboard-data.js  share.js
+    │   │   ├─ dom.js  engine.js  firebase.js  mp-rules.js
+    │   │   ├─ identity.js  identity-ui.js  catch-tracker.js  pokeinfo.js
+    │   │   ├─ leaderboard-data.js  share.js  draft-adapter.js
     │   └─ modes/              # one controller per screen
     │       ├─ single.js  pokedex.js  safari.js  victoryroad.js
-    │       ├─ multiplayer.js  leaderboard.js  draftbattle.js
+    │       ├─ multiplayer.js  online.js  race.js
+    │       ├─ leaderboard.js  draftbattle.js
     ├─ data/                   # JSON generated from the Excel workbook
     │   ├─ config.json  gen1.json  gen2.json
     │   ├─ movelist-gen{1,2}.json  movestats-gen{1,2}.json
@@ -78,16 +99,37 @@ games, drafting, battles vs NPC champions) works fully offline.
 
 ## Run the tests
 
-Pure logic (engine / battle sim / draft engine) has zero-dependency Node tests:
+Two layers, both zero-dependency-beyond-`jsdom` and CI-friendly (non-zero exit
+on any failure):
 
 ```bash
-node tools/test/run.mjs          # exits non-zero on any failure (CI-friendly)
+npm install                      # one-time; installs jsdom for the smoke tests
+npm test                         # pure-logic unit tests — node tools/test/run.mjs
+npm run test:smoke               # jsdom UI smokes — every tools/test/*.smoke.mjs
 ```
 
-Covers `sim.js` (stat conversion, determinism, win accounting, type immunity),
-`draft.js` (two-picks-per-card sourced from the correct card, type-twice→mono,
-"—" picks, completion with zero mis-sourced picks, daily determinism, weighted
-move reroll, autoDraft) and `engine.js` (round setup, clue purchase, scoring).
+**Unit tests** (`npm test`) cover pure logic with no DOM: `sim.js` (stat
+conversion, determinism, win accounting, type immunity, real move mechanics —
+multi-hit, two-turn/recharge, status effects, stat stages, Curse/Belly Drum/
+Rest/Pain Split/Leech Seed), `draft.js` (card sourcing, mono-type picks,
+daily determinism, weighted move reroll, autoDraft, Elite 4 stat-band scaling,
+the one-throne-per-Pokémon cascade), `engine.js` (round setup, clue purchase,
+scoring, category diversity), `mp-rules.js` (seed determinism, reveal/guess
+outcomes, turn rotation, `leaderUid` host-disconnect resilience), `identity.js`,
+`catch-tracker.js`, and `share.js` (summary-card text, deep links, the mon
+share-card canvas layout).
+
+**Smoke tests** (`npm run test:smoke`) drive the real controllers through
+jsdom — clicking actual buttons, typing into actual inputs, reading actual
+rendered text — rather than calling internal functions directly. This is what
+catches UI-wiring bugs the unit tests can't see. Notably: `race.smoke.mjs` and
+`race-teams.smoke.mjs` (Cycling Road, individual and Team Mode) and
+`online.smoke.mjs` (Online guess multiplayer) each drive **multiple
+simulated clients sharing one fake Firebase**, including host-disconnect
+scenarios (marking a player's `connected` flag false mid-test and confirming
+the room recovers); `victoryroad.smoke.mjs` drives a full multi-round session
+with a deterministic shuffle; `throne.smoke.mjs` covers the Elite 4 gauntlet
+end-to-end.
 
 ---
 

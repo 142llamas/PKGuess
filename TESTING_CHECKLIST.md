@@ -25,6 +25,9 @@ player sees.
 - [ ] 1.9 In the Pokédex, toggle **Seen** and **Caught** filters independently, then both together — confirm both-on shows the *union* (anything Seen OR Caught), not just one or the other.
 - [ ] 1.10 Play a round of **Safari Zone** — confirm bait/rock reveal a clue at normal cost, and manually clicking a clue costs double.
 - [ ] 1.11 Play a round of **Victory Road** — confirm it plays as an endless streak with fewer clues at higher tiers.
+- [ ] 1.12 Check the tier boundaries — Tier 1 should last through your **5th** correct guess (streak 0–5), Tier 2 through your **10th**, etc. — one more Pokémon per tier than before.
+- [ ] 1.13 On Tiers 1–4, confirm **"Has an Immunity"** is pre-revealed. On Tiers 3–8, confirm a combined **weakness/resistance** reveal is pre-revealed (up to 6 at Tier 3, shrinking by 1 each tier down to 1 at Tier 8) — labeled "Weak:" / "Resist:" in one chip. On Tier 7, confirm Highest/Lowest Base Stat (just the stat name, no number) are pre-revealed.
+- [ ] 1.14 Confirm the two type clues show on **one line** in one chip (e.g. "Fire / Flying"), egg moves show as **one chip listing all of them** (not one chip per move), and weakness/resistance show together in **one chip**, clearly labeled which is which.
 
 ## 2. Multiplayer (Hot-seat, same device)
 
@@ -34,6 +37,7 @@ player sees.
 - [ ] 2.4 Open **⚙️ Clue Availability** in setup, uncheck a few clues — confirm those clues never show up as random/category picks during the game.
 - [ ] 2.5 Reveal a Pokémon's Evolution Stage or Can Evolve clue — confirm any logically-implied evolution clues auto-reveal for free right after.
 - [ ] 2.6 A wrong guess, a round ending, and someone quitting mid-game — confirm the Pokédex Caught/Seen status updates correctly for the mystery each time (pairs with 1.8/1.9).
+- [ ] 2.7 In **Guess → Reveal** mode, guess wrong — confirm you're forced into exactly **one** reveal (no "skip guess" or "skip reveal" option anywhere), then the turn passes to the next player automatically.
 
 ## 3. Online Multiplayer
 
@@ -43,6 +47,8 @@ player sees.
 - [ ] 3.4 Have both players tap "Want a rematch?" — confirm the host's "Start rematch" button enables only once someone *else* has also opted in, and a 5-second countdown starts.
 - [ ] 3.5 Let the countdown finish — confirm a fresh game starts with scores reset to 0.
 - [ ] 3.6 Try it again but have only the host opt in — confirm the host sees an error and returns to the main menu instead of starting a 1-player game.
+- [ ] 3.7 In **Guess → Reveal** mode, let a turn expire then guess wrong — confirm you're forced into exactly **one** reveal (no skip option), then control passes back automatically — you should never get stuck revealing indefinitely.
+- [ ] 3.8 **Host-disconnect resilience**: with 2+ players in a room, have the host close their tab/browser (or otherwise go offline) before starting the game — confirm the remaining player(s) see a banner saying the host disconnected and who's now in control, and that player can start the game (the room should never be permanently stuck waiting for a host who's gone). Repeat after a game has started, and again in the post-game rematch lobby.
 
 ## 4. Identity & Leaderboards
 
@@ -50,6 +56,7 @@ player sees.
 - [ ] 4.2 Protect your name with a 4-digit PIN — confirm it's marked 🔒 Protected afterward.
 - [ ] 4.3 Try setting a name that's already claimed by someone else — confirm it's blocked with a clear message, not silently allowed.
 - [ ] 4.4 Submit a good score to a leaderboard — confirm it appears correctly ranked.
+- [ ] 4.5 On the Leaderboard screen, confirm you see links to **Elite 4 Standings** and **Daily Challenge Results** near the top, and that tapping each takes you to the right screen.
 
 ## 5. Cycling Road — Individual
 
@@ -62,6 +69,7 @@ player sees.
 - [ ] 5.7 Finish a race — confirm the results screen ranks players by total time and highlights the fastest/slowest split *per Pokémon* in green/red.
 - [ ] 5.8 After results, confirm you're in a **persistent lobby** (not kicked to the main menu) with a rematch toggle, matching items 3.3–3.6 above.
 - [ ] 5.9 Try joining a room that already has 12 players — confirm you're told the room is full.
+- [ ] 5.10 **Host-disconnect resilience**: with 2+ players, have the host disconnect before starting — confirm someone else can still start the race, with a banner explaining what happened. Try it again mid-race (the room-wide time cap should still fire on schedule) and in the post-game lobby (someone else should be able to trigger the rematch countdown).
 
 ## 6. Cycling Road — Team Mode
 
@@ -72,6 +80,7 @@ player sees.
 - [ ] 6.5 Confirm the standings show **two team bars**, not one per player.
 - [ ] 6.6 Finish a team race — confirm results are ranked by team, not by individual.
 - [ ] 6.7 On the results screen, confirm rematch requires **every single player** to opt in (not just two) before the host can start it.
+- [ ] 6.8 **Host-disconnect resilience**: same as 5.10, but with Team Mode — have the host disconnect before teams are even assigned, and confirm someone else can take over assigning teams and starting the game.
 
 ## 7. Draft Battle — drafting
 
@@ -94,18 +103,27 @@ so actually *read* the log lines here, not just the win/loss result.
 - [ ] 8.9 Watch a multi-hit move (**Doubleslap**, **Fury Swipes**, **Double Kick**) — confirm the log says how many times it hit.
 - [ ] 8.10 Watch **Guillotine**, **Horn Drill**, or **Fissure** connect a few times across battles — confirm it's an instant KO when it lands (this was completely broken before — worth specifically checking).
 - [ ] 8.11 Watch **Belly Drum**, **Rest**, **Pain Split**, or **Leech Seed** if they come up — confirm each shows a sensible log line for what it's doing (cost paid, HP equalized, drain each turn, etc.).
+- [ ] 8.12 Watch **Magnitude** land a few times — confirm the power visibly varies between uses (it's a real random 4–10 roll now, not a fixed value every time).
+- [ ] 8.13 Watch **Tri Attack**'s secondary effect proc a few times across battles — confirm you see a mix of paralysis, burn, *and* freeze (not paralysis every single time).
+- [ ] 8.14 Watch **Charm** land — confirm the target's Attack visibly drops (it used to do nothing at all).
+- [ ] 8.15 Check **Charm**, **Sweet Kiss**, and **Moonlight**'s type in the Pokédex/movelist (e.g. via a "Reveal One Egg Move" or TM/HM clue that surfaces one of them) — confirm none of them show as "Fairy" anymore (Fairy didn't exist in Gen 1/2; Charm/Sweet Kiss are now Normal, Moonlight is now Dark).
 
-## 9. Elite 4 / Throne
+## 9. Elite 4 Gauntlet
 
-- [ ] 9.1 Check that Will/Koga/Bruno/Lance's NPC opponents *feel* noticeably harder as you go up the tiers (Lance should be a serious wall compared to Will).
-- [ ] 9.2 If you can arrange it with a second account: claim a lower throne (say Koga), then win a battle for a higher one (say Bruno) — confirm you keep Bruno, and Koga either gets handed to whoever you just beat (if human) or reverts to a fresh NPC (if you beat an NPC).
-- [ ] 9.3 Try the reverse — hold a higher throne (Lance), then "win" a lower one (Will) — confirm you keep Lance and don't end up holding both.
+- [ ] 9.1 Draft a Pokémon, then tap **"Challenge the Elite 4"** — confirm it auto-battles Will → Koga → Bruno → Lance → the All-Time Champion in one action, always starting fresh at Will, and stops at your first loss.
+- [ ] 9.2 On the results screen, confirm you see **one row per matchup** you actually played (not one screen per tier), each with an on-demand **"▶ Watch"** replay button.
+- [ ] 9.3 Confirm there's exactly **one Claim** button (for the highest spot you reached) and **one Share** button (a consolidated summary + canvas card image), not a separate prompt after every individual win.
+- [ ] 9.4 Check that Will/Koga/Bruno/Lance's NPC opponents *feel* noticeably harder as you go up the tiers (Lance should be a serious wall compared to Will).
+- [ ] 9.5 Note your best-ever progress badge ("🏅 Your best") on the draft screen — confirm it's purely informational and doesn't block you from starting a fresh gauntlet at Will again.
+- [ ] 9.6 If you can arrange it with a second account: claim a lower throne (say Koga), then later run a gauntlet that reaches a higher one (say Bruno) — confirm you keep Bruno, and Koga either gets handed to whoever held it (if human) or reverts to a fresh NPC (if it was an NPC).
+- [ ] 9.7 Try the reverse — hold a higher throne (Lance), then have a gauntlet run reach a lower one (Will) — confirm you keep Lance and don't end up holding both.
 
 ## 10. Daily Puzzle
 
 - [ ] 10.1 Play today's daily challenge, submit your entry — confirm the results screen ranks you against the Daily Rival (and anyone else who's played).
 - [ ] 10.2 Tap **"See Yesterday's Results"** — confirm the date and results actually change to the previous day, and there's a way back to today.
 - [ ] 10.3 Try playing the daily a second time the same day — confirm you're blocked (one attempt per day).
+- [ ] 10.4 Tap **Share** on the daily results — confirm the shared text starts with a link that, when opened, takes you straight into today's Daily Challenge, followed by your name (or a "Player_" fallback if you haven't set one), your rank, and your win percentage.
 
 ---
 
