@@ -1,5 +1,5 @@
 /**
- * @file        tools/generate-data.mjs
+ * @file        tools/generate-data.mjs 
  * @version     1.0.0
  * @updated     2026-06-23
  * @changelog
