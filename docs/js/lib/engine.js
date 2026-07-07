@@ -1,8 +1,15 @@
 /**
  * @file        js/lib/engine.js
- * @version     1.3.0
- * @updated     2026-06-23
+ * @version     1.3.1
+ * @updated     2026-07-05
  * @changelog
+ *   1.3.1 — #5: added SCORE_MULTIPLIERS + computeScoreMultiplier — Single
+ *           Player leaderboard scores now stack a multiplier for harder
+ *           SETTINGS (Forced Reveal, Random/By-category clue selection,
+ *           stricter category diversity) on top of the existing per-difficulty
+ *           points budget, so topping the leaderboard rewards harder play
+ *           beyond just difficulty choice. No effect on gameplay itself — pure
+ *           scoring-display logic, applied by single.js at submission time.
  *   1.3.0 — poolFilterForData/matchesPool: single source of truth so Gen 2 mode always includes Gen 1+2 (#13). categoryDiversityBlocked/diversityBlocked: force-different AND cycle-all now enforced for manual reveals too (cycle-all previously only applied to the random-reveal algorithm). autoRevealFromCategory: new "by category" reveal (#11/#15b). autoRevealRandom/autoRevealFromCategory: respectForcedPhase guard so a UI control can never reveal during the player’s forced-guess turn.
  *   1.2.0 — Gen 1 gym-leader / Elite-4 clues now return Yes/No only (#10).
  *   1.1.0 — Evolution cross-deductions: revealing Current Evolution Stage
@@ -621,4 +628,36 @@ export class PokeGuessRound {
   get revealedClues() { return this.state.revealedClues; }
   get guesses() { return this.state.guesses; }
   get wrongGuesses() { return this.state.guesses.filter((g) => !g.correct); }
+}
+
+// ---- Single Player leaderboard score multiplier (#5) -----------------------
+// Rewards playing with harder SETTINGS on top of the existing per-difficulty
+// points budget — a harder difficulty already yields fewer raw points, but
+// nothing previously rewarded choosing Forced Reveal, Random/By-category clue
+// selection, or stricter category diversity over the easier options within
+// the SAME difficulty. Multipliers stack multiplicatively. Custom difficulty
+// has no multiplier (games on Custom aren't submitted to the leaderboard at
+// all — see single.js — since its point budget/rules are player-defined and
+// not comparable to anyone else's).
+export const SCORE_MULTIPLIERS = {
+  difficulty:   { easy: 0.8, normal: 1.0, medium: 1.3, hard: 1.6, extreme: 2.0 },
+  guessMode:    { free: 1.0, forced: 1.3 },
+  clueMode:     { choose: 0.8, category: 1.2, random: 1.6 },
+  catDiversity: { free: 1.0, diff: 1.2, cycle: 1.5 },
+};
+
+/**
+ * Combined leaderboard score multiplier for a Single Player game's settings.
+ * Returns null for 'custom' (no multiplier defined — custom games aren't
+ * leaderboard-eligible).
+ * @returns {number|null}
+ */
+export function computeScoreMultiplier({ difficultyId, guessMode, clueMode, catDiversity }) {
+  if (difficultyId === 'custom') return null;
+  const d = SCORE_MULTIPLIERS.difficulty[difficultyId];
+  const g = SCORE_MULTIPLIERS.guessMode[guessMode];
+  const c = SCORE_MULTIPLIERS.clueMode[clueMode];
+  const v = SCORE_MULTIPLIERS.catDiversity[catDiversity];
+  if (d == null || g == null || c == null || v == null) return null;
+  return d * g * c * v;
 }

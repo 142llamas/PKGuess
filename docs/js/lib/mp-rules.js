@@ -1,8 +1,23 @@
 /**
  * @file        docs/js/lib/mp-rules.js
- * @version     1.3.0
- * @updated     2026-06-26
+ * @version     1.4.0
+ * @updated     2026-07-05
  * @changelog
+ *   1.4.0 — Added leaderUid(room): a single, shared host-disconnect-resilience
+ *           helper (the room's original host if still connected, otherwise
+ *           the earliest-joined still-connected player). Extracted from
+ *           online.js's existing local implementation so race.js can use the
+ *           EXACT same logic instead of a second, hand-written copy — both
+ *           controllers share the identical room shape (players[uid].connected,
+ *           hostUid, joinOrder), so a second implementation risked the same
+ *           "two meanings drift apart" bug class as computeAutoDeducedIds/
+ *           poolFilter before those were unified.
+ *   1.3.1 — #8: computeAutoDeducedIds now uses the engine's EXACT evolution
+ *           determination rules instead of a looser heuristic that revealed
+ *           family size whenever Can Evolve OR Evolves From was known — which
+ *           leaked family size after revealing "Can Evolve = No" alone (the mon
+ *           could still be the final form of a 2- or 3-member family). Affects
+ *           hot-seat + online (they share this helper).
  *   1.3.0 — #4: buildEngine() accepts clueMode/catDiversity (backward-compatible) so online can support By-category + real diversity. Extracted computeAutoDeducedIds — evolution auto-deduction is now ONE shared implementation used by both hot-seat and online, instead of hot-seat-only duplicated logic.
  *   1.2.0 — Exported makeRng (Cycling Road reuses it instead of duplicating). Added buildRevealSequence: deterministic, points-free clue ordering for Cycling Road (#1a) — reuses the engine’s own weighted-random algorithm rather than a second implementation, with a local repeat cap for "Reveal One Example Moveset" (which has no real exhaustion rule in the engine; every points-based mode masks that via cost, which doesn’t exist here).
  *   1.1.0 — poolFor delegates to engine.js matchesPool (#13, one source of truth).
@@ -70,39 +85,52 @@ export function applyReveals(round, revealedClueIds) {
 }
 
 /**
- * Evolution auto-deduction (#4 parity): given a round's CURRENT revealed
- * clues, which evolution-cluster ids (familySize/evoStage/canEvolve/
- * evolvesFrom) are now logically implied? Applies each one to `round` (via
- * buyClue(id,{auto:true})) as it finds it — both hot-seat and online need the
- * round's own state updated, not just a list — and returns the ids applied,
- * in the order they became deducible, so the caller can persist them (e.g.
- * append to Firebase's revealedClueIds). Centralizing this so the deduction
- * rule can't drift between hot-seat and online; `excludedIds` (hot-seat's
- * per-clue exclusion panel) is honored the same way in both.
- * @returns {number[]} ids that were applied
+ * Evolution auto-deduction (#4 parity, corrected in #8): given a round's
+ * CURRENT revealed clues, auto-reveal (for free) any evolution-cluster clue
+ * (8 familySize / 9 evoStage / 10 canEvolve / 11 evolvesFrom) whose value is
+ * now *logically determined* by what's already revealed — and ONLY those.
+ *
+ * #8 bug it fixes: the old heuristic revealed family size whenever EITHER "Can
+ * Evolve" or "Evolves From" was known, so revealing "Can Evolve = No" alone
+ * leaked the family size (which could still be 1, 2, or 3 — a final evolution).
+ * The determination rules below are exactly the engine's own cross-inference
+ * rules (see engine.js clueAvailable): a clue is determined precisely when the
+ * engine would mark it unavailable. Because of that, buyClue() will refuse to
+ * apply a genuinely-determined clue (it's "unavailable" by design), so this
+ * helper only ever surfaces a value the engine still permits — it can no longer
+ * reveal something the player hasn't actually earned. `excludedIds` (hot-seat's
+ * per-clue exclusion panel) is honored identically in hot-seat and online.
+ * @returns {number[]} ids that were actually revealed
  */
 export function computeAutoDeducedIds(round, excludedIds) {
-  const EVO_FIELDS = [
-    { id: 8 }, { id: 9 }, { id: 10 }, { id: 11 },
-  ];
+  const EVO_IDS = [8, 9, 10, 11];
   const excluded = excludedIds || new Set();
   const out = [];
-  // Re-check after each simulated reveal — one deduction can unlock another
-  // (e.g. stage implies evolvesFrom, which combined with family size implies
-  // nothing further here, but the loop stays generic/order-independent).
+  // A clue is DETERMINED iff the engine's own cross-inference (engine.js) would
+  // already consider it fixed by the currently-revealed clues:
+  //   • stage (9)      ⟸ Can Evolve (10) AND Evolves From (11) both known
+  //   • canEvolve (10) ⟸ stage (9) known           (stage alone fixes it)
+  //   • evolvesFrom(11)⟸ stage (9) known
+  //   • familySize (8) ⟸ stage ∈ {single-stage, middle}, OR (canEvolve=No AND evolvesFrom=No)
+  //   • additionally, familySize = 1 fixes 9/10/11 (a lone standalone Pokémon)
+  const determined = (id, rv) => {
+    const fam = rv[8], stage = rv[9], canEvo = rv[10], evoFrom = rv[11];
+    if (fam === '1' && (id === 9 || id === 10 || id === 11)) return true;
+    if (id === 9) return canEvo != null && evoFrom != null;
+    if (id === 10 || id === 11) return stage != null;
+    if (id === 8) return stage === 'single-stage' || stage === 'middle' || (canEvo === 'No' && evoFrom === 'No');
+    return false;
+  };
+  // Re-check after each reveal — one deduction can unlock another; the loop is
+  // order-independent and bounded.
   for (let guard = 0; guard < 12; guard++) {
     let did = false;
     const rv = round.revealedClues;
-    for (const { id } of EVO_FIELDS) {
+    for (const id of EVO_IDS) {
       if (id in rv || excluded.has(id) || out.includes(id)) continue;
-      const clue = round.clue(id); if (!clue) continue;
-      const fam = rv[8], stage = rv[9], canEvo = rv[10], evoFrom = rv[11];
-      let deducible = false;
-      if (id === 10 && fam != null && stage != null) deducible = true;
-      else if (id === 11 && stage != null) deducible = (String(stage).includes('1st') === false && String(stage) !== 'standalone');
-      else if ((id === 8 || id === 9) && (evoFrom != null || canEvo != null)) deducible = true;
-      if (!deducible) continue;
-      const res = round.buyClue(id, { auto: true }); // apply to THIS round so later iterations see it
+      if (!round.clue(id)) continue;
+      if (!determined(id, rv)) continue;
+      const res = round.buyClue(id, { auto: true }); // succeeds only if the engine still permits the reveal
       if (res.ok) { out.push(id); did = true; }
     }
     if (!did) break;
@@ -220,4 +248,23 @@ export function makeRoomCode(rng = Math.random) {
   let s = '';
   for (let i = 0; i < 6; i++) s += CODE_ALPHABET[Math.floor(rng() * CODE_ALPHABET.length)];
   return s;
+}
+
+// ---- host-disconnect resilience ---------------------------------------------
+/**
+ * Who should currently act with host authority: the room's original host
+ * (`room.hostUid`) if they're still connected, otherwise the earliest-joined
+ * still-connected player (falling back to the very first joiner if somehow
+ * nobody is marked connected, so this never returns null for a real room).
+ * Pure function of `room` — single source of truth so online.js and race.js
+ * (both hot-seat-over-Firebase controllers with the identical room shape:
+ * `players[uid].connected`, `hostUid`, `joinOrder`) can't drift apart on this,
+ * the way computeAutoDeducedIds/poolFilter drifted before they were unified.
+ */
+export function leaderUid(room) {
+  if (!room || !room.players) return null;
+  if (room.players[room.hostUid] && room.players[room.hostUid].connected) return room.hostUid;
+  const order = room.joinOrder || Object.keys(room.players);
+  for (const uid of order) if (room.players[uid] && room.players[uid].connected) return uid;
+  return order[0] || null;
 }
