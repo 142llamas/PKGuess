@@ -1,8 +1,22 @@
 /**
  * @file        js/modes/victoryroad.js
- * @version     1.3.1
- * @updated     2026-07-06
+ * @version     1.4.0
+ * @updated     2026-07-08
  * @changelog
+ *   1.4.0 — Requested reorder: the ribbon now groups clues by the same 7
+ *           categories used throughout the rest of the app (Habitat,
+ *           Evolution, Type Matchups, Stats, Trainer Usage, Movesets,
+ *           Anime), in that order — weaknesses/resistances sit next to type/
+ *           immunity info, both stat clues sit together, etc., instead of a
+ *           somewhat arbitrary mix. Replaced the old two-array-plus-offset
+ *           chipOrder() with a single unified priority map: the old design
+ *           added +100 to any clue identified by `field` rather than
+ *           `special` (habitat, evoStage, bstRange, fullStats, gymLeader —
+ *           anything with special:undefined), silently pushing ALL of them
+ *           to the very end regardless of intended group — found while
+ *           verifying the reorder actually took effect, since the ribbon
+ *           looked completely unchanged at first despite the new category
+ *           order being correctly written.
  *   1.3.1 — The pre-game tier preview iterated only `tier.slots` to build its
  *           clue list, but the #6b combined weakness/resistance reveal is
  *           handled as a special case in nextMon() (tier.weakResistCap), not
@@ -339,22 +353,44 @@ export function createVictoryRoad({ mount, config, data, params = {}, onExit }) 
 
   // ---- CLUE RIBBON ---------------------------------------------------------
   // Chips grouped by category, in the canonical ribbon order
-  const RIBBON_ORDER_SPECIALS = [
-    'generation', 'evoStage', 'randomType', 'secondType', 'weaknessMulti', 'resistanceMulti', 'immunityYesNo', 'bstRange', 'habitat',
-    'gymLeader', 'e4', 'firstAnime', 'fullStats', 'highestStat', 'highestStatVal',
-    'lowestStat', 'lowestStatVal', 'eggMoveMulti', 'compMovesetMulti',
-  ];
-  const RIBBON_ORDER_FIELDS = [
-    'generation', 'evoStage', 'type1', 'type2', 'allWeaknesses', 'allResistances', 'immunities', 'bstRange', 'habitat',
-    'gymLeader', 'e4Rival', 'e4RedCal', 'firstAnime', 'fullStats',
-    'highestStat', 'highestStatVal', 'lowestStat', 'lowestStatVal',
-  ];
+  // #2 (requested reorder) — grouped by the same 7 clue categories used
+  // throughout the rest of the app (Habitat, Evolution, Type Matchups,
+  // Stats, Trainer Usage, Movesets, Anime), in that order, so related clues
+  // always sit together (weakness/resistance next to each other, all the
+  // stat clues together, etc.) instead of a somewhat arbitrary mix. Within
+  // each category, the relative order matches the game guide's own listed
+  // sequence. A SINGLE map, not two parallel arrays with an offset penalty
+  // for field-matched clues — that older design silently pushed every clue
+  // identified by `field` rather than `special` (habitat, evoStage,
+  // bstRange, fullStats, gymLeader — anything with special:undefined) to
+  // the very end regardless of its intended group, since a field match
+  // always added +100. A single map keyed by whichever identifier a clue
+  // actually has (special OR field) avoids that trap entirely.
+  const RIBBON_ORDER = {
+    // Cat 1 — Habitat
+    habitat: 0, generation: 1,
+    // Cat 2 — Evolution
+    evoStage: 2,
+    // Cat 3 — Type Matchups
+    weaknessMulti: 3, allWeaknesses: 3,
+    resistanceMulti: 4, allResistances: 4,
+    immunityYesNo: 5, immunities: 5,
+    randomType: 6, type1: 6,
+    secondType: 7, type2: 7,
+    // Cat 4 — Stats
+    highestStat: 8, highestStatVal: 9, lowestStat: 10, lowestStatVal: 11, bstRange: 12, fullStats: 13,
+    // Cat 5 — Trainer Usage
+    gymLeader: 14, e4: 15, e4Rival: 15, e4RedCal: 15,
+    // Cat 6 — Movesets
+    eggMoveMulti: 16, eggMove: 16, compMovesetMulti: 17, compMoveset1: 17, compMoveset: 17,
+    // Cat 7 — Anime
+    firstAnime: 18,
+  };
 
   function chipOrder(clue) {
-    const si = RIBBON_ORDER_SPECIALS.indexOf(clue.special);
-    const fi = RIBBON_ORDER_FIELDS.indexOf(clue.field);
-    const i = si >= 0 ? si : fi >= 0 ? fi + 100 : 999;
-    return i;
+    if (clue.special != null && clue.special in RIBBON_ORDER) return RIBBON_ORDER[clue.special];
+    if (clue.field != null && clue.field in RIBBON_ORDER) return RIBBON_ORDER[clue.field];
+    return 999;
   }
 
   function renderRibbon() {

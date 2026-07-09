@@ -1,8 +1,24 @@
 /**
  * @file        js/modes/draftbattle.js
- * @version     1.13.0
- * @updated     2026-07-06
+ * @version     1.13.1
+ * @updated     2026-07-08
  * @changelog
+ *   1.13.1 — Fixed: startDraft() never passed `playerName` to DraftSession at
+ *           all, so every drafted mon's name defaulted to the literal string
+ *           "Player" ("Player's Feraligatr") regardless of who was actually
+ *           playing — affected free-play, the daily, gauntlet share text,
+ *           and the daily results table alike, since they all read the same
+ *           `result.name`. Now resolved identity IN PARALLEL with the
+ *           existing data fetches (movelist/movestats/draftpool/typechart),
+ *           so the correct name is available from the very first card with
+ *           no added latency (bounded by whichever fetch is slowest, and
+ *           identity resolution is typically much faster than four JSON
+ *           fetches) — deliberately NOT a background correction after the
+ *           fact, which would race a fast draft completion (confirmed this
+ *           the hard way: an earlier version of this fix used exactly that
+ *           approach and a test completing the draft via a tight scripted
+ *           loop reached "Draft Complete" before the identity promise
+ *           resolved, still showing "Player's").
  *   1.13.0 — Daily Draft: individual head-to-head matchups, on-demand battle
  *           replay, and a read-only "inspect" view, plus the Daily Rival ->
  *           Cal rename.
@@ -182,6 +198,14 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
     fetch('data/movestats-gen2.json').then((r) => (r.ok ? r.json() : {})),
     fetch('data/draftpool-gen2.json').then((r) => (r.ok ? r.json() : {})).catch(() => ({})),
     fetch('data/typechart-gen2.json').then((r) => (r.ok ? r.json() : {})),
+    // #1 (bug fix): resolved HERE, in parallel with the data fetches above,
+    // rather than only lazily on-demand later — so free-play's playerName is
+    // correct from the very first card, at no added latency (bounded by
+    // whichever fetch is slowest, and identity resolution is typically much
+    // faster than four JSON fetches). Previously startDraft() never resolved
+    // identity at all, so a freshly-drafted mon's name always defaulted to
+    // the literal string "Player" regardless of who was actually playing.
+    !identity ? lazyIdentity().then((id) => { identity = id; }).catch(() => null) : Promise.resolve(),
   ]).then(([movelist, movestats, draftpoolExtra, chart]) => {
     const learnsetMap = buildLearnsetMap({ ...movelist, ...draftpoolExtra }, movestats);
     const species = buildSpeciesList(data, learnsetMap, 2);
@@ -200,7 +224,14 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
   }
 
   function startDraft(seed, rerolls) {
-    const session = new DraftSession({ species: ctx.species, gen: 2, seed, rerolls });
+    // #1 (bug): playerName was never passed here at all, so every drafted
+    // mon's name defaulted to the literal string "Player" ("Player's
+    // Feraligatr") regardless of who was actually playing. identity is now
+    // resolved above, in parallel with the data fetches, before this ever
+    // runs (for BOTH free-play and the daily flow, which already resolved it
+    // even earlier) — so this is never racing a background correction
+    // against how fast someone drafts.
+    const session = new DraftSession({ species: ctx.species, gen: 2, seed, rerolls, playerName: (identity && identity.name) || 'Player' });
     pendingPicks = [];
     renderCard(session);
   }
