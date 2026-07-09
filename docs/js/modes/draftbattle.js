@@ -1,8 +1,43 @@
 /**
  * @file        js/modes/draftbattle.js
- * @version     1.12.1
- * @updated     2026-07-05
+ * @version     1.13.0
+ * @updated     2026-07-06
  * @changelog
+ *   1.13.0 — Daily Draft: individual head-to-head matchups, on-demand battle
+ *           replay, and a read-only "inspect" view, plus the Daily Rival ->
+ *           Cal rename.
+ *             \u2022 showDailyResults() now RETAINS each pair's full runMatch()
+ *               result (win counts AND a sample battle log) instead of
+ *               discarding everything but the aggregate average win% \u2014 the
+ *               data needed for individual matchups + replay was already
+ *               being computed here, just thrown away afterward.
+ *             \u2022 New \uD83D\uDCCA "Matchups" button (any row, including Cal's \u2014 "no
+ *               self-battling" falls out naturally since the all-pairs
+ *               computation never pairs a player against themselves) opens
+ *               renderDailyMatchups(): every OTHER entrant, this player's
+ *               specific win/loss + win% against each, with a \u25B6 Watch button
+ *               that replays the ALREADY-COMPUTED sample log via the existing
+ *               renderBattle() UI \u2014 zero re-simulation.
+ *             \u2022 Found and fixed while building this: renderBattle()'s "You
+ *               win!"/"You fell short" verdict was hardcoded to the "a"
+ *               (challenger) side, which is fine for the gauntlet (the
+ *               player's own mon is ALWAYS "a" there) but wrong for daily
+ *               matchups, where a<b is determined by original computation
+ *               order, not by who's watching \u2014 viewing a matchup from the
+ *               side that happened to be "b" would show the WRONG verdict.
+ *               Added an explicit `viewingSide` option (defaults to 'a', so
+ *               every existing caller is completely unaffected) and pass the
+ *               correct side from renderDailyMatchups.
+ *             \u2022 New \uD83D\uDD0D "Inspect" button (any row) opens renderMonInspect(): a
+ *               read-only view of that entrant's drafted types/stats/moves \u2014
+ *               the same core visual as the Draft Complete screen, but
+ *               without its draft-in-progress action buttons (Submit/
+ *               Challenge/Share), since this is for inspecting someone
+ *               ELSE's build.
+ *             \u2022 "Daily Rival" renamed to "Cal" (display text + the
+ *               `playerName` passed to autoDraft only \u2014 the underlying seed
+ *               key and internal uid are deliberately unchanged, so nobody's
+ *               daily results shift because of a display rename).
  *   1.12.1 — #1: daily results' Share button now passes playerName (with a
  *           stable Player_NNNNN fallback) and a dailyChallengeLink() deep
  *           link into buildSummaryText, matching the exact spec'd format.
@@ -840,8 +875,17 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
   function renderBattle(aSpec, bSpec, res, pb, opts) {
     stopPlay();
     let idx = 0;
-    const beat = res.challengerBeatsChampion;
-    const pct = res.challengerWinPct;
+    // Every existing caller (gauntlet, individual throne challenges) always
+    // has the player's OWN mon as "a" (the challenger), so this defaults to
+    // 'a' and is completely unaffected. The new daily-matchups "Watch" button
+    // is the first caller where the player being viewed can legitimately be
+    // EITHER side of the stored pairing (i<j determines a/b, not who's
+    // watching) — passing viewingSide:'b' there is what makes "You win!"
+    // correctly reflect the entry actually being viewed, not whichever side
+    // happened to be "a" when the pair was originally computed.
+    const viewingSide = opts.viewingSide === 'b' ? 'b' : 'a';
+    const beat = viewingSide === 'a' ? res.challengerBeatsChampion : !res.challengerBeatsChampion;
+    const pct = viewingSide === 'a' ? res.challengerWinPct : 1 - res.challengerWinPct;
 
     const stage = el('div', { class: 'battle-stage' });
     const logBox = el('div', { class: 'battle-log-inner' });
@@ -898,9 +942,12 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
       // contextual actions at the end
       const after = el('div', { class: 'battle-after' });
       if (atEnd) {
-        if (opts.mode === 'gauntletRow') {
-          // #15 — individual gauntlet matchups are viewed on demand from the
-          // results screen; claiming/sharing happens ONCE there, not per-battle.
+        if (opts.mode === 'gauntletRow' || opts.mode === 'dailyRow') {
+          // #15 — individual gauntlet matchups (and now daily matchups) are
+          // viewed on demand from a results screen; claiming/sharing happens
+          // ONCE there, not per-battle. dailyRow's onBack returns to the
+          // matchups list it was opened from (not straight to daily results),
+          // so "Back" doesn't lose the player's place.
           after.append(el('button', { class: 'btn-secondary', onClick: opts.onBack }, '\u2190 Back to Results'));
         } else if (opts.mode === 'daily') {
           after.append(el('button', { class: 'btn-secondary', onClick: () => showDailyResults() }, '\u2190 Results'));
@@ -1010,26 +1057,38 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
       provisional = !(myUid && firebase);
     }
 
-    // The Daily Rival — a deterministic house entry so even the first player has
+    // Cal — a deterministic house entry so even the first player has
     // something to measure against (and to battle). Same for everyone, all day.
+    // (Internal seed key/uid deliberately left as "dailyrival"/"__rival__" —
+    // this is purely a display-name rename, not a change to which mon is
+    // drafted, so nobody's daily results shift because of it.)
     if (!list.some((e) => e.uid === '__rival__')) {
-      const rival = autoDraft({ species: ctx.species, gen: 2, seed: seedFromString(`dailyrival:${dateStr}`), playerName: 'Daily Rival' });
-      list.push({ uid: '__rival__', name: 'Daily Rival', mon: storedFromResult(rival), _rival: true });
+      const rival = autoDraft({ species: ctx.species, gen: 2, seed: seedFromString(`dailyrival:${dateStr}`), playerName: 'Cal' });
+      list.push({ uid: '__rival__', name: 'Cal', mon: storedFromResult(rival), _rival: true });
     }
 
     setTimeout(() => {
       const specs = list.map((e) => specFromStored(e.mon));
       const n = list.length;
       const sum = new Array(n).fill(0), games = new Array(n).fill(0);
+      // Each pair's full runMatch() result (win counts AND a sample battle
+      // log) was already being computed here to get the average win% —
+      // just discarded afterward. Retained now, per player, oriented from
+      // THAT player's own perspective (myWinPct/iWon), so the results screen
+      // can show individual head-to-head results and replay any of them
+      // WITHOUT re-simulating anything.
+      const matchupsByIndex = list.map(() => []);
       for (let i = 0; i < n; i++) {
         for (let j = i + 1; j < n; j++) {
           const m = runMatch(specs[i], specs[j], { gen: 2, moves: ctx.movestats, chart: ctx.chart, n: BATTLE_N, seed: seedFromString(`${dateStr}:${i}:${j}`) });
           sum[i] += m.challengerWins / m.n; games[i]++;
           sum[j] += m.championWins / m.n;  games[j]++;
+          matchupsByIndex[i].push({ oppUid: list[j].uid, oppName: list[j].name, oppMonName: list[j].mon.name, myWinPct: m.challengerWinPct, iWon: m.challengerBeatsChampion, aSpec: specs[i], bSpec: specs[j], res: m });
+          matchupsByIndex[j].push({ oppUid: list[i].uid, oppName: list[i].name, oppMonName: list[i].mon.name, myWinPct: 1 - m.challengerWinPct, iWon: !m.challengerBeatsChampion, aSpec: specs[i], bSpec: specs[j], res: m });
         }
       }
       const ranked = list
-        .map((e, i) => ({ ...e, avg: games[i] ? sum[i] / games[i] : 0, spec: specs[i] }))
+        .map((e, i) => ({ ...e, avg: games[i] ? sum[i] / games[i] : 0, spec: specs[i], matchups: matchupsByIndex[i] }))
         .sort((a, b) => b.avg - a.avg);
       renderDailyResults(ranked, myUid, provisional, dateStr, isHistorical);
     }, 30);
@@ -1060,9 +1119,14 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
             el('td', {}, (['\uD83E\uDD47', '\uD83E\uDD48', '\uD83E\uDD49'][i]) || String(i + 1)),
             el('td', { style: { fontWeight: mine ? 800 : 400, color: mine ? 'var(--accent-gold)' : '' } }, e.name + (e._me && provisional ? ' (you, unsaved)' : '')),
             el('td', { style: { color: 'var(--text-dim)', fontSize: '11px' } }, e.mon.name),
-            el('td', { style: { fontWeight: 700 } }, hasOpponents ? `${(e.avg * 100).toFixed(0)}%` : '\u2014'));
+            el('td', { style: { fontWeight: 700 } }, hasOpponents ? `${(e.avg * 100).toFixed(0)}%` : '\u2014'),
+            el('td', { style: { display: 'flex', gap: '4px', flexWrap: 'wrap' } },
+              hasOpponents ? el('button', { class: 'btn-secondary', style: ACTION_BTN_STYLE, title: `${e.name}'s matchups`,
+                onClick: () => renderDailyMatchups(e, dateStr, isHistorical, () => renderDailyResults(ranked, myUid, provisional, dateStr, isHistorical)) }, '\uD83D\uDCCA') : null,
+              el('button', { class: 'btn-secondary', style: ACTION_BTN_STYLE, title: `Inspect ${e.mon.name}`,
+                onClick: () => renderMonInspect(e.mon, { title: `${e.name}\u2019s Pok\u00e9mon`, onBack: () => renderDailyResults(ranked, myUid, provisional, dateStr, isHistorical) }) }, '\uD83D\uDD0D')));
         })
-      : [el('tr', {}, el('td', { colspan: '4', style: { textAlign: 'center', color: 'var(--text-dim)' } }, isHistorical ? 'No one played that day.' : 'No entries yet today.'))];
+      : [el('tr', {}, el('td', { colspan: '5', style: { textAlign: 'center', color: 'var(--text-dim)' } }, isHistorical ? 'No one played that day.' : 'No entries yet today.'))];
 
     const myLine = me
       ? (hasOpponents
@@ -1079,7 +1143,7 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
           myLine ? el('div', { class: 'daily-myline' }, myLine) : null,
           el('div', { class: 'lb-board' },
             el('table', { class: 'lb-table' },
-              el('thead', {}, el('tr', {}, el('th', {}, '#'), el('th', {}, 'Player'), el('th', {}, 'Build'), el('th', {}, 'Win%'))),
+              el('thead', {}, el('tr', {}, el('th', {}, '#'), el('th', {}, 'Player'), el('th', {}, 'Build'), el('th', {}, 'Win%'), el('th', {}, ''))),
               el('tbody', {}, ...rows))),
           el('div', { class: 'summary-actions' },
             me ? el('button', { class: 'btn-primary', onClick: async () => { const ok = await copyToClipboard(shareText); showShareSheet(shareText, ok); } }, '\uD83D\uDCE4 Share') : null,
@@ -1088,6 +1152,69 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
               ? el('button', { class: 'btn-secondary', onClick: () => showDailyResults(ctx.dateStr) }, '\u2192 Today\u2019s Results')
               : el('button', { class: 'btn-secondary', onClick: () => showDailyResults(yesterdayDateStr()) }, '\uD83D\uDCC5 See Yesterday\u2019s Results'),
             el('button', { class: 'btn-secondary', onClick: () => onExit && onExit() }, '\u2190 Main Menu')))));
+  }
+
+  const ACTION_BTN_STYLE = { padding: '4px 8px', fontSize: '13px', lineHeight: 1 };
+
+  // Per-player head-to-head breakdown: every OTHER entrant (including Cal),
+  // with this player's specific win/loss + win% against each one, and an
+  // on-demand replay reusing the sample battle log already computed in
+  // showDailyResults() — no re-simulation. Available for ANY row (including
+  // your own and Cal's), which is what makes it "available for the daily
+  // rival" for free rather than needing special-case code; "no self-battling"
+  // falls out naturally since the all-pairs computation never pairs a player
+  // against themselves.
+  function renderDailyMatchups(entry, dateStr, isHistorical, onBack) {
+    stopPlay();
+    const rows = entry.matchups.length
+      ? entry.matchups.map((mu) => el('tr', {},
+          el('td', {}, mu.oppName),
+          el('td', { style: { color: 'var(--text-dim)', fontSize: '11px' } }, mu.oppMonName),
+          el('td', { style: { fontWeight: 700, color: mu.iWon ? '#29cc66' : '#e06060' } }, `${mu.iWon ? 'Won' : 'Lost'} \u00b7 ${(mu.myWinPct * 100).toFixed(0)}%`),
+          el('td', {}, el('button', { class: 'btn-secondary', style: ACTION_BTN_STYLE,
+            onClick: () => renderBattle(mu.aSpec, mu.bSpec, mu.res, buildPlayback(mu.res.sampleLog, mu.aSpec, mu.bSpec),
+              { mode: 'dailyRow', title: `${entry.name} vs ${mu.oppName}`, viewingSide: entry.spec === mu.aSpec ? 'a' : 'b', onBack: () => renderDailyMatchups(entry, dateStr, isHistorical, onBack) }) },
+            '\u25B6 Watch'))))
+      : [el('tr', {}, el('td', { colspan: '4', style: { textAlign: 'center', color: 'var(--text-dim)' } }, 'No other entries to compare against yet.'))];
+
+    clear(root).append(
+      el('div', { class: 'summary-container' },
+        el('div', { class: 'summary-card' },
+          el('div', { class: 'summary-result', style: { textAlign: 'center' } }, `\uD83D\uDCCA ${entry.name}\u2019s Matchups`),
+          el('div', { class: 'battle-vs', style: { marginBottom: '8px' } }, `${entry.mon.name} \u00b7 ${dateStr}${isHistorical ? ' (Yesterday)' : ''}`),
+          el('div', { class: 'lb-board' },
+            el('table', { class: 'lb-table' },
+              el('thead', {}, el('tr', {}, el('th', {}, 'Opponent'), el('th', {}, 'Their Build'), el('th', {}, 'Result'), el('th', {}, ''))),
+              el('tbody', {}, ...rows))),
+          el('div', { class: 'summary-actions' },
+            el('button', { class: 'btn-secondary', onClick: onBack }, '\u2190 Back to Results')))));
+  }
+
+  // Read-only "inspect" card for ANY drafted mon (yours, another player's, or
+  // Cal's) \u2014 the same core visual as renderBuild()'s Draft Complete screen
+  // (types, stat spread, moves), but without the draft-specific action
+  // buttons (Submit/Challenge/Share), since this is for INSPECTING someone
+  // else's build, not continuing your own draft.
+  function renderMonInspect(mon, opts = {}) {
+    stopPlay();
+    const statKeys = ['hp', 'atk', 'def', 'spa', 'spd', 'spe'];
+    const statVals = statKeys.map((k) => (mon.baseStats && mon.baseStats[k]) || 0);
+    clear(root).append(
+      el('div', { class: 'summary-container' },
+        el('div', { class: 'summary-card' },
+          el('div', { class: 'summary-header' },
+            el('div', { class: 'summary-result' }, opts.title || `\uD83D\uDD0D ${mon.name}`),
+            el('div', { class: 'summary-mon' }, mon.name)),
+          el('div', { class: 'type-pills' },
+            ...(mon.types || []).filter(Boolean).map((t) => el('span', { class: `type-pill type-${t.toLowerCase()}` }, t))),
+          statSpreadEl(statVals.join('/')),
+          el('div', { class: 'draft-complete-moves' },
+            el('div', { class: 'draft-section-title', style: { marginTop: '12px' } }, 'Moves'),
+            el('div', { class: 'draft-move-grid' },
+              ...(mon.moves || []).map((m) => el('div', { class: 'draft-move-chip drafted' }, m)))),
+          mon.species ? el('div', { class: 'summary-meta' }, el('div', {}, `Based on: ${mon.species}`)) : null,
+          el('div', { class: 'summary-actions' },
+            el('button', { class: 'btn-secondary', onClick: opts.onBack }, '\u2190 Back')))));
   }
 
   return { destroy() { stopPlay(); if (toast) { toast.remove(); toast = null; } clear(mount); } };

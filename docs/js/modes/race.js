@@ -1,8 +1,17 @@
 /**
  * @file        docs/js/modes/race.js
- * @version     2.2.0
- * @updated     2026-07-05
+ * @version     2.3.0
+ * @updated     2026-07-06
  * @changelog
+ *   2.3.0 — Room sharing: a "\uD83D\uDCE4 Share Room" button in both the individual
+ *           and team-builder lobbies builds an invite (game name, gen, target
+ *           Pok\u00e9mon count, Team Mode note when relevant, then a deep link)
+ *           via the shared `shareSheetEl` (dom.js) and `roomJoinLink`/
+ *           `buildRoomInviteText` (share.js) \u2014 same infrastructure online.js
+ *           now uses, so the two modes' invite flows can't drift apart.
+ *           Opening that link (#/race/2?code=ABCDEF, threaded through by
+ *           main.js's new query-string support) lands directly on the join
+ *           screen with the code already filled in.
  *   2.2.0 — Host-disconnect resilience, ported from online.js's isLeader()
  *           pattern via the newly-shared mp-rules.leaderUid() (previously a
  *           known, disclosed gap: race.js used a hard `room.hostUid ===
@@ -102,9 +111,10 @@
  *           Testable: params._getFirebase / params._getIdentity inject fakes.
  */
 
-import { el, clear } from '../lib/dom.js';
+import { el, clear, shareSheetEl } from '../lib/dom.js';
 import { normalizeName } from '../lib/engine.js';
 import { makeRoomCode, seedFor, buildRevealSequence, makeRng, leaderUid as sharedLeaderUid } from '../lib/mp-rules.js';
+import { roomJoinLink, buildRoomInviteText, copyToClipboard, shareWhatsApp } from '../lib/share.js';
 
 const MAX_PLAYERS = 12;
 const REVEAL_INTERVAL_MS = 5000;
@@ -159,6 +169,7 @@ export function createRace({ mount, config, data, params = {}, onExit }) {
   let toastSeenOnce = false;     // suppress a toast storm on the very first snapshot
   let capTimer = null;
   let destroyed = false;
+  let toast = null;
 
   // #3 — Teams mode kept as PARALLEL, separate state/functions rather than
   // interleaved with the above: individual Cycling Road is already tested
@@ -178,7 +189,10 @@ export function createRace({ mount, config, data, params = {}, onExit }) {
   ]).then(([fbi, idi, ml]) => {
     if (destroyed) return;
     fb = fbi; me = idi; movelist = ml || {};
-    showEntry();
+    // A shared room-invite link (#/race/2?code=ABCDEF) pre-fills the join
+    // screen so the recipient doesn't have to type the code themselves.
+    const invitedCode = params.query && params.query.code;
+    if (invitedCode) showJoin(invitedCode); else showEntry();
   }).catch(() => {
     root.append(el('p', { class: 'placeholder-text' }, 'Couldn\u2019t connect. Cycling Road needs an internet connection.'),
       el('button', { class: 'btn-secondary', onClick: () => onExit && onExit() }, '\u2190 Back'));
@@ -263,8 +277,8 @@ export function createRace({ mount, config, data, params = {}, onExit }) {
     catch { put(root, topbar('\uD83C\uDFC1 Cycling Road'), errorBox('Could not create the room. Try again.'), backBtn(showEntry)); }
   }
 
-  function showJoin() {
-    const input = el('input', { class: 'mp-input', maxlength: '6', placeholder: 'ABC123', style: { textTransform: 'uppercase' } });
+  function showJoin(prefill = '') {
+    const input = el('input', { class: 'mp-input', maxlength: '6', placeholder: 'ABC123', value: String(prefill || '').toUpperCase().trim().slice(0, 6), style: { textTransform: 'uppercase' } });
     const err = el('div', { class: 'mp-error' });
     put(root,
       topbar('\uD83C\uDFC1 Join Cycling Road'),
@@ -374,6 +388,7 @@ export function createRace({ mount, config, data, params = {}, onExit }) {
       el('div', { class: 'online-room-meta' },
         el('div', { class: 'online-code-big' }, `Code: ${code}`),
         el('div', { class: 'sf-intro' }, `${room.settings.target} Pok\u00e9mon \u00b7 ${genLabel} \u00b7 ${players.length}/${MAX_PLAYERS} in the room`)),
+      el('div', { style: { textAlign: 'center' } }, el('button', { class: 'btn-secondary', onClick: showShareRoom }, '\uD83D\uDCE4 Share Room')),
       hostLeftBanner(),
       el('div', { class: 'online-players' },
         ...players.map((p) => el('div', { class: 'online-player' + (p.connected ? '' : ' offline') },
@@ -409,6 +424,7 @@ export function createRace({ mount, config, data, params = {}, onExit }) {
       el('div', { class: 'online-room-meta' },
         el('div', { class: 'online-code-big' }, `Code: ${code}`),
         el('div', { class: 'sf-intro' }, `${room.settings.target} Pok\u00e9mon \u00b7 ${genLabel} \u00b7 ${players.length}/${MAX_PLAYERS} in the room`)),
+      el('div', { style: { textAlign: 'center' } }, el('button', { class: 'btn-secondary', onClick: showShareRoom }, '\uD83D\uDCE4 Share Room')),
       hostLeftBanner(),
       isHost ? el('div', { class: 'sp-start-row', style: { justifyContent: 'center', margin: '10px 0' } },
         el('button', { class: 'btn-secondary', onClick: randomizeTeamsNow }, '\uD83C\uDFB2 Randomize Teams')) : null,
@@ -427,6 +443,32 @@ export function createRace({ mount, config, data, params = {}, onExit }) {
 
   async function assignTeam(uid, team) {
     try { await fb.set(`/rooms/${code}/players/${uid}/team`, team); } catch { /* onValue resyncs */ }
+  }
+
+  // Room-invite share: "join my game" + a few relevant settings (kept short
+  // on purpose) + a deep link that pre-fills the room code for whoever opens
+  // it, so they don't have to type it in themselves. Same details for both
+  // individual and Team Mode, plus a Team Mode note when relevant.
+  function showShareRoom() {
+    const details = [genLabel, `${room.settings.target} Pok\u00e9mon`];
+    if (room.settings.teams) details.push('Team Mode');
+    const text = buildRoomInviteText({
+      gameLabel: 'Cycling Road',
+      details,
+      link: roomJoinLink('race', params.gen || (data.id === 'gen1' ? 1 : 2), code),
+    });
+    showShareSheet(text);
+  }
+
+  function showShareSheet(text, copied = false) {
+    if (toast) toast.remove();
+    toast = shareSheetEl(text, {
+      copied,
+      onWhatsApp: () => shareWhatsApp(text),
+      onCopy: async () => { const ok = await copyToClipboard(text); showShareSheet(text, ok); },
+      onClose: () => { if (toast) { toast.remove(); toast = null; } },
+    });
+    root.append(toast);
   }
 
   async function randomizeTeamsNow() {

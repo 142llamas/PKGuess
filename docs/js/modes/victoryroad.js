@@ -1,8 +1,15 @@
 /**
  * @file        js/modes/victoryroad.js
- * @version     1.3.0
- * @updated     2026-07-05
+ * @version     1.3.1
+ * @updated     2026-07-06
  * @changelog
+ *   1.3.1 — The pre-game tier preview iterated only `tier.slots` to build its
+ *           clue list, but the #6b combined weakness/resistance reveal is
+ *           handled as a special case in nextMon() (tier.weakResistCap), not
+ *           a plain slot — so it was completely invisible in the preview for
+ *           Tiers 3\u20138 (and the "N clues" summary undercounted by one) even
+ *           though it genuinely appears during play. Preview now explicitly
+ *           adds a "Weakness/Resistance (up to N)" entry and counts it.
  *   1.3.0 — #6: full tier rework, made slightly easier per spec.
  *           (a) every tier's threshold shifted +1 (Tier 1 now covers up to
  *           streak 5 instead of 4, Tier 2 up to 10 instead of 9, etc. — a flat
@@ -184,10 +191,17 @@ export function createVictoryRoad({ mount, config, data, params = {}, onExit }) 
         const c = resolveSlot(slot);
         return c ? c.name : slot;
       });
+      // #6b's combined weakness/resistance reveal (Tiers 3\u20138) is handled as a
+      // special case in nextMon(), not as a plain slot name, so it was
+      // invisible here even though it genuinely appears during play \u2014 add it
+      // explicitly, and count it toward the summary total the same way a
+      // single ordinary slot would be.
+      if (t.weakResistCap) clueNames.push(`Weakness/Resistance (up to ${t.weakResistCap})`);
+      const totalCount = t.slots.length + (t.weakResistCap ? 1 : 0);
       const header = el('div', { class: 'vr-tier-row', dataset: { expanded: 'false' } },
         el('span', { class: 'vr-tier-label' }, t.label),
         el('span', { class: 'vr-tier-streak' }, t.minStreak === 0 ? 'Start' : `${t.minStreak}+`),
-        el('span', { class: 'vr-tier-slots' }, `${t.slots.length} clues`),
+        el('span', { class: 'vr-tier-slots' }, `${totalCount} clues`),
         el('span', { class: 'vr-tier-chevron' }, '▶'));
       const detail = el('div', { class: 'vr-tier-detail' },
         ...clueNames.map((name) => el('span', { class: 'vr-tier-clue-tag' }, name)));

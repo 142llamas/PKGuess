@@ -1,8 +1,15 @@
 /**
  * @file        docs/js/modes/online.js
- * @version     1.5.0
- * @updated     2026-07-05
+ * @version     1.6.0
+ * @updated     2026-07-06
  * @changelog
+ *   1.6.0 — Room sharing: a "\uD83D\uDCE4 Share Room" button in the lobby builds an
+ *           invite (game name, gen, RTG/GTR, win target, then a deep link) via
+ *           the new shared `shareSheetEl` (dom.js) and `roomJoinLink`/
+ *           `buildRoomInviteText` (share.js). Opening that link
+ *           (#/online/2?code=ABCDEF, threaded through by main.js's new query-
+ *           string support) lands directly on the join screen with the code
+ *           already filled in \u2014 no typing needed.
  *   1.5.0 — Host-disconnect resilience, extended beyond the existing
  *           tick()-driven duties: the Lobby's "Start game" button and the
  *           post-game "Start rematch" button were both still gated by a HARD
@@ -60,7 +67,7 @@
  *   params._getFirebase / params._getIdentity inject fakes.
  */
 
-import { el, clear } from '../lib/dom.js';
+import { el, clear, shareSheetEl } from '../lib/dom.js';
 import {
   seedFor, buildEngine, applyReveals, revealOutcome, guessOutcome,
   nextTurnPos, weightedRandomClue, advanceAfterWin, champion, makeRoomCode, computeAutoDeducedIds,
@@ -68,6 +75,7 @@ import {
 } from '../lib/mp-rules.js';
 import { normalizeName, poolFilterForData } from '../lib/engine.js';
 import { markCaught, markSeen } from '../lib/catch-tracker.js';
+import { roomJoinLink, buildRoomInviteText, copyToClipboard, shareWhatsApp } from '../lib/share.js';
 
 const COLORS = ['#f5c518', '#4a9eff', '#35c759', '#ff5a5a', '#b06bff', '#ff9f40'];
 const GRACE_MS = 2000;          // leader waits this long past the deadline before skipping
@@ -97,7 +105,10 @@ export function createOnline({ mount, config, data, params = {}, onExit }) {
   (async () => {
     try { me = await getID(); fb = await getFB(); }
     catch { showFatal('Couldn\u2019t reach the server. Online play needs a connection.'); return; }
-    showEntry();
+    // A shared room-invite link (#/online/2?code=ABCDEF) pre-fills the join
+    // screen so the recipient doesn't have to type the code themselves.
+    const invitedCode = params.query && params.query.code;
+    if (invitedCode) showJoin(invitedCode); else showEntry();
   })();
 
   // ---------------------------------------------------------------- datasets
@@ -228,9 +239,9 @@ export function createOnline({ mount, config, data, params = {}, onExit }) {
   }
 
   // ===================================================================== JOIN
-  function showJoin() {
-    let val = '';
-    const input = el('input', { class: 'mp-name-input', maxlength: '6', placeholder: 'CODE', style: { textTransform: 'uppercase', letterSpacing: '4px', textAlign: 'center', fontSize: '20px' }, onInput: (e) => { val = e.target.value.toUpperCase().trim(); e.target.value = val; } });
+  function showJoin(prefill = '') {
+    let val = String(prefill || '').toUpperCase().trim().slice(0, 6);
+    const input = el('input', { class: 'mp-name-input', maxlength: '6', placeholder: 'CODE', value: val, style: { textTransform: 'uppercase', letterSpacing: '4px', textAlign: 'center', fontSize: '20px' }, onInput: (e) => { val = e.target.value.toUpperCase().trim(); e.target.value = val; } });
     const err = el('div', { class: 'guess-feedback' });
     put(root, 
       el('div', { style: { maxWidth: '380px', margin: '0 auto' } },
@@ -359,12 +370,39 @@ export function createOnline({ mount, config, data, params = {}, onExit }) {
         el('p', { class: 'sf-intro', style: { textAlign: 'center' } },
           `${room.settings.gen === 'gen1' ? 'Gen I' : 'Gen II'} \u00b7 ` +
           `${room.settings.gameMode.toUpperCase()} \u00b7 ${room.settings.clueMode} clues \u00b7 win at ${room.settings.winTarget} pts`),
+        el('button', { class: 'btn-secondary', style: { marginTop: '8px' }, onClick: showShareRoom }, '\uD83D\uDCE4 Share Room'),
         el('div', { class: 'mp-form-label', style: { marginTop: '14px' } }, `Players (${n})`),
         playerList(),
         hostLeftBanner(),
         isLeader()
           ? el('button', { class: 'btn-primary', style: { marginTop: '16px', width: '100%' }, disabled: n < 2, onClick: () => startRound(1) }, n < 2 ? 'Waiting for 1+ more\u2026' : 'Start game \u25b6')
           : el('p', { class: 'mp-phase-hint', style: { marginTop: '16px' } }, 'Waiting for the host to start\u2026')));
+  }
+
+  // Room-invite share: "join my game" + a few relevant settings (kept short
+  // on purpose) + a deep link that pre-fills the room code for whoever opens
+  // it, so they don't have to type it in themselves.
+  function showShareRoom() {
+    const genLabel = room.settings.gen === 'gen1' ? 'Gen I' : 'Gen II';
+    const modeLabel = room.settings.gameMode === 'rtg' ? 'Reveal, then Guess' : 'Guess, then Reveal';
+    const text = buildRoomInviteText({
+      gameLabel: 'PokeGuess Online',
+      details: [genLabel, modeLabel, `first to ${room.settings.winTarget} pts`],
+      link: roomJoinLink('online', room.settings.gen === 'gen1' ? 1 : 2, code),
+    });
+    showShareSheet(text);
+  }
+
+  let toast = null;
+  function showShareSheet(text, copied = false) {
+    if (toast) toast.remove();
+    toast = shareSheetEl(text, {
+      copied,
+      onWhatsApp: () => shareWhatsApp(text),
+      onCopy: async () => { const ok = await copyToClipboard(text); showShareSheet(text, ok); },
+      onClose: () => { if (toast) { toast.remove(); toast = null; } },
+    });
+    root.append(toast);
   }
 
   function secondsLeft() {
