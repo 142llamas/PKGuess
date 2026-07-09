@@ -164,13 +164,18 @@ console.log('\n— #14/#15: the Elite-4 gauntlet runs Will→Koga→Bruno→Lanc
   ok(!!btn('Challenge the Elite 4'), 'Draft Complete screen offers a single "Challenge the Elite 4" button');
   const shareMonBtn = btn('Share My Pokémon');
   ok(!!shareMonBtn, '#14: Draft Complete screen offers a "Share My Pokémon" button');
-  // #14 — jsdom has no real canvas 2D context (this project deliberately
-  // avoids a canvas-polyfill dependency), so clicking Share here exercises
-  // the graceful degrade path (no image support → text-only fallback). The
-  // important thing is that it never throws.
+  // Text-only now (see draftbattle.js's changelog) — no canvas involved at
+  // all anymore, so there's no graceful-degrade path left to exercise; this
+  // just confirms the share sheet actually appears with useful content.
   let threwOnShare = false;
   try { click(shareMonBtn); await wait(30); } catch { threwOnShare = true; }
-  ok(!threwOnShare, '#14: clicking "Share My Pokémon" does not throw even without canvas/clipboard support');
+  ok(!threwOnShare, '#14: clicking "Share My Pokémon" does not throw');
+  const shareToastText = document.querySelector('.draft-toast')?.textContent || '';
+  ok(shareToastText.length > 0, 'a share sheet with real content appears (not blank, not an error)');
+  ok(shareToastText.includes('drafted Pokémon'), 'the share text mentions the drafted mon');
+  ok([...document.querySelectorAll('.draft-toast button')].some((b) => b.textContent.includes('WhatsApp')), 'the same WhatsApp/Copy/Close share sheet used everywhere else in the app is shown (not a native OS share sheet or a silent file download)');
+  const closeBtn = [...document.querySelectorAll('.draft-toast button')].find((b) => b.textContent.includes('Close'));
+  if (closeBtn) click(closeBtn);
 
   const { rows, summary, claimBtn } = await runGauntletFromDraftComplete();
   eq(rows.length, 5, 'the gauntlet attempts all five tiers when the challenger wins every matchup');
@@ -181,6 +186,8 @@ console.log('\n— #14/#15: the Elite-4 gauntlet runs Will→Koga→Bruno→Lanc
   let threwOnGauntletShare = false;
   try { click(btn('📤 Share')); await wait(30); } catch { threwOnGauntletShare = true; }
   ok(!threwOnGauntletShare, '#15: clicking the gauntlet results Share button does not throw');
+  const gauntletToastText = document.querySelector('.draft-toast')?.textContent || '';
+  ok(gauntletToastText.includes('Champion') || gauntletToastText.includes('Elite 4'), 'the gauntlet share text mentions the achievement, not just a bare link');
 
   // #15 — watch an individual matchup on demand, then return to the SAME results screen.
   const watchBtn = [...q('table button')].find((b) => b.textContent.includes('Watch'));
@@ -199,6 +206,86 @@ console.log('\n— #14/#15: the Elite-4 gauntlet runs Will→Koga→Bruno→Lanc
   const dump = await fb.get('/draft/throne/all');
   ok(!!dump && dump.holderUid === 'player1', 'claiming from the results screen actually persists the highest throne reached (All-Time)');
   eq(await fb.get('/draft/progress/player1'), 5, 'persisted progress rank reaches the max (5) after the full climb');
+
+  console.log('\n— Bug report: a player who already holds a HIGHER throne with a DIFFERENT mon must still be able to claim a lower one with a NEW mon —');
+  {
+    // player1 (from just above) already holds All-Time with their swept mon.
+    // Draft a genuinely different, new mon (a different seed) that reaches
+    // only Will and try to claim it. This should succeed outright — "a
+    // single POKEMON can only hold one spot, but a player can hold as many
+    // as they want" is the intended rule; the previous behavior compared
+    // holderUid, which incorrectly treated "same player, different mon" the
+    // same as "same mon, lower tier" and blocked the claim.
+    // Seed 22, like WINNING_SEED above, was found offline for TODAY'S DATE
+    // specifically (Will/Koga's NPCs are period-keyed by day/week, so a
+    // seed that beats Will and loses to Koga today isn't guaranteed to
+    // still do so on a different day — if this ever needs re-finding, the
+    // search is: draft greedily through the UI for seeds 1..N, run the
+    // gauntlet, and look for Won-then-Lost in the first two rows).
+    document.getElementById('app').innerHTML = '';
+    const ctrl2 = await withDraftSeed(22, async () => {
+      const c = createDraftBattle({
+        mount: document.getElementById('app'), config: {}, data: gen2,
+        params: { variant: 'freeplay', _getFirebase: async () => fb, _getIdentity: async () => identity },
+        onExit: () => {},
+      });
+      await wait(50);
+      return c;
+    });
+    await greedyDraftThroughUI();
+    const newMonName = document.querySelector('.summary-mon')?.textContent;
+    ok(!!newMonName && newMonName !== dump.mon.name, `drafted a genuinely different mon this time (got: ${newMonName}, previous: ${dump.mon.name})`);
+    const { rows: rows2, claimBtn: claimBtn2 } = await runGauntletFromDraftComplete();
+    ok(rows2.some((r) => r.opponent === 'Will' && r.result.includes('Won')), 'this build beats Will');
+    ok(rows2.some((r) => r.opponent === 'Koga' && r.result.includes('Lost')), 'and loses to Koga, matching the exact bug report shape (won the lowest spot, lost the next one)');
+    ok(!!claimBtn2, 'a Claim button is offered for the highest spot actually reached (Will)');
+    click(claimBtn2);
+    await wait(60);
+    ok(!document.body.textContent.includes('already own') && !document.body.textContent.includes('keptHigherTier'), 'claiming does NOT get blocked with an "already own the highest spot" style message');
+    const dayDump = await fb.get('/draft/throne/day');
+    ok(!!dayDump && dayDump.holderUid === 'player1' && dayDump.mon.name === newMonName, 'Will\u2019s spot is genuinely claimed by the NEW mon');
+    const allDumpAfter = await fb.get('/draft/throne/all');
+    ok(!!allDumpAfter && allDumpAfter.mon.name === dump.mon.name, 'the player\u2019s All-Time spot (held by the ORIGINAL mon) is completely untouched \u2014 the player now legitimately holds BOTH spots at once, each with its own mon');
+    ctrl2.destroy();
+  }
+  ctrl.destroy();
+}
+
+console.log('\n— The one-Pok\u00e9mon-one-throne cascade still applies when it\u2019s genuinely the SAME mon —');
+{
+  const fb = makeFakeFB();
+  const identity = { uid: 'player10', name: 'Falkner' };
+  // WINNING_SEED's draft is fully deterministic regardless of player name --
+  // only the "X's " name prefix changes. Pre-seed Will with the EXACT shape
+  // this specific seed+identity combination is about to produce (confirmed
+  // via this exact seed/name pair, matching the app's own real stats), as if
+  // this same mon had separately claimed Will at some earlier point -- this
+  // avoids the unrelated "re-fighting your own prior claim" edge case that
+  // coming at this via two live gauntlet runs would have triggered instead.
+  await fb._forceSet('/draft/throne/day', {
+    mon: { name: 'Falkner\'s Kangaskhan', types: ['Normal', 'Psychic'], baseStats: { hp: 105, atk: 95, def: 100, spa: 100, spd: 50, spe: 55 }, moves: ['High Jump Kick', 'Return', 'Headbutt', 'Earthquake'] },
+    holderUid: 'player10', holderName: 'Falkner', takenAt: Date.now(), period: 'day-preexisting',
+  });
+
+  const ctrl = await withDraftSeed(WINNING_SEED, async () => {
+    const c = createDraftBattle({
+      mount: document.getElementById('app'), config: {}, data: gen2,
+      params: { variant: 'freeplay', _getFirebase: async () => fb, _getIdentity: async () => identity },
+      onExit: () => {},
+    });
+    await wait(50);
+    return c;
+  });
+  await greedyDraftThroughUI();
+  const monName = document.querySelector('.summary-mon')?.textContent;
+  eq(monName, 'Falkner\'s Kangaskhan', 'sanity check: this seed+identity combination produces the exact mon the throne was pre-seeded with');
+  const { claimBtn } = await runGauntletFromDraftComplete();
+  click(claimBtn);
+  await wait(60);
+  const allDump = await fb.get('/draft/throne/all');
+  ok(!!allDump && allDump.holderUid === 'player10', 'All-Time is claimed by this mon');
+  const dayDumpAfter = await fb.get('/draft/throne/day');
+  ok(dayDumpAfter === null || dayDumpAfter.holderUid !== 'player10', 'Will is vacated (cleared, or bumped to a different holder) now that the SAME mon holding it has moved up to All-Time \u2014 one mon genuinely can\u2019t hold two spots at once');
   ctrl.destroy();
 }
 
