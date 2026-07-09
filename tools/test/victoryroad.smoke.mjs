@@ -5,7 +5,7 @@
 // display consolidations (types on one line, egg moves in one chip, weakness/
 // resistance in one differentiated chip).
 //
-// Run: node tools/test/victoryroad.smoke.mjs 
+// Run: node tools/test/victoryroad.smoke.mjs
 import { JSDOM } from 'jsdom';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -46,6 +46,35 @@ const order = shuffleZero(gen2.pokedex);
 const mount = document.getElementById('app');
 const ctrl = createVictoryRoad({ mount, config: {}, data: gen2, params: { gen: 2, modeId: 'victoryroad', rng: () => 0 }, onExit: () => {} });
 await wait(50);
+
+console.log('\n— Tier preview (pre-game config screen) reflects the #6 rework, including the weakness/resistance special case —');
+{
+  const tierRows = [...q('.vr-tier-row')];
+  eq(tierRows.length, 8, 'all 8 tiers are listed in the preview');
+  const openTier = (label) => {
+    const row = tierRows.find((r) => r.querySelector('.vr-tier-label')?.textContent === label);
+    click(row);
+    return row.nextSibling;
+  };
+  const tagsOf = (detail) => [...detail.querySelectorAll('.vr-tier-clue-tag')].map((t) => t.textContent);
+
+  const t1 = openTier('Tier 1');
+  ok(tagsOf(t1).includes('Has an Immunity'), 'Tier 1 preview includes "Has an Immunity" (#6b addition)');
+  ok(!tagsOf(t1).some((t) => t.startsWith('Weakness/Resistance')), 'Tier 1 preview correctly has NO weakness/resistance entry (only Tiers 3\u20138 have it)');
+
+  const t3 = openTier('Tier 3');
+  ok(tagsOf(t3).includes('Weakness/Resistance (up to 6)'), '#6b: Tier 3 preview shows the combined weakness/resistance reveal, with the correct cap \u2014 this was previously invisible entirely since weakResistCap isn\u2019t a plain slot');
+  const t3Row = tierRows.find((r) => r.querySelector('.vr-tier-label')?.textContent === 'Tier 3');
+  eq(t3Row.querySelector('.vr-tier-slots')?.textContent, '11 clues', 'Tier 3\u2019s summary count includes the weakness/resistance entry (10 slots + 1)');
+
+  const t8 = openTier('Tier 8');
+  ok(tagsOf(t8).includes('Weakness/Resistance (up to 1)'), 'Tier 8 preview shows the correct (smallest) cap');
+
+  const t7 = openTier('Tier 7');
+  ok(tagsOf(t7).includes('Highest Base Stat') && tagsOf(t7).includes('Lowest Base Stat'), 'Tier 7 preview includes the no-value Highest/Lowest Base Stat clues (#6b addition)');
+  ok(tagsOf(t7).includes('Weakness/Resistance (up to 2)'), 'Tier 7 preview also shows its weakness/resistance entry');
+}
+
 click([...q('button')].find((b) => b.textContent.includes('Enter Victory Road')));
 await wait(50);
 

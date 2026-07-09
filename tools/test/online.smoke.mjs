@@ -1,13 +1,13 @@
 import { JSDOM } from 'jsdom';
 import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url'; 
+import { fileURLToPath } from 'node:url';
 
 const dom = new JSDOM('<!doctype html><html><body><div id="A"></div><div id="B"></div></body></html>', { url: 'https://example.com/' });
 const { window } = dom;
 const def = (k, v) => { try { Object.defineProperty(globalThis, k, { value: v, configurable: true, writable: true }); } catch {} };
 global.window = window; global.document = window.document;
 global.alert = () => {}; global.confirm = () => true;
-def('navigator', window.navigator); def('Node', window.Node); def('HTMLElement', window.HTMLElement); def('MouseEvent', window.MouseEvent);
+def('navigator', window.navigator); def('Node', window.Node); def('HTMLElement', window.HTMLElement); def('MouseEvent', window.MouseEvent); def('location', window.location);
 
 // ---- controllable clock + manual interval scheduler ----
 let NOW = 1_000_000;
@@ -58,7 +58,7 @@ const settle = async () => { await tickMicro(); await tickMicro(); await tickMic
 const db = makeDB();
 const idA = { uid: 'uidA', name: 'Ash' };
 const idB = { uid: 'uidB', name: 'Misty' };
-const mkParams = (id) => ({ gen: 2, _getFirebase: () => Promise.resolve(makeClientView(db)), _getIdentity: () => Promise.resolve(id) });
+const mkParams = (id, query) => ({ gen: 2, _getFirebase: () => Promise.resolve(makeClientView(db)), _getIdentity: () => Promise.resolve(id), query: query || {} });
 // each "client" gets its own fb view but they share the same db+listeners
 function makeClientView(db) { return db; }
 
@@ -418,6 +418,45 @@ console.log('\n— Host-disconnect resilience: the room survives the original ho
   ok(hi.turnOrder[hi.currentTurnPos] !== activeBefore || hi.roundNum > 1 || hi.status !== 'playing', 'a turn-timeout is still enforced mid-game even with the original host disconnected (fallback leader\u2019s tick() drives it)');
 
   H.destroy(); Ic.destroy();
+}
+
+console.log('\n— Room sharing: Share Room button builds a correct invite, and its link pre-fills the join screen —');
+{
+  const idJ = { uid: 'uidJ', name: 'Jasmine' };
+  const jDiv = document.createElement('div'); jDiv.id = 'J'; document.body.appendChild(jDiv);
+  const J = createOnline({ mount: jDiv, config: {}, data: gen2Data, params: mkParams(idJ), onExit: () => {} });
+  await settle();
+  click(findBtn('J', 'Create a room'));
+  await settle();
+  click(findBtn('J', 'Create room'));
+  await settle();
+  const codeShown = document.getElementById('J').querySelector('.online-code')?.textContent;
+  ok(!!codeShown && codeShown.length === 6, 'room code is shown in the lobby');
+
+  click(findBtn('J', 'Share Room'));
+  await settle();
+  const toastText = document.getElementById('J').querySelector('.draft-toast')?.textContent || '';
+  ok(toastText.includes('Join my PokeGuess Online game'), 'invite text opens with a clear "join my game" line');
+  ok(toastText.includes('Gen II'), 'invite text includes the generation');
+  ok(/Reveal, then Guess|Guess, then Reveal/.test(toastText), 'invite text includes the RTG/GTR mode in plain language');
+  ok(toastText.includes(`#/online/2?code=${codeShown}`), `invite text\u2019s link encodes the room\u2019s actual code (got: ${toastText.match(/#\/online\/2\?code=\w+/)})`);
+
+  // A second player opens that exact link (simulated via the query param a
+  // real link would produce) and should land straight on the pre-filled join
+  // screen, never seeing the bare entry screen first.
+  const idK = { uid: 'uidK', name: 'Karen' };
+  const kDiv = document.createElement('div'); kDiv.id = 'K'; document.body.appendChild(kDiv);
+  const K = createOnline({ mount: kDiv, config: {}, data: gen2Data, params: mkParams(idK, { code: codeShown.toLowerCase() }), onExit: () => {} });
+  await settle();
+  const joinInput = document.getElementById('K').querySelector('input');
+  ok(!!joinInput, 'K lands directly on the join screen (not the entry screen) because a code was supplied');
+  ok(joinInput.value === codeShown, `K\u2019s room-code field is pre-filled with the correct code (got: "${joinInput.value}")`);
+  click(findBtn('K', 'Join'));
+  await settle();
+  const roomAfter = await db.get(`/rooms/${codeShown}`);
+  ok(roomAfter && roomAfter.players && roomAfter.players.uidK, 'K successfully joined using only the pre-filled code \u2014 no typing needed');
+
+  J.destroy(); K.destroy();
 }
 
 A.destroy(); B.destroy();

@@ -1,6 +1,6 @@
 // Cycling Road v2 smoke test (#1): predetermined synced clue order,
 // independent per-player advancement + toasts, room cap, time cap, splits
-// summary, rematch flow (success + "not enough players" failure). 
+// summary, rematch flow (success + "not enough players" failure).
 //
 // Each simulated player gets its OWN JSDOM window/document (a shared document
 // caused a confirmed jsdom quirk: duplicate ids across two "players" made
@@ -104,11 +104,11 @@ const fb = makeFakeFB();
 // wrapped with a proper (synchronous, nestable) swap-and-restore of their
 // own — render() itself has no internal awaits, so that swap is safe.
 function setActiveWindow(win) {
-  global.window = win; global.document = win.document;
+  global.window = win; global.document = win.document; global.location = win.location;
   global.Node = win.Node; global.HTMLElement = win.HTMLElement; global.MouseEvent = win.MouseEvent;
 }
 function withWindowSync(win, fn) {
-  const saved = { window: global.window, document: global.document, Node: global.Node, HTMLElement: global.HTMLElement, MouseEvent: global.MouseEvent };
+  const saved = { window: global.window, document: global.document, location: global.location, Node: global.Node, HTMLElement: global.HTMLElement, MouseEvent: global.MouseEvent };
   setActiveWindow(win);
   try { return fn(); } finally { Object.assign(global, saved); }
 }
@@ -121,7 +121,7 @@ function makeClientScopedFb(sharedFb, win) {
   };
 }
 
-async function mkClient(uid, name) {
+async function mkClient(uid, name, query) {
   const dom = new JSDOM('<!doctype html><body></body></html>', { url: 'https://e.com/' });
   const win = dom.window;
   setActiveWindow(win);
@@ -131,7 +131,7 @@ async function mkClient(uid, name) {
   const scopedFb = makeClientScopedFb(fb, win);
   const ctrl = createRace({
     mount, config: {}, data: gen2,
-    params: { gen: 2, modeId: 'race', _getFirebase: async () => scopedFb, _getIdentity: async () => ({ uid, name }) },
+    params: { gen: 2, modeId: 'race', _getFirebase: async () => scopedFb, _getIdentity: async () => ({ uid, name }), query: query || {} },
     onExit: () => { client.exited = true; },
   });
   client.ctrl = ctrl;
@@ -390,6 +390,35 @@ console.log('\n— Host-disconnect resilience: the room survives the original ho
   ok(r4.status === 'gameOver', 'the room-wide time cap is still enforced mid-game with the original host disconnected (fallback leader\u2019s capTimer drives it)');
 
   H.destroy(); I.destroy();
+}
+
+console.log('\n— Room sharing: Share Room button builds a correct invite, and its link pre-fills the join screen —');
+{
+  const N = await mkClient('uidN', 'Norman');
+  N.click(N.btn('Create a room')); await tick();
+  N.click(N.btn('Create room')); await tick();
+  const codeN = N.q('.online-code-big')?.textContent.replace('Code: ', '');
+  ok(!!codeN && codeN.length === 6, 'room code is shown in the lobby');
+
+  N.click(N.btn('Share Room')); await tick();
+  const toastText = N.mount.querySelector('.draft-toast')?.textContent || '';
+  ok(toastText.includes('Join my Cycling Road game'), 'invite text opens with a clear "join my game" line');
+  ok(toastText.includes('5 Pok\u00e9mon'), 'invite text includes the target Pok\u00e9mon count');
+  ok(!toastText.includes('Team Mode'), 'individual-mode invite does not mention Team Mode');
+  ok(toastText.includes(`#/race/2?code=${codeN}`), `invite text\u2019s link encodes the room\u2019s actual code (got: ${toastText.match(/#\/race\/2\?code=\w+/)})`);
+
+  // A second player opens that link (simulated via the query param a real
+  // link would produce) and should land straight on the pre-filled join
+  // screen.
+  const O = await mkClient('uidO', 'Olivia', { code: codeN.toLowerCase() });
+  const joinInput = O.q('input');
+  ok(!!joinInput, 'O lands directly on the join screen (not the entry screen) because a code was supplied');
+  ok(joinInput.value === codeN, `O\u2019s room-code field is pre-filled with the correct code (got: "${joinInput.value}")`);
+  O.click(O.btn('Join')); await tick();
+  const roomAfter = await fb.get(`/rooms/${codeN}`);
+  ok(roomAfter && roomAfter.players && roomAfter.players.uidO, 'O successfully joined using only the pre-filled code \u2014 no typing needed');
+
+  N.destroy(); O.destroy();
 }
 
 A.destroy(); B.destroy();

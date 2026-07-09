@@ -1,6 +1,6 @@
 // Cycling Road v2 smoke test (#1): predetermined synced clue order,
 // independent per-player advancement + toasts, room cap, time cap, splits
-// summary, rematch flow (success + "not enough players" failure). 
+// summary, rematch flow (success + "not enough players" failure).
 //
 // Each simulated player gets its OWN JSDOM window/document (a shared document
 // caused a confirmed jsdom quirk: duplicate ids across two "players" made
@@ -100,11 +100,11 @@ const fb = makeFakeFB();
 // wrapped with a proper (synchronous, nestable) swap-and-restore of their
 // own — render() itself has no internal awaits, so that swap is safe.
 function setActiveWindow(win) {
-  global.window = win; global.document = win.document;
+  global.window = win; global.document = win.document; global.location = win.location;
   global.Node = win.Node; global.HTMLElement = win.HTMLElement; global.MouseEvent = win.MouseEvent;
 }
 function withWindowSync(win, fn) {
-  const saved = { window: global.window, document: global.document, Node: global.Node, HTMLElement: global.HTMLElement, MouseEvent: global.MouseEvent };
+  const saved = { window: global.window, document: global.document, location: global.location, Node: global.Node, HTMLElement: global.HTMLElement, MouseEvent: global.MouseEvent };
   setActiveWindow(win);
   try { return fn(); } finally { Object.assign(global, saved); }
 }
@@ -117,7 +117,7 @@ function makeClientScopedFb(sharedFb, win) {
   };
 }
 
-async function mkClient(uid, name) {
+async function mkClient(uid, name, query) {
   const dom = new JSDOM('<!doctype html><body></body></html>', { url: 'https://e.com/' });
   const win = dom.window;
   setActiveWindow(win);
@@ -127,7 +127,7 @@ async function mkClient(uid, name) {
   const scopedFb = makeClientScopedFb(fb, win);
   const ctrl = createRace({
     mount, config: {}, data: gen2,
-    params: { gen: 2, modeId: 'race', _getFirebase: async () => scopedFb, _getIdentity: async () => ({ uid, name }) },
+    params: { gen: 2, modeId: 'race', _getFirebase: async () => scopedFb, _getIdentity: async () => ({ uid, name }), query: query || {} },
     onExit: () => { client.exited = true; },
   });
   client.ctrl = ctrl;
@@ -416,6 +416,32 @@ console.log('\n— Team Mode host-disconnect resilience: the room survives the o
   ok(roomJ.status === 'gameOver', 'the room-wide time cap is still enforced mid-game with the original host disconnected (fallback leader\u2019s capTimer drives it, team variant)');
 
   J.destroy(); K.destroy(); L.destroy(); M.destroy();
+}
+
+console.log('\n— Room sharing (Team Mode): Share Room button mentions Team Mode, and its link pre-fills the join screen —');
+{
+  const P = await mkClient('uidP', 'Pryce');
+  P.click(P.btn('Create a room')); await tick();
+  P.click(P.btn('Team Mode: Off')); await tick();
+  P.click(P.btn('Create room')); await tick();
+  const codeP = P.q('.online-code-big')?.textContent.replace('Code: ', '');
+  ok(!!codeP && codeP.length === 6, 'team room code is shown in the lobby');
+
+  P.click(P.btn('Share Room')); await tick();
+  const toastText = P.mount.querySelector('.draft-toast')?.textContent || '';
+  ok(toastText.includes('Join my Cycling Road game'), 'invite text opens with a clear "join my game" line');
+  ok(toastText.includes('Team Mode'), 'Team Mode invite explicitly mentions Team Mode (individual mode\u2019s invite does not \u2014 see race.smoke.mjs)');
+  ok(toastText.includes(`#/race/2?code=${codeP}`), `invite text\u2019s link encodes the room\u2019s actual code (got: ${toastText.match(/#\/race\/2\?code=\w+/)})`);
+
+  const Q = await mkClient('uidQ', 'Quilava', { code: codeP.toLowerCase() });
+  const joinInput = Q.q('input');
+  ok(!!joinInput, 'Q lands directly on the join screen because a code was supplied');
+  ok(joinInput.value === codeP, `Q\u2019s room-code field is pre-filled with the correct code (got: "${joinInput.value}")`);
+  Q.click(Q.btn('Join')); await tick();
+  const roomAfterQ = await fb.get(`/rooms/${codeP}`);
+  ok(roomAfterQ && roomAfterQ.players && roomAfterQ.players.uidQ, 'Q successfully joined the team room using only the pre-filled code');
+
+  P.destroy(); Q.destroy();
 }
 
 A.destroy(); B.destroy(); C.destroy(); D.destroy();
