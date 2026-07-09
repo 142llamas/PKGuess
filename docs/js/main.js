@@ -1,8 +1,14 @@
 /**
  * @file        docs/js/main.js
- * @version     1.4.0 
- * @updated     2026-06-26
+ * @version     1.5.0
+ * @updated     2026-07-06
  * @changelog
+ *   1.5.0 — parseHash() now supports an optional query string
+ *           (#/online/2?code=ABCDEF), threaded through route()/launchMode()
+ *           into the controller's params.query. Backs online.js's and
+ *           race.js's new room-invite deep links (a shared link pre-fills
+ *           the join screen's room code instead of the recipient having to
+ *           type it in).
  *   1.4.0 — Replaced the one-shot first-load name toast with a persistent header profile pill (lib/identity-ui.js) so the PIN-claim/re-link flow is always reachable, not just on first visit (#16).
  *   1.3.0 — Draft/Daily cards show Draft + Elite4/Results buttons; route an optional view segment (#6/#7).
  *   1.2.0 — Pass gen + modeId into controllers so modes can show the current
@@ -89,13 +95,26 @@ async function loadConfig() {
   }
 }
 
-/** Parse '#/<mode>/<gen>/<view>' -> { modeId, gen, view } (gen/view optional). */
+/** Parse '#/<mode>/<gen>/<view>?key=val&...' -> { modeId, gen, view, query }.
+ *  gen/view/query are all optional. `query` supports room-invite links like
+ *  '#/online/2?code=ABCDEF' so a shared link can pre-fill a join code. */
 function parseHash() {
-  const raw = (location.hash || '').replace(/^#\/?/, '');
-  if (!raw) return { modeId: null, gen: null, view: null };
-  const [modeId, genStr, view] = raw.split('/');
+  const full = (location.hash || '').replace(/^#\/?/, '');
+  const [pathPart, queryPart] = full.split('?');
+  if (!pathPart) return { modeId: null, gen: null, view: null, query: {} };
+  const [modeId, genStr, view] = pathPart.split('/');
   const gen = genStr ? Number(genStr) : null;
-  return { modeId: modeId || null, gen: Number.isFinite(gen) ? gen : null, view: view || null };
+  const query = {};
+  if (queryPart) {
+    for (const kv of queryPart.split('&')) {
+      if (!kv) continue;
+      const eq = kv.indexOf('=');
+      const k = decodeURIComponent(eq === -1 ? kv : kv.slice(0, eq));
+      const v = eq === -1 ? '' : decodeURIComponent(kv.slice(eq + 1));
+      if (k) query[k] = v;
+    }
+  }
+  return { modeId: modeId || null, gen: Number.isFinite(gen) ? gen : null, view: view || null, query };
 }
 
 function navigate(hash) {
@@ -105,7 +124,7 @@ function navigate(hash) {
 
 async function route() {
   teardownActive();
-  const { modeId, gen, view } = parseHash();
+  const { modeId, gen, view, query } = parseHash();
 
   if (!modeId) { renderMenu(); return; }
 
@@ -116,7 +135,7 @@ async function route() {
 
   if (!mode.enabled) { renderComingSoon(mode); return; }
 
-  await launchMode(mode, useGen, view);
+  await launchMode(mode, useGen, view, query);
 }
 
 function teardownActive() {
@@ -219,7 +238,7 @@ function renderNotFound(modeId) {
   );
 }
 
-async function launchMode(mode, gen, view) {
+async function launchMode(mode, gen, view, query) {
   screenShell(el('div', { class: 'placeholder' },
     el('p', { class: 'placeholder-text' }, `Loading ${mode.label} (Gen ${gen})…`)));
 
@@ -254,7 +273,7 @@ async function launchMode(mode, gen, view) {
       mount: surface,
       config: CONFIG,
       data,
-      params: { ...(mode.params || {}), gen, modeId: mode.id, view: view || null },
+      params: { ...(mode.params || {}), gen, modeId: mode.id, view: view || null, query: query || {} },
       onExit: () => navigate('#/'),
     }) || null;
   } catch (err) {
