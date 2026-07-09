@@ -1,6 +1,6 @@
 // Clue-selection-mode smoke for multiplayer.js hotseat (#10/#11/#15b/#15c).
 // Run: node tools/test/mp-cluemode.smoke.mjs
-import { JSDOM } from 'jsdom'; 
+import { JSDOM } from 'jsdom';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
@@ -68,6 +68,7 @@ console.log('— Random mode: cards are NOT clickable; the dedicated button work
   const revealBtn = [...mount.querySelectorAll('button')].find((b) => b.textContent.includes('Reveal a random clue'));
   ok(!!revealBtn, 'a "Reveal a random clue" button is present');
   const revealedBefore = [...mount.querySelectorAll('.clue-btn.revealed')].length;
+  const revItemsBefore = [...mount.querySelectorAll('#mp-revealed .rev-item')].length;
   const card = [...mount.querySelectorAll('#mp-clue-panel .clue-btn')].find((c) => !c.className.includes('revealed'));
   click(card);
   await tick();
@@ -75,8 +76,16 @@ console.log('— Random mode: cards are NOT clickable; the dedicated button work
   eq(revealedAfterCardClick, revealedBefore, 'clicking an individual clue card in Random mode does NOT reveal it');
   click(revealBtn);
   await tick();
-  const revealedAfterButton = [...mount.querySelectorAll('.clue-btn.revealed')].length;
-  ok(revealedAfterButton > revealedBefore, 'the random-reveal button DID reveal a clue');
+  // Count the #mp-revealed panel's entries, not .clue-btn.revealed cards --
+  // a multi-use clue (e.g. "Reveal One Egg Move", cheap and thus heavily
+  // favored by the weighted-random formula) never gets the .revealed CSS
+  // class after just one use (only once fully exhausted, matching
+  // single.js's established pattern), so counting THAT card class was
+  // intermittently flaky whenever the random pick happened to land on a
+  // multi-use clue. The revealed-clues panel always gains an entry
+  // regardless of single- or multi-use, so it's the robust signal.
+  const revItemsAfter = [...mount.querySelectorAll('#mp-revealed .rev-item')].length;
+  ok(revItemsAfter > revItemsBefore, 'the random-reveal button DID reveal a clue');
   ctrl.destroy();
 }
 
@@ -85,6 +94,7 @@ console.log('— By-category mode: cards are NOT clickable; category header reve
   const { mount, ctrl } = await startGame({ clueMode: 'category' });
   ok(mount.querySelector('#mp-clue-panel.category-mode'), 'clue panel is tagged category-mode');
   const revealedBefore = [...mount.querySelectorAll('.clue-btn.revealed')].length;
+  const revItemsBefore = [...mount.querySelectorAll('#mp-revealed .rev-item')].length;
   const card = [...mount.querySelectorAll('#mp-clue-panel .clue-btn')].find((c) => !c.className.includes('revealed'));
   click(card);
   await tick();
@@ -94,8 +104,12 @@ console.log('— By-category mode: cards are NOT clickable; category header reve
   ok(!!header, 'at least one category header is clickable');
   click(header);
   await tick();
-  const revealedAfterHeader = [...mount.querySelectorAll('.clue-btn.revealed')].length;
-  ok(revealedAfterHeader > revealedBefore, 'clicking the category header revealed a clue');
+  // Same fix as the Random-mode test above: revealFromCategory() can also
+  // pick a multi-use clue (e.g. "Reveal One Weakness" from Type Matchups),
+  // which never gets the .revealed CSS class after just one use -- the
+  // revealed-clues panel is the robust signal regardless of clue type.
+  const revItemsAfter = [...mount.querySelectorAll('#mp-revealed .rev-item')].length;
+  ok(revItemsAfter > revItemsBefore, 'clicking the category header revealed a clue');
   ctrl.destroy();
 }
 

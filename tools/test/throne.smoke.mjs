@@ -1,7 +1,7 @@
 // Draft Battle throne/gauntlet + daily smoke: exercises the REAL controller
 // (docs/js/modes/draftbattle.js) end-to-end against a real (non-"offline")
 // fake Firebase, via the params._getFirebase/_getIdentity test-injection seam
-// (same pattern as race.smoke.mjs / online.smoke.mjs). 
+// (same pattern as race.smoke.mjs / online.smoke.mjs).
 //
 // Covers:
 //   #14/#15 — the Elite-4 gauntlet: one "Challenge the Elite 4" button battles
@@ -159,6 +159,8 @@ console.log('\n— #14/#15: the Elite-4 gauntlet runs Will→Koga→Bruno→Lanc
   const identity = { uid: 'player1', name: 'Ash' };
   const ctrl = await draftFresh(fb, identity);
   ok(document.body.textContent.includes('Draft Complete'), 'draft completes with a deterministic winning build');
+  ok(document.body.textContent.includes('Ash\'s'), '#1 (bug): the drafted mon\u2019s name uses the player\u2019s actual screen name ("Ash\'s ...") — previously always said "Player\'s ..." regardless of who was playing, since startDraft() never passed playerName through at all');
+  ok(!document.body.textContent.includes('Player\'s '), '#1: the literal fallback string "Player\'s" does not appear now that a real identity name is available');
   ok(!!btn('Challenge the Elite 4'), 'Draft Complete screen offers a single "Challenge the Elite 4" button');
   const shareMonBtn = btn('Share My Pokémon');
   ok(!!shareMonBtn, '#14: Draft Complete screen offers a "Share My Pokémon" button');
@@ -281,6 +283,7 @@ console.log('\n— #10: re-opening daily results from the "already played today"
   click(submitBtn);
   await wait(80);
   ok(document.body.textContent.includes('Daily Results'), 'first playthrough lands on today\u2019s Daily Results');
+  ok(document.body.textContent.includes('Dawn\'s'), '#1 (bug): the daily entry\u2019s Build column also uses the player\u2019s real screen name ("Dawn\'s ..."), not "Player\'s ..." \u2014 same underlying fix, verified for the daily flow specifically since it has its own entry point (startDaily) separate from free-play\u2019s (startDraft)');
   const todayLine = document.querySelector('.battle-vs')?.textContent;
   ctrl.destroy();
 

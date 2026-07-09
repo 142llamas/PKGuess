@@ -136,6 +136,28 @@ console.log('\n— #6b: Tier 3 pre-reveals a combined weakness/resistance chip (
   ok(!!chipText('First Anime Appearance'), '#6b: First Anime Appearance still shown at Tier 3 (extended from Tiers 1\u20132)');
 }
 
+console.log('\n— #2: clues render grouped by category (Habitat, Evolution, Type Matchups, Stats, Trainer Usage, Movesets, Anime), not a scattered order —');
+{
+  const labels = [...q('.vr-chip-label')].map((e) => e.textContent);
+  const posOf = (label) => labels.indexOf(label);
+  // Cat 1 (Habitat/Generation) and Cat 2 (Evolution) come before Cat 3 (Type Matchups).
+  ok(posOf('Generation') < posOf('Type Matchups'), '#2: Generation (Cat 1) sits before the Type Matchups group (Cat 3)');
+  ok(posOf('Current Evolution Stage') < posOf('Type Matchups'), '#2: Evolution Stage (Cat 2) sits before the Type Matchups group (Cat 3)');
+  // #2's explicit example: weaknesses/resistances next to type/immunity info
+  // (all Cat 3), and that whole group sits together, adjacent, not
+  // interleaved with unrelated categories.
+  ok(posOf('Type Matchups') >= 0 && posOf('Has an Immunity') >= 0, 'both Type-Matchups-category chips are present at Tier 3');
+  ok(Math.abs(posOf('Type Matchups') - posOf('Has an Immunity')) <= 2, '#2: weakness/resistance sits immediately next to (within the same Type Matchups cluster as) Has an Immunity/Type \u2014 not scattered elsewhere in the ribbon');
+  // #2's other explicit example: stats grouped together.
+  const statPos = ['Base Stat Total Range', 'Reveal Full Stat Spread'].map(posOf).filter((p) => p >= 0);
+  ok(statPos.length === 2 && Math.max(...statPos) - Math.min(...statPos) === 1, '#2: the two stat clues at this tier are adjacent to each other');
+  // Trainer Usage (Cat 5) comes after Stats (Cat 4) and before Movesets (Cat 6).
+  ok(posOf('Used by a Gym Leader') > Math.max(...statPos), '#2: Trainer Usage (Cat 5) sits after Stats (Cat 4)');
+  ok(posOf('Used by a Gym Leader') < posOf('Comp Moveset'), '#2: Trainer Usage (Cat 5) sits before Movesets (Cat 6)');
+  // Anime (Cat 7) is last.
+  eq(labels[labels.length - 1], 'First Anime Appearance', '#2: Anime (Cat 7) is the final group, matching the game guide\u2019s own category numbering');
+}
+
 console.log('\n— #6a: Tier 1\u2019s boundary is exactly at streak 5\u20136 (one more Pok\u00e9mon than before the fix) —');
 {
   // Re-derive independently: start a FRESH session and check the tier right

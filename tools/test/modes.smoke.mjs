@@ -1,6 +1,6 @@
 import { JSDOM } from 'jsdom';
 import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url'; 
+import { fileURLToPath } from 'node:url';
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'https://example.com/' });
 const { window } = dom;
@@ -136,6 +136,24 @@ await run('pokedex', '../../docs/js/modes/pokedex.js', 'createPokedex', (m) => {
     const card = [...mount.querySelectorAll('#clue-panel .clue-btn')].find((b) => !b.className.includes('unavailable') && !b.className.includes('cant-afford') && !b.className.includes('revealed'));
     if (!card) break;
     clickEl(card);
+    await tick();
+  }
+  // Buying every affordable clue card does NOT guarantee reaching zero points
+  // for every possible random mystery — some mysteries' total available clue
+  // cost is less than the difficulty's starting budget, in which case the
+  // loop above runs out of THINGS TO BUY while points remain, and the game
+  // never reaches game-over (this was the actual source of this test's
+  // intermittent flakiness). A wrong guess costs points too, so fall back to
+  // repeating one until the budget is genuinely exhausted. "Metapod" is
+  // vanishingly unlikely to BE the random mystery (~1/251 minus whatever
+  // revealed clues already ruled out), and guessing it again is a no-op if
+  // it's already been guessed and is wrong.
+  guard = 0;
+  while (!mount.querySelector('.summary-container') && guard++ < 60) {
+    const input = mount.querySelector('#guess-input');
+    if (!input) break;
+    input.value = 'Metapod';
+    clickEl([...mount.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Guess'));
     await tick();
   }
   ok(!!mount.querySelector('.summary-container'), 'single: ran out of points and reached the summary screen');
