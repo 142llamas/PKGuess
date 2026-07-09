@@ -3,6 +3,13 @@
  * @version     1.14.3
  * @updated     2026-07-05
  * @changelog
+*   1.14.4 — Fixed .sf-intro's centering: max-width without auto left/right
+*           margins meant the block sat left-aligned within a wider parent
+*           on desktop (e.g. the Elite 4 status screen's description text),
+*           even though its own text was text-align:center — the text ended
+*           up "centered" only within its own off-center box. margin:auto is
+*           a no-op for elements already narrower than their parent, so this
+*           only changes anything where the bug was actually visible.
 *   1.14.3 — .host-left-banner (online.js + race.js host-disconnect resilience).
 *   1.14.2 — #6: Victory Road merged-chip styles — .vr-inline-list (egg moves),
  *           .vr-matchup-row/.vr-matchup-weak/.vr-matchup-resist (weakness/
@@ -890,7 +897,7 @@ h1,h2,h3{font-family:var(--font-pixel);}
 /* ============================================================================
    SECTION E — Safari Zone controller
    ========================================================================= */
-.sf-intro { color: var(--text-secondary); font-size: 13px; line-height: 1.5; margin: 6px 4px 14px; max-width: 640px; }
+.sf-intro { color: var(--text-secondary); font-size: 13px; line-height: 1.5; margin: 6px auto 14px; max-width: 640px; }
 .sf-counters { display: flex; align-items: center; gap: 16px; flex: 1; }
 .sf-caught { font-size: 13px; font-weight: 700; color: var(--accent-gold); white-space: nowrap; }
 .sf-actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
