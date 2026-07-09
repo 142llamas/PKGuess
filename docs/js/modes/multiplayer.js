@@ -1,8 +1,11 @@
 /**
  * @file        js/modes/multiplayer.js
- * @version     1.3.2
- * @updated     2026-07-05
+ * @version     1.3.3
+ * @updated     2026-07-09
  * @changelog
+ *   1.3.3 — Fixed: the "Reveal Full Stat Spread" clue showed a bare number
+ *           string with no HP/Atk/Def/... labels, matching the same fix in
+ *           single.js/safari.js/online.js. Now uses the shared statSpreadEl.
  *   1.3.2 — removed the "Skip guess / go to reveal" button from GTR's guess
  *           phase — it let a player skip guessing entirely, undermining
  *           GTR's whole premise (guess cold, only reveal if wrong).
@@ -35,7 +38,7 @@
  * Contract: createMultiplayer({ mount, config, data, params, onExit }) → { destroy }
  */
 
-import { el, clear } from '../lib/dom.js';
+import { el, clear, statSpreadEl } from '../lib/dom.js';
 import { PokeGuessRound, normalizeName, poolFilterForData, matchesPool } from '../lib/engine.js';
 import { markCaught, markSeen } from '../lib/catch-tracker.js';
 import { computeAutoDeducedIds } from '../lib/mp-rules.js';
@@ -348,8 +351,13 @@ export function createMultiplayer({ mount, config, data, params = {}, onExit }) 
     if (isRevealed && !isMultiUse) {
       card.classList.add('revealed');
       Object.assign(card.style, { background: cat.bg, borderColor: cat.color });
+      // #6 (requested): labeled stat spread (HP/Atk/Def/...), matching
+      // single.js/victoryroad.js — was a bare number string before.
+      const revealedValueEl = clue.field === 'fullStats'
+        ? el('div', { class: 'clue-revealed-value' }, statSpreadEl(String(r.revealedClues[clue.id])))
+        : el('div', { class: 'clue-revealed-value' }, String(r.revealedClues[clue.id]));
       card.append(el('div', { class: 'clue-top' }, el('span', { class: 'clue-btn-name', style: { color: cat.color } }, clue.name)),
-        el('div', { class: 'clue-revealed-value' }, String(r.revealedClues[clue.id])));
+        revealedValueEl);
       return card;
     }
     // #17-adjacent finding: a multi-use clue that's now exhausted (hit its cap,

@@ -1,8 +1,15 @@
 /**
  * @file        js/modes/victoryroad.js
- * @version     1.4.0
- * @updated     2026-07-08
+ * @version     1.4.1
+ * @updated     2026-07-09
  * @changelog
+ *   1.4.1 — Minor, low-priority: the intro paragraph unnecessarily wrapped to
+ *           2 lines on wide desktop screens (fine on mobile, the priority
+ *           platform) because .sf-intro's shared max-width:640px is narrower
+ *           than this specific sentence needs at 13px font. Removed the
+ *           max-width just for this one paragraph via an inline override —
+ *           the shared CSS rule (and every other usage of .sf-intro) is
+ *           untouched.
  *   1.4.0 — Requested reorder: the ribbon now groups clues by the same 7
  *           categories used throughout the rest of the app (Habitat,
  *           Evolution, Type Matchups, Stats, Trainer Usage, Movesets,
@@ -231,7 +238,7 @@ export function createVictoryRoad({ mount, config, data, params = {}, onExit }) 
     clear(root).append(
       genBar(params.modeId || 'victoryroad', params.gen || (data.id === 'gen1' ? 1 : 2)),
       el('div', { class: 'sp-section-title' }, '\uD83D\uDDFB Victory Road'),
-      el('p', { class: 'sf-intro' },
+      el('p', { class: 'sf-intro', style: { maxWidth: 'none' } },
         'One guess per Pok\u00e9mon. Wrong answer = game over. Fewer clues as your streak grows. '
         + 'Name all 251 for a perfect sweep!'),
       el('div', { class: 'vr-tier-preview' }, ...tierRows),

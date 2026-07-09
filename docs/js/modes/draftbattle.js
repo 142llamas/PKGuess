@@ -1,8 +1,25 @@
 /**
  * @file        js/modes/draftbattle.js
- * @version     1.14.0
+ * @version     1.15.0
  * @updated     2026-07-09
  * @changelog
+ *   1.15.0 — Three requested changes:
+ *             \u2022 Narrowed the Elite-4 stat bands: Will 425-450 (unchanged),
+ *               Koga 455-480 (was 475-500), Bruno 485-510 (was 525-550),
+ *               Lance 515-540 (was 575-600) \u2014 the inter-tier gap dropped
+ *               from 50 to 30 BST (~40% narrower total Will-to-Lance span:
+ *               175 \u2192 115). Verified via a 24-build sample: the "beat Will,
+ *               lose to Koga" cliff dropped from 42% to 12.5% of outcomes,
+ *               and full sweeps roughly doubled (~8% \u2192 ~17%) \u2014 stats still
+ *               matter but no longer dominate as hard as the type-matchup
+ *               lottery, matching what was asked for. See CHANGE_TRACKER for
+ *               the full analysis this decision was based on.
+ *             \u2022 Throne History screen: each entry now has an \uD83D\uDD0D Inspect
+ *               button (matching the Daily Draft's pattern) showing that
+ *               historical champion's types/stats/moves read-only. Added
+ *               `moves` to the thronehistory push payload (previously
+ *               missing entirely) so Inspect has something to show for new
+ *               entries going forward.
  *   1.14.0 — Two fixes from a bug report:
  *             \u2022 Fixed #14a's cascade: it compared `holderUid` (same
  *               PLAYER), not mon identity, so a player who already held a
@@ -185,9 +202,9 @@ const STAT_LABELS = { hp: 'HP', atk: 'Atk', def: 'Def', spc: 'Spc', spa: 'SpA', 
 const STATUS_LABELS = { par: 'paralyzed', brn: 'burned', psn: 'poisoned', tox: 'badly poisoned', slp: 'asleep', frz: 'frozen', leechseed: 'Leech Seed', curse: 'the curse' };
 const TIERS = [
   { key: 'day',   cadence: 'Day',      npc: 'Will',     icon: '\u2460', stage: 1, statBand: [425, 450] }, // ①
-  { key: 'week',  cadence: 'Week',     npc: 'Koga',     icon: '\u2461', stage: 2, statBand: [475, 500] }, // ②
-  { key: 'month', cadence: 'Month',    npc: 'Bruno',    icon: '\u2462', stage: 3, statBand: [525, 550] }, // ③
-  { key: 'year',  cadence: 'Year',     npc: 'Lance',    icon: '\u2463', stage: 4, statBand: [575, 600] }, // ④
+  { key: 'week',  cadence: 'Week',     npc: 'Koga',     icon: '\u2461', stage: 2, statBand: [455, 480] }, // ②
+  { key: 'month', cadence: 'Month',    npc: 'Bruno',    icon: '\u2462', stage: 3, statBand: [485, 510] }, // ③
+  { key: 'year',  cadence: 'Year',     npc: 'Lance',    icon: '\u2463', stage: 4, statBand: [515, 540] }, // ④
   { key: 'all',   cadence: 'All Time', npc: 'Champion', icon: '\uD83D\uDC51', stage: null, statBand: null }, // 👑 — no band defined; NPC fallback stays a natural, unscaled auto-draft
 ].map((t) => ({
   ...t,
@@ -787,15 +804,21 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
       ? entries.map((e) => el('tr', {},
           el('td', { style: { color: 'var(--text-dim)', fontSize: '11px', whiteSpace: 'nowrap' } }, fmt(e.at)),
           el('td', { style: { fontWeight: 700 } }, e.name || 'Player'),
-          el('td', { style: { color: 'var(--text-dim)', fontSize: '11px' } }, monLabel(e.mon))))
-      : [el('tr', {}, el('td', { colspan: '3', style: { textAlign: 'center', color: 'var(--text-dim)' } }, 'No champions yet \u2014 be the first.'))];
+          el('td', { style: { color: 'var(--text-dim)', fontSize: '11px' } }, monLabel(e.mon)),
+          el('td', {},
+            (e.mon && typeof e.mon === 'object' && e.mon.name)
+              ? el('button', { class: 'btn-secondary', style: { padding: '4px 8px', fontSize: '13px', lineHeight: 1 }, title: `Inspect ${e.mon.name}`,
+                  onClick: () => renderMonInspect(e.mon, { title: `${e.name || 'Player'}\u2019s Pok\u00e9mon`, onBack: () => showThroneHistory(tier) }) },
+                  '\uD83D\uDD0D')
+              : null)))
+      : [el('tr', {}, el('td', { colspan: '4', style: { textAlign: 'center', color: 'var(--text-dim)' } }, 'No champions yet \u2014 be the first.'))];
     clear(root).append(
       el('div', { class: 'summary-container' },
         el('div', { class: 'summary-card' },
           el('div', { class: 'summary-result', style: { textAlign: 'center' } }, `${tier.icon} ${tier.challengeLabel} \u2014 Champions`),
           el('div', { class: 'lb-board' },
             el('table', { class: 'lb-table' },
-              el('thead', {}, el('tr', {}, el('th', {}, 'Date'), el('th', {}, 'Player'), el('th', {}, 'Pok\u00e9mon'))),
+              el('thead', {}, el('tr', {}, el('th', {}, 'Date'), el('th', {}, 'Player'), el('th', {}, 'Pok\u00e9mon'), el('th', {}, ''))),
               el('tbody', {}, ...rows))),
           el('div', { class: 'summary-actions' },
             el('button', { class: 'btn-secondary', onClick: showThrones }, '\u2190 Elite 4')))));
@@ -872,7 +895,7 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
           } else {
             await fb.set(`/draft/throne/${decision.vacatedTier}`, null);
           }
-          try { await fb.push(`/draft/thronehistory/${tier.key}`, { name: rec.holderName, mon: { name: lastResult ? lastResult.name : (rec.mon && rec.mon.name) || '', types: (rec.mon && rec.mon.types) || [], baseStats: (rec.mon && rec.mon.baseStats) || [] }, at: rec.takenAt, period: rec.period }); } catch { /* history is best-effort */ }
+          try { await fb.push(`/draft/thronehistory/${tier.key}`, { name: rec.holderName, mon: { name: lastResult ? lastResult.name : (rec.mon && rec.mon.name) || '', types: (rec.mon && rec.mon.types) || [], baseStats: (rec.mon && rec.mon.baseStats) || [], moves: (rec.mon && rec.mon.moves) || [] }, at: rec.takenAt, period: rec.period }); } catch { /* history is best-effort */ }
           return { ok: true, vacatedTier: decision.vacatedTier, bumpedName: decision.bump ? decision.bump.holderName : null };
         }
         // keepOld — player already holds a HIGHER throne; this one reverts to vacant.
@@ -882,7 +905,7 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
 
       if (!(await verifiedSetThrone())) return { ok: false, msg: 'Could not verify the throne was saved. Please try again.' };
       if (!(await verifiedSaveProgress())) return { ok: false, msg: 'Could not verify your progress was saved. Please try again.' };
-      try { await fb.push(`/draft/thronehistory/${tier.key}`, { name: rec.holderName, mon: { name: lastResult ? lastResult.name : (rec.mon && rec.mon.name) || '', types: (rec.mon && rec.mon.types) || [], baseStats: (rec.mon && rec.mon.baseStats) || [] }, at: rec.takenAt, period: rec.period }); } catch { /* history is best-effort */ }
+      try { await fb.push(`/draft/thronehistory/${tier.key}`, { name: rec.holderName, mon: { name: lastResult ? lastResult.name : (rec.mon && rec.mon.name) || '', types: (rec.mon && rec.mon.types) || [], baseStats: (rec.mon && rec.mon.baseStats) || [], moves: (rec.mon && rec.mon.moves) || [] }, at: rec.takenAt, period: rec.period }); } catch { /* history is best-effort */ }
       return { ok: true };
     } catch (e) { return { ok: false, msg: 'Save failed: ' + (e.message || e) }; }
   }

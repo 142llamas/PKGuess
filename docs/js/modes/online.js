@@ -1,8 +1,11 @@
 /**
  * @file        docs/js/modes/online.js
- * @version     1.6.0
- * @updated     2026-07-06
+ * @version     1.6.1
+ * @updated     2026-07-09
  * @changelog
+ *   1.6.1 — Fixed: the "Reveal Full Stat Spread" clue showed a bare number
+ *           string with no HP/Atk/Def/... labels, matching the same fix in
+ *           single.js/safari.js/multiplayer.js. Now uses statSpreadEl.
  *   1.6.0 — Room sharing: a "\uD83D\uDCE4 Share Room" button in the lobby builds an
  *           invite (game name, gen, RTG/GTR, win target, then a deep link) via
  *           the new shared `shareSheetEl` (dom.js) and `roomJoinLink`/
@@ -67,7 +70,7 @@
  *   params._getFirebase / params._getIdentity inject fakes.
  */
 
-import { el, clear, shareSheetEl } from '../lib/dom.js';
+import { el, clear, shareSheetEl, statSpreadEl } from '../lib/dom.js';
 import {
   seedFor, buildEngine, applyReveals, revealOutcome, guessOutcome,
   nextTurnPos, weightedRandomClue, advanceAfterWin, champion, makeRoomCode, computeAutoDeducedIds,
@@ -475,9 +478,14 @@ export function createOnline({ mount, config, data, params = {}, onExit }) {
     const isMultiUse = clue.maxUses !== 1 || clue.costIncrement > 0;
     const revealed = clue.id in rv;
     if (revealed && !isMultiUse) {
+      // #6 (requested): labeled stat spread (HP/Atk/Def/...), matching
+      // single.js/victoryroad.js — was a bare number string before.
+      const revealedValueEl = clue.field === 'fullStats'
+        ? el('div', { class: 'clue-revealed-value' }, statSpreadEl(String(rv[clue.id])))
+        : el('div', { class: 'clue-revealed-value' }, String(rv[clue.id]));
       return el('div', { class: 'online-clue revealed' },
         el('div', { class: 'online-clue-top' }, el('span', { class: 'online-clue-name' }, clue.name), el('span', { class: 'clue-cost-badge' }, `${clue.cost}pt`)),
-        el('div', { class: 'clue-revealed-value' }, String(rv[clue.id])));
+        revealedValueEl);
     }
     if (isMultiUse && eng.round.clueExhausted(clue)) {
       return el('div', { class: 'online-clue disabled' },

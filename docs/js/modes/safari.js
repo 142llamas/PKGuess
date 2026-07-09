@@ -1,8 +1,31 @@
 /**
  * @file        js/modes/safari.js
- * @version     1.2.0
- * @updated     2026-06-24
+ * @version     1.3.0
+ * @updated     2026-07-09
  * @changelog
+ *   1.3.0 — Fixed a real, significant bug: endGame() referenced `done.caught`/
+ *           `done.startPts`/`ptsUsed` inside the submitScore() call BEFORE any
+ *           of those three were actually declared later in the same function
+ *           — a temporal-dead-zone ReferenceError thrown every single time
+ *           endGame() ran. This explains three symptoms reported together as
+ *           one bug: the game appearing stuck (no crash message visible, but
+ *           the summary screen never actually rendered since the exception
+ *           happened before clear(root).append(...)), no post-game summary
+ *           ever appearing, and the score never reaching the leaderboard
+ *           (submitScore() never got called, since the crash happened on
+ *           that exact line before the call could execute). Reordered so
+ *           `done`/`ptsUsed`/`eff` are computed first. Also added the
+ *           requested safeguard: Bait/Rock (the random-clue actions) now
+ *           exclude any clue whose cost would leave less than 1 point of the
+ *           shared budget, so a random reveal can never zero it out on its
+ *           own (manual clue selection is unaffected — only the two random-
+ *           reveal actions, matching what was asked for). Also: the "Reveal
+ *           Full Stat Spread" clue now shows labeled stats (HP/Atk/Def/...)
+ *           via the shared statSpreadEl, matching single.js's post-game
+ *           summary and Victory Road's in-game ribbon — was a bare number
+ *           string before (found to also affect single.js's and
+ *           multiplayer.js's/online.js's own in-game clue displays while
+ *           investigating this).
  *   1.2.0 — Catch/Seen now go through the shared lib/catch-tracker.js (#17), same storage key, no data loss.
  *   1.1.0 — Gen 2 mode draws from the full dex (#13).
  *   1.0.0 — Safari Zone, ported from the canonical screen. A SHARED point budget
@@ -17,7 +40,7 @@
  * Contract: createSafari({ mount, config, data, params, onExit }) → { destroy }
  */
 
-import { el, clear, genBar } from '../lib/dom.js';
+import { el, clear, genBar, statSpreadEl } from '../lib/dom.js';
 import { PokeGuessRound, normalizeName, poolFilterForData, matchesPool } from '../lib/engine.js';
 import { submitScore } from '../lib/leaderboard-data.js';
 import { markCaught, markSeen } from '../lib/catch-tracker.js';
@@ -200,8 +223,13 @@ export function createSafari({ mount, config, data, params = {}, onExit }) {
     if (isRevealed && !isMulti) {
       card.classList.add('revealed');
       Object.assign(card.style, { background: cat.bg, borderColor: cat.color });
+      // #6 (requested): labeled stat spread (HP/Atk/Def/...), matching
+      // single.js/victoryroad.js — was a bare number string before.
+      const revealedValueEl = clue.field === 'fullStats'
+        ? el('div', { class: 'clue-revealed-value' }, statSpreadEl(String(s.revealedClues[clue.id])))
+        : el('div', { class: 'clue-revealed-value' }, String(s.revealedClues[clue.id]));
       card.append(el('div', { class: 'clue-top' }, el('span', { class: 'clue-btn-name', style: { color: cat.color } }, clue.name)),
-        el('div', { class: 'clue-revealed-value' }, String(s.revealedClues[clue.id])));
+        revealedValueEl);
       return card;
     }
     if (round.clueExhausted(clue)) {
@@ -236,16 +264,20 @@ export function createSafari({ mount, config, data, params = {}, onExit }) {
     round.state.pointsRemaining = Math.max(0, round.state.pointsRemaining - cost); // the extra ×1
     afterSpend();
   }
-  // Bait = random cheap clue (base cost < 4) at normal cost
+  // Bait = random cheap clue (base cost < 4) at normal cost. Requested
+  // safeguard: never offer a random clue whose cost would take the shared
+  // budget below 1 point (leaves at least 1 for guessing) -- manual picks
+  // (buy(), above) aren't restricted this way, only the two random-reveal
+  // actions, matching what was actually asked for.
   function throwBait() {
-    const pool = clues.filter((c) => c.cost < 4 && round.clueAvailable(c) && round.pointsRemaining >= round.clueCurrentCost(c.id));
+    const pool = clues.filter((c) => c.cost < 4 && round.clueAvailable(c) && round.pointsRemaining - round.clueCurrentCost(c.id) >= 1);
     if (!pool.length) { feedback('No cheap clues available!', '#e06060'); return; }
     const c = pool[Math.floor(rng() * pool.length)];
     if (round.buyClue(c.id).ok) afterSpend();
   }
-  // Rock = random costly clue (base cost >= 4) at normal cost
+  // Rock = random costly clue (base cost >= 4) at normal cost. Same safeguard.
   function throwRock() {
-    const pool = clues.filter((c) => c.cost >= 4 && round.clueAvailable(c) && round.pointsRemaining >= round.clueCurrentCost(c.id));
+    const pool = clues.filter((c) => c.cost >= 4 && round.clueAvailable(c) && round.pointsRemaining - round.clueCurrentCost(c.id) >= 1);
     if (!pool.length) { feedback('No costly clues available!', '#e04040'); return; }
     const c = pool[Math.floor(rng() * pool.length)];
     if (round.buyClue(c.id).ok) afterSpend();
@@ -321,12 +353,12 @@ export function createSafari({ mount, config, data, params = {}, onExit }) {
     if (!sf) return;
     const exhausted = sf.idx >= sf.pool.length && round.pointsRemaining > 0;
     if (round.mystery && !round.gameOver) markSeen(round.mystery.name);
+    const done = sf; sf = null;
+    const ptsUsed = done.startPts - round.pointsRemaining;
+    const eff = done.startPts > 0 ? (done.caught / done.startPts * 100).toFixed(1) : '0';
     // Submit to leaderboard
     const gen = data.id || 'gen2';
     submitScore(gen, 'safari', { score: done.caught, detail: `budget:${done.startPts} spent:${ptsUsed}` }).catch(() => {});
-    const ptsUsed = sf.startPts - round.pointsRemaining;
-    const eff = sf.startPts > 0 ? (sf.caught / sf.startPts * 100).toFixed(1) : '0';
-    const done = sf; sf = null;
     clear(root).append(
       el('div', { class: 'summary-container' },
         el('div', { class: 'summary-card' },

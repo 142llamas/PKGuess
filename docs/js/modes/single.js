@@ -1,8 +1,13 @@
 /**
  * @file        js/modes/single.js
- * @version     1.2.2
- * @updated     2026-07-05
+ * @version     1.2.3
+ * @updated     2026-07-09
  * @changelog
+ *   1.2.3 — Fixed: the in-game "Reveal Full Stat Spread" clue showed a bare
+ *           "63/60/60/130/50/65" string with no HP/Atk/Def/... labels above
+ *           each number — unlike the labeled version already used on the
+ *           post-game summary screen. Now uses the same shared statSpreadEl
+ *           (dom.js) in-game too.
  *   1.2.2 — #5: leaderboard score now applies engine.js's SCORE_MULTIPLIERS —
  *           harder settings (Forced Reveal, Random/By-category, stricter
  *           category diversity) multiply the raw remaining-points score before
@@ -323,7 +328,14 @@ export function createSingle({ mount, config, data, params = {}, onExit }) {
     if (isRevealed && !isMultiUse) {
       card.classList.add('revealed');
       Object.assign(card.style, { background: cat.bg, borderColor: cat.color });
-      card.append(top(clue.name, null, cat.color), note('clue-revealed-value', String(s.revealedClues[clue.id])));
+      // #6 (requested): the full stat spread previously showed as a bare
+      // "63/60/60/130/50/65" string with no HP/Atk/Def/... labels above each
+      // number, unlike the labeled version already used on the post-game
+      // summary screen (and in Victory Road's in-game ribbon).
+      const revealedValueEl = clue.field === 'fullStats'
+        ? el('div', { class: 'clue-revealed-value' }, statSpreadEl(String(s.revealedClues[clue.id])))
+        : note('clue-revealed-value', String(s.revealedClues[clue.id]));
+      card.append(top(clue.name, null, cat.color), revealedValueEl);
       return card;
     }
     if (round.clueExhausted(clue)) {
