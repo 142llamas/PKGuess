@@ -1,8 +1,21 @@
 /**
  * @file        docs/js/draft.js   (PokeGuess — Draft Battle engine)
- * @version     0.8.0
- * @updated     2026-07-05
+ * @version     0.9.0
+ * @updated     2026-07-09
  * @changelog
+ *   0.9.0 — Requested: no Pokemon can appear more than once in a single
+ *           draft. _speciesAt() now excludes species already shown earlier
+ *           in the same draft (tracked in a new _seenSpecies set, populated
+ *           by _refresh() the moment a card is displayed — a rerolled-past
+ *           card counts as "shown" too, not just one a pick was taken from).
+ *           This makes _speciesAt() history-dependent rather than a pure
+ *           function of (position, pokeReroll) alone, but replaying the same
+ *           seed still reproduces the exact same sequence, since the history
+ *           leading to any given position is itself deterministic. Changed
+ *           WINNING_SEED's greedy-drafted result in throne.smoke.mjs (seed 7
+ *           happened to draw the same species twice; excluding the repeat
+ *           changes which card gets picked from that point on) — re-found a
+ *           new seed that still sweeps every Elite-4 tier.
  *   0.8.0 — #12/#13: added isTierUnlocked + nextProgressRank. The Elite-4 unlock
  *           gate was based on "do you CURRENTLY hold the previous tier's
  *           throne," which the #14a one-throne cascade AND every tier's own
@@ -123,12 +136,28 @@ export class DraftSession {
     this.moveReroll = 0;             // move-rerolls used at the current (position, pokeReroll)
     this._card = null;
     this._moveList = [];
+    // #2 (requested) — species already SHOWN this draft (whether a pick was
+    // taken from them or not — a rerolled-past card still counts as "shown"),
+    // excluded from every later card so no Pokemon can appear twice in one
+    // draft. Populated by _refresh() the moment a card is displayed.
+    this._seenSpecies = new Set();
     this._refresh();
   }
 
   // ---- deterministic derivations ----
+  // Deterministic given the seed + indices, EXCEPT for the exclusion of
+  // species already shown earlier in this same draft (this._seenSpecies) —
+  // that's inherently a history-dependent constraint (see #2 above), not a
+  // pure function of (position, pokeReroll) alone. Replaying the exact same
+  // draft from the same seed reproduces the exact same sequence either way,
+  // since the history leading to any given position is itself deterministic.
   _speciesAt(position, pokeReroll) {
-    return pickFrom(makeRng(subSeed(this.seed, 1, position, pokeReroll)), this.species);
+    const rng = makeRng(subSeed(this.seed, 1, position, pokeReroll));
+    const pool = this.species.filter((s) => !this._seenSpecies.has(s.name));
+    // Guard only: with a species pool in the hundreds and a draft showing at
+    // most a couple dozen cards even with every reroll used, the pool should
+    // never actually run out — but never let an edge case throw.
+    return pickFrom(rng, pool.length ? pool : this.species);
   }
   // Predetermined move view for (position, pokeReroll, moveReroll). Replays
   // rerolls 0..moveReroll so the "seen" set (and thus the new-move weighting) is
@@ -149,6 +178,7 @@ export class DraftSession {
   }
   _refresh() {
     this._card = this._speciesAt(this.position, this.pokeReroll);
+    this._seenSpecies.add(this._card.name);
     this._moveList = this._moveListAt(this._card, this.position, this.pokeReroll, this.moveReroll);
   }
   _advance() { this.position++; this.pokeReroll = 0; this.moveReroll = 0; this._refresh(); }
