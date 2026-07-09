@@ -1,8 +1,14 @@
 /**
  * @file        js/lib/share.js
- * @version     1.5.0
- * @updated     2026-07-06
+ * @version     1.5.1
+ * @updated     2026-07-09
  * @changelog
+ *   1.5.1 — Fixed a grammar clash: "See if you can beat my Ash's Kangaskhan"
+ *           has two possessives fighting each other. monName is generally
+ *           "{playerName}'s {species}"; the gauntlet/throne "my {mon}"
+ *           phrases now strip that prefix, reading "beat my Kangaskhan"
+ *           instead. Other uses of monName (e.g. "My Elite 4 challenger: X")
+ *           aren't a possessive clash and are untouched.
  *   1.5.0 — Added roomJoinLink(modeId, gen, code) (a deep link that pre-fills
  *           a room-join code when opened) and buildRoomInviteText({gameLabel,
  *           details, link}) — back online.js's and race.js's new room-
@@ -139,22 +145,29 @@ export function seedFromDate(date = new Date()) {
  */
 export function buildSummaryText(opts = {}) {
   const { kind = 'daily', dateStr, monName, playerName, winPct, rank, total, tierLabel, claimed, beatName, placementLabel, link } = opts;
+  // "beat my Ash's Kangaskhan" / "with my Ash's Kangaskhan" reads wrong —
+  // two possessives clashing. monName is generally "{playerName}'s
+  // {species}"; strip that prefix specifically for the "my {mon}" phrases
+  // below so it reads "beat my Kangaskhan" instead. Other uses of monName
+  // (e.g. "My Elite 4 challenger: Ash's Kangaskhan") aren't a possessive
+  // clash and are left as-is.
+  const speciesOnly = (name) => (name || '').replace(/^.+?'s /, '');
   const lines = [];
   if (kind === 'gauntlet') {
     // #15 — one consolidated share after a full Elite-4 gauntlet run, instead
     // of a share prompt after every individual throne win.
     lines.push('PokeGuess Draft Battle');
-    if (placementLabel && monName) lines.push(`I just took the ${placementLabel} spot on the Elite 4! See if you can beat my ${monName}`);
+    if (placementLabel && monName) lines.push(`I just took the ${placementLabel} spot on the Elite 4! See if you can beat my ${speciesOnly(monName)}`);
     else if (placementLabel) lines.push(`I just took the ${placementLabel} spot on the Elite 4!`);
     else if (monName) lines.push(`My Elite 4 challenger: ${monName}`);
     if (link) lines.push(link);
   } else if (kind === 'throne') {
     lines.push('PokeGuess Draft Battle');
     const won = winPct != null ? winPct > 0.5 : !!claimed;
-    if (beatName && monName) lines.push(`I challenged ${beatName} and ${won ? 'won' : 'lost'} with my ${monName}`);
+    if (beatName && monName) lines.push(`I challenged ${beatName} and ${won ? 'won' : 'lost'} with my ${speciesOnly(monName)}`);
     else if (beatName) lines.push(`I challenged ${beatName} and ${won ? 'won' : 'lost'}`);
     else if (claimed && tierLabel) lines.push(`I claimed ${tierLabel}!`);
-    else if (monName) lines.push(`with my ${monName}`);
+    else if (monName) lines.push(`with my ${speciesOnly(monName)}`);
     if (winPct != null) lines.push(`(${Math.round(winPct * 100)}% win rate)`);
     if (link) lines.push(link);
   } else {
