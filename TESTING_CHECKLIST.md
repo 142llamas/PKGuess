@@ -28,6 +28,7 @@ player sees.
 - [ ] 1.12 Check the tier boundaries — Tier 1 should last through your **5th** correct guess (streak 0–5), Tier 2 through your **10th**, etc. — one more Pokémon per tier than before.
 - [ ] 1.13 On Tiers 1–4, confirm **"Has an Immunity"** is pre-revealed. On Tiers 3–8, confirm a combined **weakness/resistance** reveal is pre-revealed (up to 6 at Tier 3, shrinking by 1 each tier down to 1 at Tier 8) — labeled "Weak:" / "Resist:" in one chip. On Tier 7, confirm Highest/Lowest Base Stat (just the stat name, no number) are pre-revealed.
 - [ ] 1.14 Confirm the two type clues show on **one line** in one chip (e.g. "Fire / Flying"), egg moves show as **one chip listing all of them** (not one chip per move), and weakness/resistance show together in **one chip**, clearly labeled which is which.
+- [ ] 1.15 Before starting Victory Road, tap a tier row on the **preview screen** to expand it — confirm Tiers 3–8 each show a "Weakness/Resistance (up to N)" entry in the clue list (it was previously missing from the preview entirely, even though it always appeared during actual play).
 
 ## 2. Multiplayer (Hot-seat, same device)
 
@@ -49,6 +50,7 @@ player sees.
 - [ ] 3.6 Try it again but have only the host opt in — confirm the host sees an error and returns to the main menu instead of starting a 1-player game.
 - [ ] 3.7 In **Guess → Reveal** mode, let a turn expire then guess wrong — confirm you're forced into exactly **one** reveal (no skip option), then control passes back automatically — you should never get stuck revealing indefinitely.
 - [ ] 3.8 **Host-disconnect resilience**: with 2+ players in a room, have the host close their tab/browser (or otherwise go offline) before starting the game — confirm the remaining player(s) see a banner saying the host disconnected and who's now in control, and that player can start the game (the room should never be permanently stuck waiting for a host who's gone). Repeat after a game has started, and again in the post-game rematch lobby.
+- [ ] 3.9 **Room sharing**: in the lobby, tap **"📤 Share Room"** — confirm the message says "Join my PokeGuess Online game!" plus the gen, RTG/GTR, and win target, then a link. Send that link to a second device/browser and open it — confirm it goes straight to the "Join a room" screen with the code **already typed in** (just tap Join, no typing needed).
 
 ## 4. Identity & Leaderboards
 
@@ -70,6 +72,7 @@ player sees.
 - [ ] 5.8 After results, confirm you're in a **persistent lobby** (not kicked to the main menu) with a rematch toggle, matching items 3.3–3.6 above.
 - [ ] 5.9 Try joining a room that already has 12 players — confirm you're told the room is full.
 - [ ] 5.10 **Host-disconnect resilience**: with 2+ players, have the host disconnect before starting — confirm someone else can still start the race, with a banner explaining what happened. Try it again mid-race (the room-wide time cap should still fire on schedule) and in the post-game lobby (someone else should be able to trigger the rematch countdown).
+- [ ] 5.11 **Room sharing**: in the lobby, tap **"📤 Share Room"** — confirm the message says "Join my Cycling Road game!" plus the gen and target Pokémon count, then a link (and does NOT mention Team Mode, since this is an individual room). Open that link on a second device — confirm it lands on the join screen with the code pre-filled.
 
 ## 6. Cycling Road — Team Mode
 
@@ -81,6 +84,7 @@ player sees.
 - [ ] 6.6 Finish a team race — confirm results are ranked by team, not by individual.
 - [ ] 6.7 On the results screen, confirm rematch requires **every single player** to opt in (not just two) before the host can start it.
 - [ ] 6.8 **Host-disconnect resilience**: same as 5.10, but with Team Mode — have the host disconnect before teams are even assigned, and confirm someone else can take over assigning teams and starting the game.
+- [ ] 6.9 **Room sharing**: same as 5.11, but confirm the Team Mode invite text explicitly mentions "Team Mode" this time.
 
 ## 7. Draft Battle — drafting
 
@@ -120,10 +124,16 @@ so actually *read* the log lines here, not just the win/loss result.
 
 ## 10. Daily Puzzle
 
-- [ ] 10.1 Play today's daily challenge, submit your entry — confirm the results screen ranks you against the Daily Rival (and anyone else who's played).
+- [ ] 10.1 Play today's daily challenge, submit your entry — confirm the results screen ranks you against **Cal** (renamed from "Daily Rival" — that old name should never appear anywhere) and anyone else who's played.
 - [ ] 10.2 Tap **"See Yesterday's Results"** — confirm the date and results actually change to the previous day, and there's a way back to today.
 - [ ] 10.3 Try playing the daily a second time the same day — confirm you're blocked (one attempt per day).
 - [ ] 10.4 Tap **Share** on the daily results — confirm the shared text starts with a link that, when opened, takes you straight into today's Daily Challenge, followed by your name (or a "Player_" fallback if you haven't set one), your rank, and your win percentage.
+- [ ] 10.5 With at least one other entry (a real second player, or just Cal) on the board, confirm every row has a **📊 (Matchups)** button and a **🔍 (Inspect)** button.
+- [ ] 10.6 Tap **📊** on your own row — confirm you see one row per OTHER entrant (never yourself), each showing Won/Lost and a win percentage against that specific opponent, and that **Cal appears in the list like any other opponent**.
+- [ ] 10.7 Tap **▶ Watch** on one of those matchup rows — confirm it plays out move-by-move like a normal battle, and that the final winner **matches** what the matchups list already said (not a different result — it should be replaying the same computed outcome, not recalculating a fresh one). Tap "← Back to Results" — confirm it returns to the matchups list, not the main results table.
+- [ ] 10.8 Tap **📊** on **Cal's** row (not your own) — confirm you can see Cal's matchups against everyone else too, the same way you can see your own.
+- [ ] 10.9 Tap **🔍** on any row (yours, another player's, or Cal's) — confirm you see that Pokémon's types, full stat spread, and moves, with just a plain **"← Back"** button — no Submit/Challenge/Share buttons (those are only for your own in-progress draft, not for inspecting someone else's finished one).
+- [ ] 10.10 On a phone-sized screen, check the daily results table with the new 📊/🔍 buttons — confirm it's not uncomfortably cramped (this is a new 5th column that hasn't been checked on a real device yet).
 
 ---
 

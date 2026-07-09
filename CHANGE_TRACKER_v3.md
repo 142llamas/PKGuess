@@ -431,3 +431,65 @@ You confirmed you couldn't recreate #18 (rematch) either, so it's dropped rather
 ### Phase 5 status
 All items from the original 19-point list are now resolved except **#18**, which is dropped (neither side could reproduce it despite genuine effort on both). Everything else — the daily share link, Victory Road's rework, the leaderboard draft links, host-disconnect resilience across every online mode, and the move-accuracy pass — is done and tested. With the docs now current, this is a good point for a fresh, thorough testing pass against `TESTING_CHECKLIST.md`.
 
+---
+
+## Phase 6 — new features: Daily Draft matchups/inspect, room sharing, VR preview fix
+
+New requests, not part of the original 19-point list. #18 was raised again and dropped for good (you couldn't recreate it either).
+
+### Daily Draft: individual matchups, on-demand replay, mon inspection, Cal rename
+
+| Location | Files |
+|---|---|
+| `docs/js/modes/` | `draftbattle.js` (1.13.0) |
+| `tools/test/` | `daily.smoke.mjs` (new) |
+
+`showDailyResults()` already computed every pair's full `runMatch()` result (win counts AND a sample battle log, needed to display the aggregate win%) — it just discarded everything except the average afterward. Restructured to retain it, per player, oriented from that player's own perspective (`myWinPct`/`iWon`), so nothing needed to be re-simulated for the new features:
+
+- **📊 Matchups button** (every row, including Cal's) opens a per-player breakdown: every OTHER entrant, this player's specific win/loss + win% against each, with a ▶ Watch button. "No self-battling" wasn't special-cased — it falls out naturally, since the all-pairs computation never pairs a player against themselves.
+- **▶ Watch** replays the already-computed sample log through the *existing* battle-playback UI (the same one the Elite-4 gauntlet's "Watch" uses) — genuinely zero re-simulation, exactly as asked, since re-computing would risk a different, confusing result.
+- **🔍 Inspect button** (every row) opens a read-only view of that entrant's types/stats/moves — same core visual as the Draft Complete screen, without its draft-in-progress action buttons (Submit/Challenge/Share), since this is for looking at someone *else's* build.
+- **Daily Rival renamed to Cal** — display text and the `playerName` passed to `autoDraft` only. The underlying seed key (`dailyrival:${dateStr}`) and internal uid (`__rival__`) were deliberately left unchanged, so this is a pure rename — nobody's daily results shift because of it.
+
+**A real, non-obvious bug found while building this, not present before:** the first version of the Watch feature showed the wrong winner about half the time. `renderBattle()`'s "You win!"/"You fell short" verdict was hardcoded to the "a" (challenger) side — completely correct for the Elite-4 gauntlet, where the player's own mon is *always* passed as "a" — but daily matchups don't work that way: which player ends up "a" vs "b" for a given pair depends on their original index order when the round-robin was computed, not on who's currently watching. Viewing a matchup from the side that happened to be "b" showed the *other* player's verdict. Caught by a test that specifically checks the replayed verdict agrees with the win/loss already shown in the matchups list (which the bug violated), not just that the screen renders. Fixed with an explicit `viewingSide` option that defaults to `'a'` — every existing caller (gauntlet, individual throne challenges) is completely unaffected — and `renderDailyMatchups` now passes the correct side per matchup.
+
+New `tools/test/daily.smoke.mjs` (properly registered, runs as part of `npm run test:smoke`, not just a manual dev check) seeds several players' daily entries directly and drives the real controller via `params.view='results'` — the same route the main menu's "Results" button uses — to reach a genuine multi-player results screen without needing to draft through the UI for each fake opponent.
+
+### Multiplayer room sharing (Online + both Cycling Road modes)
+
+| Location | Files |
+|---|---|
+| `docs/js/` | `main.js` (1.5.0) |
+| `docs/js/lib/` | `dom.js` (1.2.0), `share.js` (1.5.0) |
+| `docs/js/modes/` | `online.js` (1.6.0), `race.js` (2.3.0) |
+| `tools/test/` | `online.smoke.mjs`, `race.smoke.mjs`, `race-teams.smoke.mjs` |
+
+"Join my game" + a few relevant details (kept short on purpose, not every setting) + a deep link that pre-fills the room code so the recipient doesn't have to type it in:
+
+- `main.js`'s `parseHash()` now supports a query string (`#/online/2?code=ABCDEF`), threaded through `route()`/`launchMode()` into the controller's `params.query`.
+- New shared `share.js` helpers: `roomJoinLink(modeId, gen, code)` (the deep link) and `buildRoomInviteText({gameLabel, details, link})` (the message text).
+- New shared `dom.js` helper `shareSheetEl(text, opts)` — extracted from draftbattle.js's existing local `showShareSheet` so online.js's and race.js's new "📤 Share Room" button use the identical WhatsApp/Copy/Close UI instead of three near-duplicate builders.
+- Online: Gen, RTG/GTR, win target. Cycling Road: Gen, target Pokémon count, and a Team Mode note when relevant.
+- Opening the link goes straight to the join screen with the code already filled in (a single tap on Join finishes it) — deliberately *pre-filled*, not auto-submitted, so an accidental open (e.g. a messaging app's link-preview bot) can't silently join a room.
+
+Tested end-to-end in all three modes: the invite text contains the right details and a link that decodes back to the room's actual code, and a second simulated client opening that link (via the same `params.query` mechanism a real deep link would populate) lands pre-filled and joins successfully.
+
+### Victory Road: tier preview didn't reflect the #6 rework
+
+| Location | Files |
+|---|---|
+| `docs/js/modes/` | `victoryroad.js` (1.3.1) |
+| `tools/test/` | `victoryroad.smoke.mjs` |
+
+The pre-game tier preview built its clue list by iterating `tier.slots` — but the #6b combined weakness/resistance reveal is handled as a special case in `nextMon()` (`tier.weakResistCap`), not a plain slot, so it was completely invisible in the preview for Tiers 3–8 (and the "N clues" summary undercounted by one) even though it genuinely appears during play. Confirmed empirically (drove the real preview screen, expanded Tier 3, saw 10 listed clues with no mention of weakness/resistance) before fixing, and again after (now shows "Weakness/Resistance (up to 6)" and the count is 11). Also re-verified the tier 1/2/7/8 boundaries and clue lists are still correct end-to-end, per your request to double check gameplay behavior alongside the preview fix.
+
+### An avoidable mistake, caught and fixed before it reached you
+
+While updating `MANIFEST.md` for this batch, a Python script mixing JS-style `\uXXXX` unicode escapes inside a Python string triggered a `UnicodeEncodeError` on write — and Python's `open(file, 'w')` had already truncated the file to empty before the write itself failed, since opening in write mode clears the file immediately regardless of whether the write succeeds. This is a genuine gap in my own process worth naming plainly: I don't yet always take a backup copy before a scripted rewrite of an important file, and this is exactly the failure mode that habit exists to catch. Recovered by copying `/mnt/project/MANIFEST.md` (the original project file, dated 2026-07-02 — before Phase 5 began) and rebuilding forward from it using this document's own Phase 5 history, then cross-checking the version number in every touched file's own header against what the rebuilt document claimed (this caught two real transcription slips: `main.js` and `share.js` had been updated in code but their own version headers were never actually bumped — fixed both). No code was lost; only `MANIFEST.md` was briefly empty, and it's now been verified accurate line-by-line, not just restored.
+
+**Full test tally after Phase 6:** 696 unit + 408 smoke = 1104 assertions, all green.
+
+### Going forward
+Per your request, from now on every batch's summary will end with an explicit list of exactly which files changed, so you don't have to re-upload files that haven't moved.
+
+
