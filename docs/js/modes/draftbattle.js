@@ -1,8 +1,38 @@
 /**
  * @file        js/modes/draftbattle.js
- * @version     1.13.1
- * @updated     2026-07-08
+ * @version     1.14.0
+ * @updated     2026-07-09
  * @changelog
+ *   1.14.0 — Two fixes from a bug report:
+ *             \u2022 Fixed #14a's cascade: it compared `holderUid` (same
+ *               PLAYER), not mon identity, so a player who already held a
+ *               higher throne with one mon was incorrectly blocked from
+ *               claiming a DIFFERENT, lower throne with a genuinely
+ *               different mon ("you already own the highest spot" — but the
+ *               intended rule, confirmed with the reporter, is "a single
+ *               POKEMON can only hold one spot, but a player can hold as many
+ *               as they want"). Now compares the mon's own name + exact base
+ *               stats (effectively unique per draft) instead of who's
+ *               playing. Verified two ways: the exact reported scenario now
+ *               succeeds, and the cascade still correctly triggers when it's
+ *               genuinely the same mon.
+ *             \u2022 Sharing UX: shareDraftedMon() and shareGauntletResult() both
+ *               tried shareMonCardImage() (Web Share API with a canvas-
+ *               rendered PNG) first. On any browser without full file-share
+ *               support this silently downloaded that PNG as a side effect
+ *               — an unexplained file appearing — and on mobile handed off
+ *               to the OS's native image-share sheet instead of this app's
+ *               own consistent WhatsApp/Copy/Close toast (used for
+ *               everything else: daily results, room invites). Both are now
+ *               text-only, using the same shareSheetEl (dom.js) pattern as
+ *               online.js/race.js's room sharing — draftbattle.js's own
+ *               local showShareSheet() was itself the original it was
+ *               extracted from, but still had its own duplicate; now calls
+ *               the shared one instead. shareMonCardImage/buildMonCardPlan/
+ *               drawMonCardToCanvas remain in share.js, still exported and
+ *               tested, just no longer called from here — available again
+ *               if an explicit, separate "save as image" feature is ever
+ *               wanted.
  *   1.13.1 — Fixed: startDraft() never passed `playerName` to DraftSession at
  *           all, so every drafted mon's name defaulted to the literal string
  *           "Player" ("Player's Feraligatr") regardless of who was actually
@@ -141,14 +171,14 @@
  *   params.variant = 'freeplay' | 'daily'
  */
 
-import { el, clear, statSpreadEl } from '../lib/dom.js';
+import { el, clear, statSpreadEl, shareSheetEl } from '../lib/dom.js';
 import {
   DraftSession, autoDraft, autoDraftScaled, resolveThroneCascade, TIER_RANK, nextProgressRank,
   buildSpeciesList, buildLearnsetMap, runMatch, toRealStats,
 } from '../lib/draft-adapter.js';
 import {
   centralDateStr, centralPeriodKey, seedFromDate, seedFromString, buildSummaryText,
-  copyToClipboard, shareWhatsApp, shareMonCardImage, draftBattleLink, dailyChallengeLink, stablePlayerFallbackName,
+  copyToClipboard, shareWhatsApp, draftBattleLink, dailyChallengeLink, stablePlayerFallbackName,
 } from '../lib/share.js';
 
 const STAT_LABELS = { hp: 'HP', atk: 'Atk', def: 'Def', spc: 'Spc', spa: 'SpA', spd: 'SpD', spe: 'Spe' };
@@ -543,18 +573,24 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
   // player's current build, via the Web Share API where available, falling
   // back to a PNG download + a copied caption.
   async function shareDraftedMon(result) {
-    const text = `Check out my drafted Pok\u00e9mon!\n${result.name}\n${draftBattleLink()}`;
-    try {
-      const r = await shareMonCardImage(
-        { name: result.name, types: result.types, baseStats: result.baseStats, moves: result.moves },
-        text,
-      );
-      if (r.shared) flash('Shared!');
-      else if (r.downloaded && r.copied) flash('Image downloaded and caption copied \u2014 ready to post!');
-      else if (r.downloaded) flash('Image downloaded!');
-      else if (r.copied) flash('Caption copied! (Image sharing isn\u2019t supported on this browser.)');
-      else flash('Could not share \u2014 please try again.');
-    } catch { flash('Could not share \u2014 please try again.'); }
+    // Previously tried shareMonCardImage() first (Web Share API with a
+    // canvas-rendered PNG), which on any browser without full file-share
+    // support fell back to silently DOWNLOADING that PNG as a side effect --
+    // an unexpected file appearing with no clear reason -- and on mobile
+    // handed off to the OS's native image-share sheet instead of this app's
+    // own consistent WhatsApp/Copy/Close toast (used for everything else:
+    // daily results, room invites, the gauntlet's own consolidated share).
+    // Text-only now, matching that same pattern everywhere, with enough
+    // detail (types + moves) to stand on its own without the image.
+    const typesLine = (result.types || []).filter(Boolean).join(' / ') || '\u2014';
+    const text = [
+      'Check out my drafted Pok\u00e9mon!',
+      `${result.name} (${typesLine})`,
+      (result.moves || []).join(', '),
+      draftBattleLink(),
+    ].filter(Boolean).join('\n');
+    const ok = await copyToClipboard(text);
+    showShareSheet(text, ok);
   }
 
   // ===== THRONE (free-play) =================================================
@@ -799,13 +835,24 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
       return check === next;
     }
     try {
-      // #14a — a single Pok\u00e9mon/session can only hold ONE Elite-4 spot at a
-      // time. The DECISION (who ends up where) is a pure function so it's
-      // fully unit-testable; this just performs the resulting reads/writes.
+      // #14a — a single POKÉMON (not player) can only hold ONE Elite-4 spot
+      // at a time. A player is free to hold as many thrones as they want,
+      // as long as each is held by a DIFFERENT mon — the previous check
+      // here compared `holderUid`, which meant simply being the same
+      // PLAYER on two different thrones (with two entirely different,
+      // independently-drafted mons) incorrectly triggered the "keep the
+      // higher one" cascade, blocking a legitimate claim. Identity is
+      // compared by the mon's own name + exact base stats (effectively
+      // unique per draft — an independent draft coincidentally producing
+      // the same species name AND all six random stats is astronomically
+      // unlikely), not by who's playing.
+      // The DECISION (who ends up where) is a pure function so it's fully
+      // unit-testable; this just performs the resulting reads/writes.
+      const sameMon = (a, b) => !!a && !!b && a.name === b.name && JSON.stringify(a.baseStats) === JSON.stringify(b.baseStats);
       let existingThrones = null;
       try { existingThrones = await fb.get('/draft/throne'); } catch { existingThrones = null; }
       const otherKey = existingThrones
-        ? Object.keys(existingThrones).find((k) => k !== tier.key && existingThrones[k] && existingThrones[k].holderUid === id.uid)
+        ? Object.keys(existingThrones).find((k) => k !== tier.key && existingThrones[k] && sameMon(existingThrones[k].mon, rec.mon))
         : null;
 
       if (otherKey) {
@@ -1006,16 +1053,6 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
         kind: 'gauntlet', placementLabel, monName: lastResult ? lastResult.name : undefined,
         link: draftBattleLink('thrones'),
       });
-      if (lastResult) {
-        try {
-          const r = await shareMonCardImage(
-            { name: lastResult.name, types: lastResult.types, baseStats: lastResult.baseStats, moves: lastResult.moves },
-            text,
-          );
-          if (r.shared) { flash('Shared!'); return; }
-          if (r.downloaded || r.copied) { showShareSheet(text, r.copied); return; }
-        } catch { /* fall through to text-only share sheet */ }
-      }
       const ok = await copyToClipboard(text);
       showShareSheet(text, ok);
     };
@@ -1023,16 +1060,12 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
 
   function showShareSheet(text, copied) {
     if (toast) toast.remove();
-    toast = el('div', { class: 'draft-toast', style: { maxWidth: '420px' } },
-      el('div', { style: { whiteSpace: 'pre-wrap', fontSize: '12px', marginBottom: '8px' } }, text),
-      el('div', { class: 'draft-toast-btns' },
-        el('button', { class: 'btn-primary', style: { padding: '6px 12px', fontSize: '12px' },
-          onClick: () => shareWhatsApp(text) }, 'WhatsApp'),
-        el('button', { class: 'btn-secondary', style: { padding: '6px 12px', fontSize: '12px' },
-          onClick: async () => { const ok = await copyToClipboard(text); flash(ok ? 'Copied!' : 'Copy failed'); } },
-          copied ? '\u2713 Copied' : 'Copy'),
-        el('button', { class: 'btn-secondary', style: { padding: '6px 12px', fontSize: '12px' },
-          onClick: () => { toast.remove(); toast = null; } }, 'Close')));
+    toast = shareSheetEl(text, {
+      copied,
+      onWhatsApp: () => shareWhatsApp(text),
+      onCopy: async () => { const ok = await copyToClipboard(text); showShareSheet(text, ok); },
+      onClose: () => { if (toast) { toast.remove(); toast = null; } },
+    });
     root.append(toast);
   }
 
