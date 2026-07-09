@@ -459,6 +459,40 @@ console.log('\n— Room sharing: Share Room button builds a correct invite, and 
   J.destroy(); K.destroy();
 }
 
+console.log('\n— Requested: "Reveal Full Stat Spread" shows labeled stats (HP/Atk/Def/...), not a bare number string —');
+{
+  const idL = { uid: 'uidL', name: 'Lyra' };
+  const idM = { uid: 'uidM', name: 'Silver' };
+  const lDiv = document.createElement('div'); lDiv.id = 'L'; document.body.appendChild(lDiv);
+  const mDiv = document.createElement('div'); mDiv.id = 'M'; document.body.appendChild(mDiv);
+  const L = createOnline({ mount: lDiv, config: {}, data: gen2Data, params: mkParams(idL), onExit: () => {} });
+  const M = createOnline({ mount: mDiv, config: {}, data: gen2Data, params: mkParams(idM), onExit: () => {} });
+  await settle();
+  const codesBeforeL = Object.keys((await db.get('/rooms')) || {});
+  click(findBtn('L', 'Create a room')); await settle();
+  click(findBtn('L', 'Create room')); await settle();
+  const code3 = Object.keys(await db.get('/rooms')).find((k) => !codesBeforeL.includes(k));
+  click(findBtn('M', 'Join with a code')); await settle();
+  const codeInput3 = [...q('M', 'input')][0];
+  codeInput3.value = code3; codeInput3.dispatchEvent(new window.Event('input', { bubbles: true }));
+  click(findBtn('M', 'Join')); await settle();
+  click(findBtn('L', 'Start game')); await settle();
+  const s3 = await db.get(`/rooms/${code3}`);
+  const activeId3 = s3.turnOrder[s3.currentTurnPos];
+  const activeMount3 = activeId3 === 'uidL' ? 'L' : 'M';
+  const spreadCard = [...document.getElementById(activeMount3).querySelectorAll('.online-clue')].find((c) => c.textContent.includes('Reveal Full Stat Spread'));
+  ok(!!spreadCard, 'the Full Stat Spread clue card is present in an online room too');
+  if (spreadCard) {
+    click(spreadCard);
+    await settle();
+    const grid = document.getElementById(activeMount3).querySelector('.stat-spread-grid');
+    ok(!!grid, 'revealing it renders a .stat-spread-grid, not a bare string');
+    const labels = [...(grid ? grid.querySelectorAll('.sname') : [])].map((e) => e.textContent);
+    ok(labels.includes('HP') && labels.includes('Atk') && labels.includes('SpA'), `stat abbreviations are shown above the values (got: ${labels.join(',')})`);
+  }
+  L.destroy(); M.destroy();
+}
+
 A.destroy(); B.destroy();
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

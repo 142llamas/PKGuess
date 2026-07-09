@@ -97,11 +97,16 @@ async function withDraftSeed(seedInt, fn) {
   try { return await fn(); } finally { Math.random = REAL_RANDOM; }
 }
 
-// Seed 7, greedily drafted (first-available stat/type/move each card), reliably
+// Seed 12, greedily drafted (first-available stat/type/move each card), reliably
 // beats all five Elite-4 tiers for today's date — found offline by searching
 // DraftSession seeds against runMatch with the exact same greedy click order
-// the UI produces.
-const WINNING_SEED = 7;
+// the UI produces. (Was seed 7 until #2 excluded duplicate species from a
+// single draft — that changed seed 7's greedy result to a mon that no longer
+// sweeps every tier, so this needed re-finding. Like any seed found this way,
+// it's for TODAY'S DATE specifically, since Will/Koga/etc.'s NPCs are
+// period-keyed — see the "Bug report" section further down for what to do
+// if this ever needs re-finding again.)
+const WINNING_SEED = 12;
 
 async function greedyDraftThroughUI() {
   let steps = 0;
@@ -216,14 +221,14 @@ console.log('\n— #14/#15: the Elite-4 gauntlet runs Will→Koga→Bruno→Lanc
     // as they want" is the intended rule; the previous behavior compared
     // holderUid, which incorrectly treated "same player, different mon" the
     // same as "same mon, lower tier" and blocked the claim.
-    // Seed 22, like WINNING_SEED above, was found offline for TODAY'S DATE
+    // Seed 17, like WINNING_SEED above, was found offline for TODAY'S DATE
     // specifically (Will/Koga's NPCs are period-keyed by day/week, so a
     // seed that beats Will and loses to Koga today isn't guaranteed to
     // still do so on a different day — if this ever needs re-finding, the
     // search is: draft greedily through the UI for seeds 1..N, run the
     // gauntlet, and look for Won-then-Lost in the first two rows).
     document.getElementById('app').innerHTML = '';
-    const ctrl2 = await withDraftSeed(22, async () => {
+    const ctrl2 = await withDraftSeed(17, async () => {
       const c = createDraftBattle({
         mount: document.getElementById('app'), config: {}, data: gen2,
         params: { variant: 'freeplay', _getFirebase: async () => fb, _getIdentity: async () => identity },
@@ -263,7 +268,7 @@ console.log('\n— The one-Pok\u00e9mon-one-throne cascade still applies when it
   // avoids the unrelated "re-fighting your own prior claim" edge case that
   // coming at this via two live gauntlet runs would have triggered instead.
   await fb._forceSet('/draft/throne/day', {
-    mon: { name: 'Falkner\'s Kangaskhan', types: ['Normal', 'Psychic'], baseStats: { hp: 105, atk: 95, def: 100, spa: 100, spd: 50, spe: 55 }, moves: ['High Jump Kick', 'Return', 'Headbutt', 'Earthquake'] },
+    mon: { name: 'Falkner\'s Machamp', types: ['Ground'], baseStats: { hp: 90, atk: 130, def: 60, spa: 130, spd: 75, spe: 130 }, moves: ['Tackle', 'Flame Wheel', 'Frustration', 'Growl'] },
     holderUid: 'player10', holderName: 'Falkner', takenAt: Date.now(), period: 'day-preexisting',
   });
 
@@ -278,7 +283,7 @@ console.log('\n— The one-Pok\u00e9mon-one-throne cascade still applies when it
   });
   await greedyDraftThroughUI();
   const monName = document.querySelector('.summary-mon')?.textContent;
-  eq(monName, 'Falkner\'s Kangaskhan', 'sanity check: this seed+identity combination produces the exact mon the throne was pre-seeded with');
+  eq(monName, 'Falkner\'s Machamp', 'sanity check: this seed+identity combination produces the exact mon the throne was pre-seeded with');
   const { claimBtn } = await runGauntletFromDraftComplete();
   click(claimBtn);
   await wait(60);
@@ -393,6 +398,52 @@ console.log('\n— #10: re-opening daily results from the "already played today"
   eq(titleText, '🎮 Daily Results', '#10: "View Results" from the gate shows TODAY\u2019s "Daily Results" title, not "Yesterday\u2019s Results"');
   const dateLineNow = document.querySelector('.battle-vs')?.textContent;
   eq(dateLineNow, todayLine, '#10: the date line matches today\u2019s date, unchanged from the first playthrough');
+  ctrl.destroy();
+}
+
+console.log('\n— Requested: throne History screen has an Inspect button for each historical champion —');
+{
+  const fb = makeFakeFB();
+  const identity = { uid: 'player20', name: 'Erika' };
+  const ctrl = await withDraftSeed(WINNING_SEED, async () => {
+    const c = createDraftBattle({
+      mount: document.getElementById('app'), config: {}, data: gen2,
+      params: { variant: 'freeplay', _getFirebase: async () => fb, _getIdentity: async () => identity },
+      onExit: () => {},
+    });
+    await wait(50);
+    return c;
+  });
+  await greedyDraftThroughUI();
+  const monName = document.querySelector('.summary-mon')?.textContent;
+  const { claimBtn } = await runGauntletFromDraftComplete();
+  click(claimBtn);
+  await wait(60);
+
+  // Navigate to the Elite 4 status screen, then that tier's History.
+  click([...q('button')].find((b) => b.textContent.includes('Elite 4 Status')));
+  await wait(50);
+  const allTimeCard = [...q('.throne-card')].find((c) => c.textContent.includes('All Time'));
+  ok(!!allTimeCard, 'the All-Time throne card is present');
+  click([...allTimeCard.querySelectorAll('button')].find((b) => b.textContent.includes('History')));
+  await wait(50);
+  ok(document.body.textContent.includes('Champions'), 'landed on the champion History screen');
+
+  const historyRows = [...q('.lb-table tbody tr')];
+  ok(historyRows.length >= 1, 'at least one history row exists (the claim just made)');
+  const inspectBtn = [...historyRows[0].querySelectorAll('button')].find((b) => b.textContent.includes('\uD83D\uDD0D'));
+  ok(!!inspectBtn, 'the history row has an Inspect button, matching the Daily Draft\u2019s pattern');
+  click(inspectBtn);
+  await wait(30);
+  ok(document.body.textContent.includes(monName), 'inspecting shows the correct historical mon\u2019s name');
+  ok(!!q('.stat-spread-grid').length, 'inspecting shows the stat spread');
+  ok(!btn('Challenge the Elite 4') && !btn('Claim'), 'read-only: no draft-action buttons appear when inspecting a historical champion');
+
+  const backBtn = [...q('button')].find((b) => b.textContent.trim() === '\u2190 Back');
+  ok(!!backBtn, 'a plain Back button is present');
+  click(backBtn);
+  await wait(30);
+  ok(document.body.textContent.includes('Champions'), 'Back returns to the champion History screen (not somewhere else)');
   ctrl.destroy();
 }
 

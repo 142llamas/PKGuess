@@ -226,4 +226,134 @@ await run('leaderboard', '../../docs/js/modes/leaderboard.js', 'createLeaderboar
   location.hash = '';
 }
 
+console.log('\n— Requested: "Reveal Full Stat Spread" shows labeled stats (HP/Atk/Def/...), not a bare number string —');
+{
+  const clickEl = (n) => n && n.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  {
+    const mod = await import('../../docs/js/modes/single.js');
+    const mount = mk();
+    const ctrl = mod.createSingle({ mount, config: {}, data: gen2, params: { gen: 2, modeId: 'single', rng: () => 0 }, onExit: () => {} });
+    await tick();
+    clickEl([...mount.querySelectorAll('button')].find((b) => b.textContent.includes('Start game')));
+    await tick();
+    const spreadBtn = [...mount.querySelectorAll('.clue-btn')].find((b) => b.textContent.includes('Reveal Full Stat Spread'));
+    ok(!!spreadBtn, 'single: the Full Stat Spread clue card is present and affordable at game start');
+    clickEl(spreadBtn);
+    await tick();
+    const grid = mount.querySelector('.stat-spread-grid');
+    ok(!!grid, 'single: revealing it renders a .stat-spread-grid, not a bare string');
+    const labels = [...grid.querySelectorAll('.sname')].map((e) => e.textContent);
+    ok(labels.includes('HP') && labels.includes('Atk') && labels.includes('SpA'), `single: stat abbreviations are shown above the values (got: ${labels.join(',')})`);
+    ctrl.destroy();
+  }
+  {
+    const mod = await import('../../docs/js/modes/safari.js');
+    const mount = mk();
+    const ctrl = mod.createSafari({ mount, config: {}, data: gen2, params: { gen: 2, modeId: 'safari', rng: () => 0 }, onExit: () => {} });
+    await tick();
+    clickEl([...mount.querySelectorAll('button')].find((b) => b.textContent.includes('Start') || b.textContent.includes('Enter the Safari Zone')));
+    await tick();
+    const spreadBtn = [...mount.querySelectorAll('.clue-btn')].find((b) => b.textContent.includes('Reveal Full Stat Spread'));
+    ok(!!spreadBtn, 'safari: the Full Stat Spread clue card is present and affordable');
+    if (spreadBtn) {
+      clickEl(spreadBtn);
+      await tick();
+      const grid = mount.querySelector('.stat-spread-grid');
+      ok(!!grid, 'safari: revealing it renders a .stat-spread-grid, not a bare string (this was the reported bug)');
+      const labels = [...(grid ? grid.querySelectorAll('.sname') : [])].map((e) => e.textContent);
+      ok(labels.includes('HP') && labels.includes('Atk') && labels.includes('SpA'), `safari: stat abbreviations are shown above the values (got: ${labels.join(',')})`);
+    }
+    ctrl.destroy();
+  }
+}
+
+console.log('\n— Requested: Safari Zone correctly ends the game (summary screen + no crash) when points hit zero —');
+{
+  const clickEl = (n) => n && n.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  const mod = await import('../../docs/js/modes/safari.js');
+  const mount = mk();
+  const ctrl = mod.createSafari({ mount, config: {}, data: gen2, params: { gen: 2, modeId: 'safari', rng: () => 0 }, onExit: () => {} });
+  await tick();
+  // Minimum starting budget, to reach zero quickly.
+  const budgetInput = mount.querySelector('#sf-start-pts');
+  if (budgetInput) { budgetInput.value = '50'; budgetInput.dispatchEvent(new window.Event('input', { bubbles: true })); }
+  clickEl([...mount.querySelectorAll('button')].find((b) => b.textContent.includes('Start') || b.textContent.includes('Enter the Safari Zone')));
+  await tick();
+  // Drain the shared budget via repeated wrong guesses (guessCost:1) rather
+  // than bait/rock, since the new safeguard specifically prevents THOSE from
+  // ever reaching zero — this test needs to reach zero to verify the fix.
+  let threw = false;
+  let guard = 0;
+  while (!mount.querySelector('.summary-container') && guard++ < 80) {
+    const input = mount.querySelector('#sf-guess');
+    if (!input) break;
+    input.value = 'Metapod';
+    try {
+      clickEl([...mount.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Guess') || mount.querySelector('.guess-btn'));
+    } catch { threw = true; break; }
+    await tick();
+  }
+  ok(!threw, 'Safari: ending the game does not throw (was the actual bug: a temporal-dead-zone ReferenceError in endGame(), every single time)');
+  ok(!!mount.querySelector('.summary-container'), 'Safari: the post-game summary screen actually appears when points run out (previously never did, due to the crash)');
+  const summaryText = mount.textContent;
+  ok(summaryText.includes('Caught') && summaryText.includes('Budget') && summaryText.includes('Spent'), 'Safari: the summary shows Caught/Budget/Spent stats');
+  ok(!summaryText.includes('NaN') && !summaryText.includes('undefined'), 'Safari: none of the summary stats are NaN/undefined (would indicate the variable-ordering bug is still present in some form)');
+  ctrl.destroy();
+}
+
+console.log('\n— Requested: random clues (Bait/Rock) never bring Safari\u2019s shared budget below 1 point —');
+{
+  const clickEl = (n) => n && n.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  const mod = await import('../../docs/js/modes/safari.js');
+  const mount = mk();
+  const ctrl = mod.createSafari({ mount, config: {}, data: gen2, params: { gen: 2, modeId: 'safari', rng: () => 0 }, onExit: () => {} });
+  await tick();
+  const budgetInput = mount.querySelector('#sf-start-pts');
+  if (budgetInput) { budgetInput.value = '50'; budgetInput.dispatchEvent(new window.Event('input', { bubbles: true })); }
+  clickEl([...mount.querySelectorAll('button')].find((b) => b.textContent.includes('Start') || b.textContent.includes('Enter the Safari Zone')));
+  await tick();
+  const budgetNow = () => parseInt(mount.querySelector('#sf-pts')?.textContent, 10);
+  const guessBtn = () => [...mount.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Guess') || mount.querySelector('.guess-btn');
+  const guessWrong = async () => {
+    const input = mount.querySelector('#sf-guess');
+    if (!input) return false;
+    input.value = 'Metapod';
+    clickEl(guessBtn());
+    await tick();
+    return true;
+  };
+  // With this fixed rng (always picks the first pool entry), Bait's first
+  // pick costs a specific, known amount at a comfortable budget — confirmed
+  // empirically to be 3 for this data set. Rather than guessing at a "close
+  // to zero" budget and hoping to land on the exact edge, drive the budget
+  // down to EXACTLY that clue's cost first, so clicking Bait from there is
+  // guaranteed to test the precise "cost equals what's left" case the
+  // safeguard exists for, not a comfortable margin that would pass either way.
+  const startBudget = budgetNow();
+  const probeMount = mk();
+  const probeCtrl = mod.createSafari({ mount: probeMount, config: {}, data: gen2, params: { gen: 2, modeId: 'safari', rng: () => 0 }, onExit: () => {} });
+  await tick();
+  const probeBudgetInput = probeMount.querySelector('#sf-start-pts');
+  if (probeBudgetInput) { probeBudgetInput.value = '999'; probeBudgetInput.dispatchEvent(new window.Event('input', { bubbles: true })); }
+  clickEl([...probeMount.querySelectorAll('button')].find((b) => b.textContent.includes('Enter the Safari Zone')));
+  await tick();
+  const beforeProbe = parseInt(probeMount.querySelector('#sf-pts')?.textContent, 10);
+  clickEl([...probeMount.querySelectorAll('button')].find((b) => b.textContent.includes('Bait')));
+  await tick();
+  const afterProbe = parseInt(probeMount.querySelector('#sf-pts')?.textContent, 10);
+  const firstBaitCost = beforeProbe - afterProbe;
+  probeCtrl.destroy();
+  ok(firstBaitCost > 0, `test setup: discovered the first Bait pick\u2019s exact cost (${firstBaitCost}) via a throwaway probe session`);
+
+  let guard = 0;
+  while (Number.isFinite(budgetNow()) && budgetNow() > firstBaitCost && guard++ < 60) { if (!(await guessWrong())) break; }
+  ok(budgetNow() === firstBaitCost, `test setup: budget is driven down to EXACTLY the first Bait pick\u2019s cost (${firstBaitCost}) before testing it (got: ${budgetNow()})`);
+
+  clickEl([...mount.querySelectorAll('button')].find((b) => b.textContent.includes('Bait')));
+  await tick();
+  const afterBait = budgetNow();
+  ok(Number.isFinite(afterBait) && afterBait >= 1, `Safari: clicking Bait when its cost exactly equals the remaining budget does NOT zero it out (budget after: ${afterBait}) \u2014 the safeguard excludes a clue whose cost would leave less than 1 point`);
+  ctrl.destroy();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);

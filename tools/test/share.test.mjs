@@ -1,5 +1,5 @@
 /**
- * @file tools/test/share.test.mjs 
+ * @file tools/test/share.test.mjs
  * @version 1.0.0
  * Unit tests for docs/js/lib/share.js. New file — share.js previously had no
  * dedicated unit suite. Covers the #14/#15 share-card infrastructure
@@ -34,14 +34,21 @@ export default function (t) {
   {
     const withPlacement = buildSummaryText({ kind: 'gauntlet', placementLabel: '3rd', monName: "Player's Kangaskhan" });
     t.ok(withPlacement.includes('3rd'), 'includes the placement label');
-    t.ok(withPlacement.includes("Player's Kangaskhan"), 'includes the mon name');
+    t.ok(withPlacement.includes('Kangaskhan'), 'includes the mon\u2019s species name');
+    t.ok(!withPlacement.includes("Player's Kangaskhan"), 'the "PlayerName\u2019s " prefix is stripped from the "beat my ___" phrase — "beat my Player\u2019s Kangaskhan" was a grammatical clash of two possessives');
+    t.ok(withPlacement.includes('beat my Kangaskhan'), 'reads as "beat my Kangaskhan", not "beat my Player\u2019s Kangaskhan"');
     t.ok(withPlacement.toLowerCase().includes('see if you can beat'), 'uses the specified challenge phrasing');
+
+    const noPossessive = buildSummaryText({ kind: 'gauntlet', placementLabel: 'Champion', monName: 'Kangaskhan' });
+    t.ok(noPossessive.includes('beat my Kangaskhan'), 'a monName with no "X\u2019s " prefix at all is left untouched, not mangled');
 
     const withLink = buildSummaryText({ kind: 'gauntlet', placementLabel: 'Champion', monName: 'X', link: 'https://example.com/#/draftbattle/2' });
     t.ok(withLink.endsWith('https://example.com/#/draftbattle/2'), 'a supplied link is appended as the final line');
 
     const noPlacement = buildSummaryText({ kind: 'gauntlet', monName: 'X' });
     t.ok(!noPlacement.toLowerCase().includes('undefined'), 'no placement label never renders literal "undefined"');
+    const noPlacementPrefixed = buildSummaryText({ kind: 'gauntlet', monName: "Brock's Onix" });
+    t.ok(noPlacementPrefixed.includes("Brock's Onix"), 'the OTHER monName usage ("My Elite 4 challenger: X") is NOT stripped — it\u2019s not a possessive clash, so the full name is still shown there');
   }
 
   t.section('share.js — buildSummaryText: daily kind (#1) — exact spec\u2019d format + leading link');
@@ -74,6 +81,8 @@ export default function (t) {
   {
     const throne = buildSummaryText({ kind: 'throne', beatName: 'Koga', monName: 'Gengar', winPct: 0.7 });
     t.ok(throne.includes('Koga') && throne.includes('Gengar') && throne.includes('won'), 'throne kind still renders as before');
+    const thronePrefixed = buildSummaryText({ kind: 'throne', beatName: 'Koga', monName: "Misty's Gengar", winPct: 0.7 });
+    t.ok(thronePrefixed.includes('with my Gengar') && !thronePrefixed.includes("Misty's Gengar"), 'throne kind gets the same possessive-clash fix as gauntlet ("with my X\u2019s Y" \u2192 "with my Y")');
   }
 
   t.section('share.js — typeColor / typeTextColor mirror styles.css exactly');

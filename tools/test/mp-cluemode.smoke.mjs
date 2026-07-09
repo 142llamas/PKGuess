@@ -234,5 +234,21 @@ console.log('— #9: GTR yields exactly ONE reveal per turn, no skip option, the
   ctrl.destroy();
 }
 
+console.log('\n— Requested: "Reveal Full Stat Spread" shows labeled stats (HP/Atk/Def/...), not a bare number string —');
+{
+  const { mount, ctrl } = await startGame({ clueMode: 'choose' });
+  const spreadBtn = [...mount.querySelectorAll('#mp-clue-panel .clue-btn')].find((b) => b.textContent.includes('Reveal Full Stat Spread') && !b.className.includes('unavailable') && !b.className.includes('cant-afford'));
+  ok(!!spreadBtn, 'the Full Stat Spread clue card is present and affordable in hot-seat too');
+  if (spreadBtn) {
+    click(spreadBtn);
+    await tick();
+    const grid = mount.querySelector('.stat-spread-grid');
+    ok(!!grid, 'revealing it renders a .stat-spread-grid, not a bare string');
+    const labels = [...(grid ? grid.querySelectorAll('.sname') : [])].map((e) => e.textContent);
+    ok(labels.includes('HP') && labels.includes('Atk') && labels.includes('SpA'), `stat abbreviations are shown above the values (got: ${labels.join(',')})`);
+  }
+  ctrl.destroy();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

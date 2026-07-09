@@ -1,5 +1,5 @@
 /**
- * @file tools/test/draft.test.mjs 
+ * @file tools/test/draft.test.mjs
  * @version 1.0.0
  * Unit tests for the reworked draft engine (docs/js/draft.js v0.5.0): two picks
  * per card sourced from the CORRECT card, type-drafted-twice → mono, "—" picks,
@@ -276,5 +276,64 @@ export default function (t) {
     // A mid-ladder player (reached Bruno, rank 3) sees exactly the right frontier.
     t.ok(isTierUnlocked(3, 3, KEYS, TIER_RANK), 'Lance unlocked at rank 3 (just beat Bruno)');
     t.ok(!isTierUnlocked(4, 3, KEYS, TIER_RANK), 'All-Time still locked at rank 3');
+  }
+
+  t.section('draft.js — #2 (requested): no Pokemon can appear more than once in a single draft');
+  {
+    // Drive a full draft programmatically (not through the UI), recording
+    // every card's species name as it's shown, and confirm none repeat.
+    // "Shown" includes cards seen via a Pokemon-reroll too, not just cards a
+    // pick was actually taken from.
+    function draftAndCollectSeenSpecies(seed, useRerolls) {
+      const s = new DraftSession({ species, gen: 2, seed });
+      const seen = [s.current.name];
+      let guard = 0;
+      while (!s.isComplete() && guard++ < 200) {
+        if (useRerolls && guard % 3 === 0 && s.rerolls.pokemon > 0) {
+          s.rerollPokemon();
+          seen.push(s.current.name);
+          continue;
+        }
+        const p = s.availablePicks();
+        const picks = [];
+        if (p.stats.length) picks.push({ type: 'stat', key: p.stats[0].stat });
+        if (picks.length < 2 && p.types.length) picks.push({ type: 'type', value: p.types[0] });
+        else if (picks.length < 2 && p.canPickNoType) picks.push({ type: 'none' });
+        if (picks.length < 2 && p.moves.length) picks.push({ type: 'move', value: p.moves[0] });
+        if (!picks.length) { if (!s.hasLegalPick()) { s.advance(); seen.push(s.current.name); continue; } break; }
+        s.commitCard(picks);
+        seen.push(s.current.name);
+      }
+      return seen;
+    }
+
+    for (let seed = 1; seed <= 150; seed++) {
+      const seen = draftAndCollectSeenSpecies(seed, false);
+      const unique = new Set(seen);
+      t.eq(unique.size, seen.length, `seed ${seed}: no species repeats across ${seen.length} cards shown (saw: ${seen.join(', ')})`);
+    }
+
+    // Also with Pokemon-rerolls actually used mid-draft — a rerolled-PAST
+    // card must never be allowed to reappear later either.
+    for (let seed = 500; seed <= 560; seed++) {
+      const seen = draftAndCollectSeenSpecies(seed, true);
+      const unique = new Set(seen);
+      t.eq(unique.size, seen.length, `seed ${seed} (with rerolls exercised): no species repeats across ${seen.length} cards shown`);
+    }
+
+    // A direct check on _speciesAt / _refresh's bookkeeping: force the SAME
+    // (position, pokeReroll) to have picked the same species twice would be
+    // impossible to observe this way, so instead confirm the exclusion set
+    // actually grows and is genuinely consulted — construct a session and
+    // walk it forward a fixed number of steps, checking the seen-species
+    // count matches the number of distinct cards shown exactly (a Set, not
+    // an array that could quietly contain duplicates some other way).
+    const probe = new DraftSession({ species, gen: 2, seed: 999 });
+    const seenNames = [probe.current.name];
+    for (let i = 0; i < 8 && !probe.isComplete(); i++) {
+      probe.commitCard([{ type: 'stat', key: probe.openStatSlots()[0] }]);
+      seenNames.push(probe.current.name);
+    }
+    t.eq(new Set(seenNames).size, seenNames.length, 'a manually-stepped session (stat-only picks, one per card) also shows no repeats');
   }
 }
