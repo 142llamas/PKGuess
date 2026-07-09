@@ -1,8 +1,12 @@
 /**
  * @file        js/lib/share.js
- * @version     1.4.0
- * @updated     2026-07-05
+ * @version     1.5.0
+ * @updated     2026-07-06
  * @changelog
+ *   1.5.0 — Added roomJoinLink(modeId, gen, code) (a deep link that pre-fills
+ *           a room-join code when opened) and buildRoomInviteText({gameLabel,
+ *           details, link}) — back online.js's and race.js's new room-
+ *           sharing "Share Room" button.
  *   1.4.0 — #1: daily share text now leads with a deep link into the Daily
  *           Challenge (dailyChallengeLink), and its 2nd line shows the
  *           PLAYER's name (falling back to a stable "Player_NNNNN" via the
@@ -295,6 +299,30 @@ export function dailyChallengeLink() {
     const base = `${location.origin}${location.pathname}`;
     return `${base}#/dailychallenge/2`;
   } catch { return ''; }
+}
+
+/** A deep link that pre-fills a room-join code when opened, for online.js's
+ *  and race.js's new "Share Room" invites. Empty string outside a browser
+ *  (no `location`) rather than throwing.
+ *  @param {string} modeId  'online' or 'race'
+ *  @param {number} gen
+ *  @param {string} code    the room code to pre-fill on the joining end */
+export function roomJoinLink(modeId, gen, code) {
+  try {
+    const base = `${location.origin}${location.pathname}`;
+    return `${base}#/${modeId}/${gen}?code=${encodeURIComponent(code)}`;
+  } catch { return ''; }
+}
+
+/** Room-invite share text for a multiplayer room: "Join my {game}!", a
+ *  handful of relevant details (kept short on purpose — not every setting),
+ *  then the deep link. Used by online.js and race.js.
+ *  @param {{gameLabel:string, details?:string[], link:string}} opts */
+export function buildRoomInviteText({ gameLabel, details = [], link }) {
+  const lines = [`Join my ${gameLabel} game!`];
+  if (details.length) lines.push(details.join(' \u00b7 '));
+  if (link) lines.push(link);
+  return lines.join('\n');
 }
 
 /** A stable deep link back into Draft Battle, for share text (#14/#15). Empty

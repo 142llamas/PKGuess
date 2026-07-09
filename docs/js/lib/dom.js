@@ -1,9 +1,14 @@
 /**
  * @file        docs/js/lib/dom.js
- * @version     1.1.0
- * @updated     2026-06-23
+ * @version     1.2.0
+ * @updated     2026-07-06
  * @changelog
- *   1.0.0 — Initial shared DOM helpers for the modular build. `el()` is the
+ *   1.2.0 — Added shareSheetEl() — a shared share-sheet toast (text +
+ *           WhatsApp/Copy/Close), extracted from draftbattle.js's local
+ *           showShareSheet() so online.js and race.js's new room-invite
+ *           sharing can reuse the identical UI instead of three near-
+ *           duplicate builders drifting apart over time.
+ *   1.1.0 — Initial shared DOM helpers for the modular build. `el()` is the
  *           single element factory every mode and the shell use; the tiny
  *           helpers (clear, mount, on) de-duplicate boilerplate that the
  *           canonical HTML repeated in every screen.
@@ -107,6 +112,25 @@ export function statSpreadEl(spreadStr) {
     grid.appendChild(cell);
   });
   return grid;
+}
+
+/**
+ * A small "share sheet" toast: the raw text to share, plus WhatsApp/Copy/Close
+ * buttons. Reused by draftbattle.js, online.js, and race.js so all three
+ * modes' share flows look and behave identically instead of three near-
+ * duplicate builders. The caller owns placement/removal (append the returned
+ * node, remove it on close) — this function only builds the element.
+ * @param {string} text
+ * @param {{copied?:boolean, onWhatsApp:Function, onCopy:Function, onClose:Function}} opts
+ */
+export function shareSheetEl(text, { copied = false, onWhatsApp, onCopy, onClose } = {}) {
+  return el('div', { class: 'draft-toast', style: { maxWidth: '420px' } },
+    el('div', { style: { whiteSpace: 'pre-wrap', fontSize: '12px', marginBottom: '8px' } }, text),
+    el('div', { class: 'draft-toast-btns' },
+      el('button', { class: 'btn-primary', style: { padding: '6px 12px', fontSize: '12px' }, onClick: onWhatsApp }, 'WhatsApp'),
+      el('button', { class: 'btn-secondary', style: { padding: '6px 12px', fontSize: '12px' }, onClick: onCopy },
+        copied ? '\u2713 Copied' : 'Copy'),
+      el('button', { class: 'btn-secondary', style: { padding: '6px 12px', fontSize: '12px' }, onClick: onClose }, 'Close')));
 }
 
 /**
