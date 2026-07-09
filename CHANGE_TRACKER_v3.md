@@ -492,4 +492,58 @@ While updating `MANIFEST.md` for this batch, a Python script mixing JS-style `\u
 ### Going forward
 Per your request, from now on every batch's summary will end with an explicit list of exactly which files changed, so you don't have to re-upload files that haven't moved.
 
+---
+
+## Phase 6 continued — MANIFEST recovery verified, "Player's" mon-name bug, two real test flakes root-caused and fixed, Victory Road clue reorder
+
+### MANIFEST.md cross-check against your uploaded prior copy
+
+You uploaded the actual previous `MANIFEST.md` so it could be checked against the reconstruction from last time. Comparing them line-by-line found two real gaps: a legitimate cross-reference row (`docs/js/lib/draft-adapter.js → See "Shared libraries" above`) had been mistakenly deleted as if it were a stale duplicate, and two test-file rows (`throne.smoke.mjs`, `share.test.mjs`) were missing entirely. All three restored. Also cross-checked every touched file's own `@version` header against what the rebuilt document claimed for it — file headers are the actual source of truth, not the manifest — which caught two more real slips: `main.js` and `share.js` had gotten real code changes in the previous batch but their version headers were never actually bumped. Fixed both.
+
+### "Player's" Pokémon — the drafted mon's name never used the player's real screen name
+
+| Location | Files |
+|---|---|
+| `docs/js/modes/` | `draftbattle.js` (1.13.1) |
+| `tools/test/` | `throne.smoke.mjs` |
+
+`startDraft()` constructed every `DraftSession` without ever passing `playerName` at all, so `DraftSession`'s own default (`'Player'`) was always used — "Player's Feraligatr" regardless of who was actually playing. This affected free-play, the daily, the Elite-4 gauntlet's share text, and the daily results table alike, since they all eventually read the same `result.name`.
+
+The fix needed a bit of care: `DraftSession.result()` reads `playerName` live, not just once at construction, so the first version of this fix set `playerName` correctly when identity was already resolved and otherwise kicked off a background `lazyIdentity()` call to correct it later. That's provably too fragile — a test driving the draft to completion via a tight scripted loop reached "Draft Complete" before the identity promise resolved, so the mon's name was still "Player's" at the moment `.result()` got called and cached. Fixed properly instead: identity is now resolved **in parallel** with the data fetches (movelist/movestats/draftpool/typechart) that were already being awaited before the draft screen appears, so there's no added latency and no race — by the time `startDraft()` runs, identity is always already settled, for both free-play and the daily flow (which resolved it even earlier already).
+
+New assertions in `throne.smoke.mjs` confirm the drafted mon's name uses the real identity name for both the free-play and daily-variant flows, and that the literal fallback string "Player's" never appears when a real name is available. (One thing worth being upfront about: my first attempt at this specific assertion used the wrong apostrophe character — a curly `'` instead of the straight `'` the code actually uses — which looked like a second bug until a targeted diagnostic showed the underlying fix was correct all along and the test itself was just wrong. Fixed the test, then re-verified the fix's regression guard properly afterward.)
+
+### Two real, intermittent test flakes — root-caused and fixed, not just re-confirmed
+
+You asked me to either fix the "single: ran out of points" flake or tell you what to do about it — didn't want to just leave it as "known flaky." Investigated both this one and a second flake that surfaced in the same run (`mp-cluemode.smoke.mjs`'s random-reveal check) down to their actual root causes rather than accepting "sometimes fails" as an answer:
+
+- **`modes.smoke.mjs` — "ran out of points."** The test bought every affordable clue card in a loop, assuming that would always eventually exhaust the difficulty's starting points. That's not guaranteed for every possible random mystery — if a mystery's total available clue cost happens to be less than the starting budget, the loop runs out of things to buy while points remain, and the game never reaches game-over. Fixed by falling back to repeated wrong guesses (which do cost points) once no more cards are clickable — 15/15 clean runs after the fix, versus a real (if infrequent) failure before it.
+- **`mp-cluemode.smoke.mjs` — "the random-reveal button DID reveal a clue."** Root-caused via direct instrumentation (not guessing): the weighted-random reveal formula heavily favors cheap clues, and one of the cheapest is "Reveal One Egg Move" — a multi-use clue. Multi-use clues never get the `.revealed` CSS class after just one use (only once fully exhausted, matching `single.js`'s established pattern), so whenever the random pick happened to land on one, the test's `.clue-btn.revealed` count check saw no change and failed — even though a real reveal had genuinely happened. Took ~90 scripted runs to actually catch it in the act with diagnostics, since the failure rate is low (the weighted formula doesn't pick a multi-use clue every time). Fixed by checking the revealed-clues panel's entry count instead, which is correct regardless of clue type — found and fixed the identical latent issue in the adjacent By-category test too, before it could surface as its own separate "random" flake later. 60/60 clean runs after the fix.
+
+Both fixes verified with the standard revert-and-confirm-it-fails check, same as every other fix this project.
+
+### Victory Road: clues reordered into logical groups
+
+| Location | Files |
+|---|---|
+| `docs/js/modes/` | `victoryroad.js` (1.4.0) |
+| `tools/test/` | `victoryroad.smoke.mjs` |
+
+Reordered the ribbon to group clues by the same 7 categories used throughout the rest of the app (Habitat, Evolution, Type Matchups, Stats, Trainer Usage, Movesets, Anime), in that order — weaknesses/resistances now sit right next to type/immunity info, both stat clues sit together, Trainer Usage sits between Stats and Movesets, Anime is last, matching your explicit examples.
+
+This needed two passes to actually work. The first pass rewrote the two ordering arrays (`RIBBON_ORDER_SPECIALS`/`RIBBON_ORDER_FIELDS`) into the new category groups and looked correct on inspection — but empirically checking the *rendered* ribbon showed it hadn't changed at all. The actual bug was in `chipOrder()` itself, not the arrays: it added +100 to any clue matched by `field` rather than `special`, which silently pushed every clue with `special: undefined` (habitat, evoStage, bstRange, fullStats, gymLeader — a majority of the clue set) to the very end regardless of which array position it occupied. Reordering the arrays could never have worked while that offset existed. Replaced the whole two-array-plus-offset design with a single unified priority map keyed by whichever identifier a clue actually has, which doesn't have anywhere for that kind of trap to hide.
+
+New assertions in `victoryroad.smoke.mjs` check the actual rendered chip order at both Tier 1 (no weakness/resistance yet) and Tier 3 (has it) — confirmed against a revert-and-fail check same as everything else.
+
+**Full test tally after this batch:** 696 unit + 419 smoke = 1115 assertions, all green, stable across repeated runs.
+
+### Files changed this batch
+- `docs/js/modes/draftbattle.js`
+- `docs/js/modes/victoryroad.js`
+- `tools/test/throne.smoke.mjs`
+- `tools/test/modes.smoke.mjs`
+- `tools/test/mp-cluemode.smoke.mjs`
+- `tools/test/victoryroad.smoke.mjs`
+- `MANIFEST.md`, `CHANGE_TRACKER_v3.md`, `TESTING_CHECKLIST.md`
+
 

@@ -29,6 +29,7 @@ player sees.
 - [ ] 1.13 On Tiers 1–4, confirm **"Has an Immunity"** is pre-revealed. On Tiers 3–8, confirm a combined **weakness/resistance** reveal is pre-revealed (up to 6 at Tier 3, shrinking by 1 each tier down to 1 at Tier 8) — labeled "Weak:" / "Resist:" in one chip. On Tier 7, confirm Highest/Lowest Base Stat (just the stat name, no number) are pre-revealed.
 - [ ] 1.14 Confirm the two type clues show on **one line** in one chip (e.g. "Fire / Flying"), egg moves show as **one chip listing all of them** (not one chip per move), and weakness/resistance show together in **one chip**, clearly labeled which is which.
 - [ ] 1.15 Before starting Victory Road, tap a tier row on the **preview screen** to expand it — confirm Tiers 3–8 each show a "Weakness/Resistance (up to N)" entry in the clue list (it was previously missing from the preview entirely, even though it always appeared during actual play).
+- [ ] 1.16 During an actual game (Tier 3 or higher, so weakness/resistance is present), look at the order the pre-revealed clues appear in — confirm they're grouped logically: Habitat/Generation, then Evolution Stage, then the type-matchup group (Weakness/Resistance, Has an Immunity, Type — all next to each other), then the stat clues together, then Trainer Usage, then Moves, then Anime last. It should read as organized categories, not a scattered mix.
 
 ## 2. Multiplayer (Hot-seat, same device)
 
@@ -90,6 +91,7 @@ player sees.
 
 - [ ] 7.1 Draft a Pokémon — confirm you can take stats, types (including "—" for mono-type from a mono card only), and moves as described.
 - [ ] 7.2 Check a few of your drafted moves against the [banned list](#banned-moves-reference) below — confirm none of them ever show up as options anymore.
+- [ ] 7.3 Set your screen name (via the profile pill) BEFORE drafting — confirm your drafted mon's name uses it (e.g. "Ash's Feraligatr"), not the literal word "Player's ...".
 
 ## 8. Draft Battle — the simulator itself
 
@@ -124,7 +126,7 @@ so actually *read* the log lines here, not just the win/loss result.
 
 ## 10. Daily Puzzle
 
-- [ ] 10.1 Play today's daily challenge, submit your entry — confirm the results screen ranks you against **Cal** (renamed from "Daily Rival" — that old name should never appear anywhere) and anyone else who's played.
+- [ ] 10.1 Play today's daily challenge, submit your entry — confirm the results screen ranks you against **Cal** (renamed from "Daily Rival" — that old name should never appear anywhere) and anyone else who's played. Confirm the "Build" column shows your build using your real screen name (e.g. "Ash's Feraligatr"), not "Player's ...".
 - [ ] 10.2 Tap **"See Yesterday's Results"** — confirm the date and results actually change to the previous day, and there's a way back to today.
 - [ ] 10.3 Try playing the daily a second time the same day — confirm you're blocked (one attempt per day).
 - [ ] 10.4 Tap **Share** on the daily results — confirm the shared text starts with a link that, when opened, takes you straight into today's Daily Challenge, followed by your name (or a "Player_" fallback if you haven't set one), your rank, and your win percentage.
