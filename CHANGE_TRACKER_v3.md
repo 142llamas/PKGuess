@@ -546,4 +546,166 @@ New assertions in `victoryroad.smoke.mjs` check the actual rendered chip order a
 - `tools/test/victoryroad.smoke.mjs`
 - `MANIFEST.md`, `CHANGE_TRACKER_v3.md`, `TESTING_CHECKLIST.md`
 
+---
+
+## Phase 6 continued — throne cascade bug, Elite 4 scaling investigation, sharing UX overhaul
+
+### Bug: "I already own the highest spot" incorrectly blocked a legitimate claim
+
+| Location | Files |
+|---|---|
+| `docs/js/modes/` | `draftbattle.js` (1.14.0) |
+| `tools/test/` | `throne.smoke.mjs` |
+
+You beat Will with a new draft, but claiming that spot was blocked because you already held a higher throne — with a *different* Pokémon. You confirmed the intended rule: **a single Pokémon can only hold one spot, but a player can hold as many spots as they want.**
+
+The bug was exactly a mismatch between those two rules. `claimThrone()`'s cascade check compared `holderUid` — "does this same PLAYER hold another throne?" — when it should have been asking "does this same POKÉMON hold another throne?" Fixed by comparing the mon's own name + exact base stats (effectively unique per draft — two independent drafts coincidentally producing the same species name *and* all six random stats is astronomically unlikely) instead of who's playing.
+
+Verified two ways, both against real gauntlet runs (not just the pure decision function, which was never the buggy part):
+- The exact reported shape — already holding a higher throne with mon A, drafting a genuinely different mon B, beating Will with it, losing to Koga with it — now succeeds and leaves both thrones intact, each with its own mon.
+- The cascade still correctly triggers when it's genuinely the *same* mon holding two spots (built by pre-seeding a lower throne with the exact shape a known deterministic seed produces, then letting that seed's mon claim the top spot in one clean run — avoided a "re-fighting your own prior claim" edge case that a more naive two-live-runs approach ran into first).
+
+One thing worth flagging: this test's setup, like the existing `WINNING_SEED`, relies on a specific seed's mon beating one NPC and losing to another *for today's specific date* — Will and Koga's NPCs are period-keyed (daily/weekly), so the exact seed that reproduces this shape can drift over time. Hit this firsthand while building the test: a seed found earlier in this session no longer matched by the time the fix was verified, because the Central-Time date had rolled over in between. Documented inline in the test (the same way `WINNING_SEED`'s own comment already does) so it's easy to re-find if it ever needs it.
+
+### Elite 4 scaling: investigated, not yet changed — needs your call
+
+You asked whether the Will→Koga stat-band scaling might be too harsh, given a 98%→4% swing. Ran two rounds of analysis rather than guessing:
+
+**First finding — the swing is common, not unlucky.** Drafted 24 different builds through the real UI and ran each through the actual gauntlet (today's real NPCs, not a simulation with made-up seeds). Of those: 6 lost to Will outright, **10 beat Will but lost to Koga** (the exact shape you hit), and only 2 swept every tier. "Beat Will, lose to Koga" is the single most common outcome, not a rare bad-luck result.
+
+**Second finding — the swing is mostly the type-matchup lottery, not the stat gap itself.** Held ONE player mon fixed and generated 10 different "Koga" NPCs, all within the identical stat band (475–500 BST) with nothing else changed. Win rate across those 10 ranged from **29% to 100%** — with the stat band held completely constant. Each tier's NPC is a single, fixed roll (shared by every player for that day/week/etc., not re-rolled per attempt), so an unlucky type/moveset matchup on the NPC's side can swing the outcome dramatically on its own, independent of how the stat bands are tuned.
+
+Put together: the stat bands (Will 425–450 → Koga 475–500, roughly a 50-BST jump against builds that typically average somewhat lower) do represent a real, intentional difficulty increase — beating Koga *given you already beat Will* only happened in about 44% of the sample, not just noise. But the variance riding on top of that, from the single-NPC-roll design, is large enough that any individual player's experience can look far more extreme than the "intended" curve suggests — a great matchup or a terrible one can each happen to anyone.
+
+**Not changed yet, because this is a balance/feel question, not a clear bug** — I don't want to unilaterally re-tune the stat bands or the NPC-generation approach without your input. A few concrete directions if you want to soften it, roughly in order of how much they'd change:
+1. **Narrow the stat bands** (e.g. smaller gaps between consecutive tiers) — reduces the baseline difficulty jump, but wouldn't touch the type-matchup variance, which the data suggests is the bigger factor.
+2. **Reduce matchup-lottery extremes** — e.g. generate a few candidate NPCs per tier and pick one that isn't an extreme outlier against a "typical" build, instead of a single uncontrolled roll. Targets the actual dominant factor, but is a more involved change to the NPC-generation logic.
+3. **Leave it as-is** — real Pokémon team-building is often decided by type matchups more than raw stats, and the existing "redraft to find a better matchup against this period's NPCs" counter-play already exists. The variance could be read as a feature, not a flaw.
+
+Let me know which direction (if any) you'd like, and I'll implement it.
+
+### Sharing UX: investigated and replaced — no longer "sharing an image"
+
+| Location | Files |
+|---|---|
+| `docs/js/modes/` | `draftbattle.js` (1.14.0) |
+| `tools/test/` | `throne.smoke.mjs` |
+
+Confirmed the specific problem: `shareDraftedMon()` (Draft Complete's "📤 Share My Pokémon") and `shareGauntletResult()` (the gauntlet results' consolidated "📤 Share") both tried `shareMonCardImage()` first — the Web Share API with a canvas-rendered PNG card. On any browser without full file-share support (common on desktop, and plenty of mobile browsers too), the fallback path **silently downloaded that PNG as a side effect** — an unexplained file just appearing — and on mobile, handed off to the OS's own native image-share sheet instead of this app's consistent WhatsApp/Copy/Close toast used for everything else (daily results, room invites).
+
+Replaced both with the same text-only pattern used everywhere else in the app: build a plain-text summary (name + types + moves for the mid-draft share; the existing achievement-focused text for the gauntlet share) and show it through the shared `shareSheetEl` (dom.js) — the same WhatsApp/Copy/Close toast, same behavior, everywhere. Also noticed while doing this that `draftbattle.js` had its *own* local duplicate of `showShareSheet`, even though it was the original implementation `shareSheetEl` had been extracted *from* for online.js's/race.js's room sharing — it now calls the shared one instead of maintaining a second copy.
+
+`shareMonCardImage`/`buildMonCardPlan`/`drawMonCardToCanvas` are left in `share.js`, still exported and still covered by `share.test.mjs` — nothing was deleted, just no longer called from these two spots. If you ever want a genuinely separate "save as image" feature (not bundled into the share flow), that infrastructure is still there to build on.
+
+**Full test tally after this batch:** 696 unit + 433 smoke = 1129 assertions, all green.
+
+### Files changed this batch
+- `docs/js/modes/draftbattle.js`
+- `tools/test/throne.smoke.mjs`
+- `MANIFEST.md`, `CHANGE_TRACKER_v3.md`, `TESTING_CHECKLIST.md`
+
+---
+
+## Phase 6 continued — Elite 4 band narrowing, draft duplicates, grammar fix, throne history Inspect, stat-spread labels everywhere, Safari's endGame() crash
+
+### Elite 4 stat bands narrowed (analytical decision — flag if you disagree)
+
+| Location | Files |
+|---|---|
+| `docs/js/modes/` | `draftbattle.js` (1.15.0) |
+
+Reduced the inter-tier gap from 50 BST to 30 BST: **Will 425–450 (unchanged), Koga 455–480 (was 475–500), Bruno 485–510 (was 525–550), Lance 515–540 (was 575–600).** Total Will-to-Lance span dropped from 175 to 115 (~34% narrower).
+
+Reasoning, following up on the earlier investigation: the data showed the stat gap IS a real contributor (beating Koga given you'd already beaten Will only happened ~44% of the time in the original sample), but the type-matchup lottery was the larger one (29%–100% swing at a FIXED stat band). Narrowing by roughly a third knocks down the stat-driven component without pretending the matchup-lottery variance isn't still the bigger factor — "stats still matter, but the other things matter more," per what was asked for.
+
+Verified by re-running the same 24-build sample against the new bands: "beat Will, lose to Koga" dropped from 42% to 12.5% of outcomes, and full sweeps roughly doubled (~8% → ~17%). The distribution is now spread more evenly across all five stopping points instead of clustering hard at one specific transition.
+
+**If you want a different number, easy to adjust** — the four bands are four numbers in one array in `draftbattle.js`.
+
+### Draft: no Pokémon can appear more than once in a single draft
+
+| Location | Files |
+|---|---|
+| `docs/js/` | `draft.js` (0.9.0) |
+| `tools/test/` | `draft.test.mjs`, `throne.smoke.mjs` |
+
+`_speciesAt()` picked a species purely at random from the full pool every card, with no memory of what had already been shown — the same species could legitimately appear on two different cards in one draft. Fixed with a `_seenSpecies` set, populated the moment a card is displayed (a card you reroll past counts as "shown" too, not just one you took a pick from), and consulted as an exclusion filter on every subsequent pick.
+
+This is a real behavior change for existing seeds, since it can shift which card gets shown from the point a repeat would have occurred onward — confirmed empirically: `WINNING_SEED` (the deterministic "sweeps every Elite-4 tier" seed used throughout the test suite) had drawn the same species twice under the old behavior, so once repeats were excluded, that seed's greedy draft produced a different final mon that no longer swept every tier. Re-searched and found a new one (seed 12 → Machamp).
+
+**A genuine testing lesson from this pass:** the first version of the regression test used a 30-seed sample and it passed even with the fix completely reverted — not because the fix was wrong, but because 30 random seeds simply didn't happen to include a collision often enough to guarantee catching it (a rough birthday-paradox calculation puts it around an 18% chance per seed, and it's still probabilistic which seeds hit it). Widened to 150+61 seeds specifically so the revert-and-confirm-it-fails check would be reliable, not just "probably" reliable.
+
+### Sharing grammar: "beat my Ash's Kangaskhan" → "beat my Kangaskhan"
+
+| Location | Files |
+|---|---|
+| `docs/js/lib/` | `share.js` (1.5.1) |
+| `tools/test/` | `share.test.mjs` |
+
+`monName` is generally `"{playerName}'s {species}"`, and the "beat my ___" / "with my ___" phrases were plugging that whole string in verbatim — two possessives fighting each other. Added a small helper that strips the "PlayerName's " prefix specifically in those two phrases (gauntlet and throne kinds both had the identical issue, though only the gauntlet one is currently reachable in the live app — throne's own version is fixed too since it's still exported/tested code, and the same bug would resurface if it's ever wired back up). Other uses of `monName` that aren't a possessive clash (e.g. "My Elite 4 challenger: Ash's Kangaskhan") are left exactly as they were.
+
+### Throne History: added the requested Inspect button
+
+| Location | Files |
+|---|---|
+| `docs/js/modes/` | `draftbattle.js` (1.15.0) |
+| `tools/test/` | `throne.smoke.mjs` |
+
+Each row in a throne's History screen now has a 🔍 Inspect button, matching the Daily Draft's pattern exactly — same read-only card, same "← Back" return path. One prerequisite fix needed first: the history entries being pushed to Firebase never included `moves` at all (only name/types/baseStats), so there was nothing for Inspect to show for a historical champion's moveset — added it to both push call sites (the normal-claim path and the cascade-vacate path).
+
+### Stat spread labels: fixed everywhere, not just Safari
+
+| Location | Files |
+|---|---|
+| `docs/js/modes/` | `single.js` (1.2.3), `safari.js` (1.3.0, see below), `multiplayer.js` (1.3.3), `online.js` (1.6.1) |
+| `tools/test/` | `modes.smoke.mjs`, `mp-cluemode.smoke.mjs`, `online.smoke.mjs` |
+
+Reported for Safari specifically, but checking single.js and multiplayer.js (per your follow-up) turned up the identical gap in both. The "Reveal Full Stat Spread" clue was rendering as a bare `"63/60/60/130/50/65"` string in every mode's in-game clue card EXCEPT Victory Road's ribbon and single.js's own post-game summary screen — both of those already used the shared `statSpreadEl` (dom.js) for the labeled HP/Atk/Def/... version; the four in-game clue renderers (single, safari, multiplayer, online) just never had. Fixed all four the same way, keyed off `clue.field === 'fullStats'`, matching Victory Road's existing detection pattern.
+
+### Safari Zone: a real, significant crash, plus the requested safeguard
+
+| Location | Files |
+|---|---|
+| `docs/js/modes/` | `safari.js` (1.3.0) |
+| `tools/test/` | `modes.smoke.mjs` |
+
+You described three things together: the game not ending, no post-game summary, and the score missing from the leaderboard. Found the actual cause, and it explains all three at once: `endGame()`'s call to `submitScore(...)` referenced `done.caught`, `done.startPts`, and `ptsUsed` — but all three of those were declared with `const` further down in the *same function*, meaning every single call to `endGame()` threw a `ReferenceError` (JavaScript's temporal-dead-zone rule) before it ever reached the line that builds the summary screen. So: the summary never rendered (game looked stuck), and `submitScore()` never actually ran (the exception happened on that exact statement, before the call could execute) — one bug, three symptoms. Reordered the three declarations to come first.
+
+Verified concretely, not just "doesn't throw": drove a real game to zero points and confirmed the summary screen appears with real Caught/Budget/Spent numbers (not `NaN`/`undefined`, which would indicate the ordering bug persisting in some other form), and confirmed via the test output that `submitScore()` now genuinely gets invoked (it fails inside the test environment for an unrelated, expected reason — no real Firebase available there — but critically, it now *reaches* that point at all, which it never did before).
+
+**Also added the requested safeguard:** Bait and Rock (the two random-clue actions) now exclude any clue whose cost would leave less than 1 point of the shared budget, so a random reveal alone can never zero it out. Manual clue selection is untouched, matching what was specifically asked for (random clues only). This needed real care to test properly: with a fixed test RNG that always picks the pool's first entry, the "does it ever drop below 1" question only actually gets exercised when a clue's cost happens to exactly equal what's left — a narrow condition that a "test several budget levels and hope" approach didn't reliably hit. Ended up precisely engineering it instead: a throwaway probe session discovers the exact cost of the first Bait pick at a comfortable budget, then the real test drives the budget down to exactly that number before clicking Bait once, guaranteeing the exact edge case gets tested every run.
+
+(Along the way, a couple of my own diagnostic scripts had bugs of their own — one searched for a button by the wrong label text, another accidentally left the safeguard reverted mid-investigation. Worth naming plainly rather than glossing over, since it's part of why this one took a few passes to pin down properly.)
+
+### Victory Road: minor desktop text wrap (low priority, per your note)
+
+| Location | Files |
+|---|---|
+| `docs/js/modes/` | `victoryroad.js` (1.4.1) |
+| `docs/css/` | `styles.css` (1.14.4) |
+
+Two small things, bundled together since both were about the same shared `.sf-intro` style:
+- **The centering bug** you flagged on the Elite 4 status screen was actually general to `.sf-intro`: `max-width` without `margin:auto` for left/right meant the block sat left-aligned within any wider parent, even though its own text was `text-align:center`. Fixed at the CSS rule itself (`margin:auto` is a no-op for anything already narrower than its parent, so this can't have changed how it looks anywhere it wasn't visibly broken).
+- **The Victory Road intro line wrapping unnecessarily on desktop** — you said not a big deal and mobile's the priority, so kept this deliberately minimal: removed the `max-width` constraint for just that one paragraph via an inline style override, leaving the shared CSS rule (and every other screen using it, including mobile) completely untouched.
+
+**Full test tally after this batch:** 913 unit + 464 smoke = 1377 assertions, all green, stable across repeated runs.
+
+### Files changed this batch
+- `docs/js/lib/share.js`
+- `docs/js/draft.js`
+- `docs/js/modes/draftbattle.js`
+- `docs/js/modes/single.js`
+- `docs/js/modes/safari.js`
+- `docs/js/modes/multiplayer.js`
+- `docs/js/modes/online.js`
+- `docs/js/modes/victoryroad.js`
+- `docs/css/styles.css`
+- `tools/test/share.test.mjs`
+- `tools/test/draft.test.mjs`
+- `tools/test/throne.smoke.mjs`
+- `tools/test/modes.smoke.mjs`
+- `tools/test/mp-cluemode.smoke.mjs`
+- `tools/test/online.smoke.mjs`
+- `MANIFEST.md`, `CHANGE_TRACKER_v3.md`, `TESTING_CHECKLIST.md`
+
 

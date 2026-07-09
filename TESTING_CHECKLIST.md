@@ -23,13 +23,15 @@ player sees.
 - [ ] 1.7 Reveal "Reveal One Weakness" (or another multi-use clue) more than once — confirm it shows `#1`, `#2`, etc. with different values, not just once.
 - [ ] 1.8 Play a full game, guess correctly or run out of points — go to the **Pokédex**, find that Pokémon, and confirm it now shows as **Caught** (or **Seen** if you lost).
 - [ ] 1.9 In the Pokédex, toggle **Seen** and **Caught** filters independently, then both together — confirm both-on shows the *union* (anything Seen OR Caught), not just one or the other.
-- [ ] 1.10 Play a round of **Safari Zone** — confirm bait/rock reveal a clue at normal cost, and manually clicking a clue costs double.
+- [ ] 1.10 Play a round of **Safari Zone** — confirm bait/rock reveal a clue at normal cost, and manually clicking a clue costs double. Play until points run out — confirm a **post-game summary screen actually appears** (Caught/Budget/Spent, no NaN/undefined) and doesn't leave you stuck on the game screen. Afterward, check that a leaderboard entry was recorded for Safari.
+- [ ] 1.10b Spam **Bait**/**Rock** repeatedly near the end of a Safari game — confirm the shared budget never drops to 0 from a random clue alone (at least 1 point should always remain after Bait/Rock; it's fine for a **manual** clue pick to hit 0).
 - [ ] 1.11 Play a round of **Victory Road** — confirm it plays as an endless streak with fewer clues at higher tiers.
 - [ ] 1.12 Check the tier boundaries — Tier 1 should last through your **5th** correct guess (streak 0–5), Tier 2 through your **10th**, etc. — one more Pokémon per tier than before.
 - [ ] 1.13 On Tiers 1–4, confirm **"Has an Immunity"** is pre-revealed. On Tiers 3–8, confirm a combined **weakness/resistance** reveal is pre-revealed (up to 6 at Tier 3, shrinking by 1 each tier down to 1 at Tier 8) — labeled "Weak:" / "Resist:" in one chip. On Tier 7, confirm Highest/Lowest Base Stat (just the stat name, no number) are pre-revealed.
 - [ ] 1.14 Confirm the two type clues show on **one line** in one chip (e.g. "Fire / Flying"), egg moves show as **one chip listing all of them** (not one chip per move), and weakness/resistance show together in **one chip**, clearly labeled which is which.
 - [ ] 1.15 Before starting Victory Road, tap a tier row on the **preview screen** to expand it — confirm Tiers 3–8 each show a "Weakness/Resistance (up to N)" entry in the clue list (it was previously missing from the preview entirely, even though it always appeared during actual play).
 - [ ] 1.16 During an actual game (Tier 3 or higher, so weakness/resistance is present), look at the order the pre-revealed clues appear in — confirm they're grouped logically: Habitat/Generation, then Evolution Stage, then the type-matchup group (Weakness/Resistance, Has an Immunity, Type — all next to each other), then the stat clues together, then Trainer Usage, then Moves, then Anime last. It should read as organized categories, not a scattered mix.
+- [ ] 1.17 Buy/reveal **"Reveal Full Stat Spread"** in Single Player, hot-seat Multiplayer, Online, and Safari Zone — confirm all four show labeled stats (HP/Atk/Def/SpA/SpD/Spe above the numbers), not a bare "63/60/60/130/50/65" string.
 
 ## 2. Multiplayer (Hot-seat, same device)
 
@@ -92,6 +94,8 @@ player sees.
 - [ ] 7.1 Draft a Pokémon — confirm you can take stats, types (including "—" for mono-type from a mono card only), and moves as described.
 - [ ] 7.2 Check a few of your drafted moves against the [banned list](#banned-moves-reference) below — confirm none of them ever show up as options anymore.
 - [ ] 7.3 Set your screen name (via the profile pill) BEFORE drafting — confirm your drafted mon's name uses it (e.g. "Ash's Feraligatr"), not the literal word "Player's ...".
+- [ ] 7.4 On the Draft Complete screen, tap **"📤 Share My Pokémon"** — confirm it opens the same WhatsApp/Copy/Close text share sheet used everywhere else in the app (mentions the mon's name, types, and moves), and that no image file gets downloaded and no native OS share sheet appears.
+- [ ] 7.5 Draft through several cards, including a couple of Pokémon-rerolls — confirm you never see the same Pokémon shown twice in one draft (rerolled-past cards shouldn't reappear later either).
 
 ## 8. Draft Battle — the simulator itself
 
@@ -118,11 +122,14 @@ so actually *read* the log lines here, not just the win/loss result.
 
 - [ ] 9.1 Draft a Pokémon, then tap **"Challenge the Elite 4"** — confirm it auto-battles Will → Koga → Bruno → Lance → the All-Time Champion in one action, always starting fresh at Will, and stops at your first loss.
 - [ ] 9.2 On the results screen, confirm you see **one row per matchup** you actually played (not one screen per tier), each with an on-demand **"▶ Watch"** replay button.
-- [ ] 9.3 Confirm there's exactly **one Claim** button (for the highest spot you reached) and **one Share** button (a consolidated summary + canvas card image), not a separate prompt after every individual win.
-- [ ] 9.4 Check that Will/Koga/Bruno/Lance's NPC opponents *feel* noticeably harder as you go up the tiers (Lance should be a serious wall compared to Will).
+- [ ] 9.3 Confirm there's exactly **one Claim** button (for the highest spot you reached) and **one Share** button, not a separate prompt after every individual win. Tap Share — confirm it opens the same WhatsApp/Copy/Close text share sheet used everywhere else in the app (no image, no file download, no native OS share sheet), and reads "...beat my {Pokémon name}" — NOT "...beat my {your screen name}'s {Pokémon name}" (that "my X's Y" double-possessive was a grammar bug).
+- [ ] 9.4 Check that Will/Koga/Bruno/Lance's NPC opponents *feel* progressively harder as you go up the tiers, but with a gentler jump than before between Will and Koga specifically (the stat bands were narrowed — Koga/Bruno/Lance all moved down some). Beating Will but losing to Koga is still a common outcome, just less of a hard wall than before.
 - [ ] 9.5 Note your best-ever progress badge ("🏅 Your best") on the draft screen — confirm it's purely informational and doesn't block you from starting a fresh gauntlet at Will again.
-- [ ] 9.6 If you can arrange it with a second account: claim a lower throne (say Koga), then later run a gauntlet that reaches a higher one (say Bruno) — confirm you keep Bruno, and Koga either gets handed to whoever held it (if human) or reverts to a fresh NPC (if it was an NPC).
-- [ ] 9.7 Try the reverse — hold a higher throne (Lance), then have a gauntlet run reach a lower one (Will) — confirm you keep Lance and don't end up holding both.
+- [ ] 9.6 **The core rule: one Pokémon can only hold one spot, but a player can hold as many spots as they want.** Claim a throne (say Will) with one mon, then draft a genuinely *different* mon and claim a *different* throne (say Bruno) with it — confirm this succeeds and you end up holding **both** at once, each with its own mon. (This was broken — it used to incorrectly say you already held the higher spot and block the claim.)
+- [ ] 9.7 Now test the part that's supposed to still restrict things: if the *same* mon (not a new draft) somehow ends up eligible for two different spots, confirm claiming the higher one vacates the lower one for that same mon — a single Pokémon still can't hold two spots at once.
+- [ ] 9.8 If you can arrange it with a second account: have someone else hold a throne, then take it from them with a mon that also holds a *different*, higher throne — confirm the person you beat either gets bumped down to the vacated lower spot (if they're human) or it reverts to a fresh NPC (if they were the NPC).
+- [ ] 9.9 From the Elite 4 status screen, tap **"History"** on any throne — confirm each row has a **🔍 Inspect** button showing that historical champion's types/stats/moves read-only, same as the Daily Draft's Inspect feature.
+- [ ] 9.10 On the Elite 4 status screen, check that the descriptive paragraph at the top ("Challenge the Elite 4 battles Will, Koga...") is actually centered on the screen on a wide/desktop window, not just centered within its own narrower text box off to one side.
 
 ## 10. Daily Puzzle
 
