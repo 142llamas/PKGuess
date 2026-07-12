@@ -1,5 +1,5 @@
 /**
- * @file tools/test/engine.test.mjs 
+ * @file tools/test/engine.test.mjs
  * @version 1.0.0
  * Unit tests for the guess-game engine (docs/js/lib/engine.js): name
  * normalization, round setup from a difficulty, clue purchase deducting points,
@@ -273,5 +273,42 @@ export default function (t) {
     t.eq(SCORE_MULTIPLIERS.clueMode.choose, 0.8, 'Choose multiplier is locked at 0.8');
     t.eq(SCORE_MULTIPLIERS.clueMode.random, 1.6, 'Random multiplier is locked at 1.6');
     t.eq(SCORE_MULTIPLIERS.catDiversity.cycle, 1.5, 'Cycle-All multiplier is locked at 1.5');
+  }
+
+  t.section('engine.js — "Reveal One Example Moveset" never repeats a move within one reveal (bug report)');
+  {
+    // Mr. Mime's REAL movelist data lists Thunderbolt twice (once via an RBY
+    // TM import, once via Move Tutor) -- confirmed directly in
+    // docs/data/movelist-gen2.json. This is exactly the shape that produced
+    // the reported bug: a shuffled, undeduplicated pool could show the same
+    // move twice in one "example moveset." Use the REAL data, not a
+    // synthetic case, so this test would have caught the actual bug.
+    const movelist = load('../../docs/data/movelist-gen2.json');
+    const mrMimeMoves = movelist['mr. mime'] || movelist['mr.mime'] || movelist['mrmime'];
+    t.ok(Array.isArray(mrMimeMoves) && mrMimeMoves.filter((m) => m.move === 'Thunderbolt').length >= 2,
+      'sanity check: Mr. Mime\'s real movelist data genuinely lists Thunderbolt twice (confirms this test exercises the real reported scenario, not a hypothetical one)');
+
+    const mrMime = gen2.pokedex.find((p) => p.name === 'Mr. Mime');
+    t.ok(!!mrMime, 'Mr. Mime exists in the Gen 2 pokedex');
+    const r = new PokeGuessRound({ genData: gen2, movelist, rng: () => 0 });
+    r.start({ difficultyId: 'normal', mystery: mrMime, guessMode: 'free', clueMode: 'choose' });
+    const pool = r.state.allMovesPool || [];
+    t.ok(pool.includes('Thunderbolt'), 'Thunderbolt is still present in the pool at least once (not accidentally removed entirely)');
+    t.eq(new Set(pool).size, pool.length, 'allMovesPool itself has no duplicate move names (this is the actual fix -- checking it directly, rather than relying on a shuffle randomly placing both original duplicate positions within the same 4-slice, which only has roughly a 0.3% chance per reveal with a 63-move pool and would make this test unreliable as a regression guard)');
+
+    const exampleId = r._exampleId();
+    t.ok(exampleId != null, 'the example-moveset clue id resolves for gen 2');
+
+    // Also spot-check several actual reveals, since that's the player-visible
+    // behavior — each individual reveal must still never repeat a move.
+    let checkedAtLeastOne = false;
+    for (let i = 0; i < 6; i++) {
+      const res = r.buyClue(exampleId);
+      if (!res.ok) break;
+      const shown = String(res.value).split('/').map((x) => x.trim()).filter(Boolean);
+      checkedAtLeastOne = true;
+      t.eq(new Set(shown).size, shown.length, `reveal #${i + 1} of the example moveset has no repeated move (got: "${res.value}")`);
+    }
+    t.ok(checkedAtLeastOne, 'at least one reveal of the example moveset was actually checked');
   }
 }

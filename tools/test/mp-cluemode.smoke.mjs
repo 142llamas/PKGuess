@@ -177,8 +177,12 @@ console.log('— Multi-use clue re-offer: a multi-use clue survives its first re
     // intentionally wrong guess to move to the NEXT player's turn (which
     // starts fresh in the reveal phase), so the loop keeps accumulating
     // reveals against the shared mystery across many simulated turns.
+    // Must be a REAL Pokemon name (not just any string) now that guesses are
+    // validated against the actual list — "Metapod" is vanishingly unlikely
+    // to be the random mystery, and if it somehow is, that's still a valid
+    // (correct) guess, not a broken test.
     const gi = mount.querySelector('#mp-guess');
-    if (gi) gi.value = 'Definitely-Not-The-Mystery-Xyzzy';
+    if (gi) gi.value = 'Metapod';
     const guessBtn = [...mount.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Guess');
     if (guessBtn) { click(guessBtn); await tick(); }
   }
@@ -212,7 +216,7 @@ console.log('— #9: GTR yields exactly ONE reveal per turn, no skip option, the
   // the mandatory single-reveal phase.
   ok(!mount.querySelector('#mp-guess') || ![...mount.querySelectorAll('button')].some((b) => b.textContent.includes('Skip guess')), 'GTR\u2019s guess phase has no "Skip guess" option (removed \u2014 it undermined the guess-first design)');
   const gi = mount.querySelector('#mp-guess');
-  if (gi) gi.value = 'Definitely-Not-The-Mystery-Xyzzy';
+  if (gi) gi.value = 'Metapod';
   click([...mount.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Guess'));
   await tick();
   ok(mount.textContent.includes('reveal a clue'), 'after a wrong guess in GTR, the SAME player is prompted to reveal (mandatory)');
@@ -246,6 +250,30 @@ console.log('\n— Requested: "Reveal Full Stat Spread" shows labeled stats (HP/
     ok(!!grid, 'revealing it renders a .stat-spread-grid, not a bare string');
     const labels = [...(grid ? grid.querySelectorAll('.sname') : [])].map((e) => e.textContent);
     ok(labels.includes('HP') && labels.includes('Atk') && labels.includes('SpA'), `stat abbreviations are shown above the values (got: ${labels.join(',')})`);
+  }
+  ctrl.destroy();
+}
+
+console.log('\n— Requested: hot-seat rejects a guess that isn\u2019t a real Pok\u00e9mon name (bug report) —');
+{
+  const { mount, ctrl } = await startGame({ clueMode: 'choose' });
+  const card = [...mount.querySelectorAll('#mp-clue-panel .clue-btn')].find((c) => !c.className.includes('unavailable') && !c.className.includes('cant-afford'));
+  click(card);
+  await tick();
+  const poolBefore = mount.querySelector('#mp-pool-pts')?.textContent;
+  const namePillBefore = mount.querySelector('.mp-active-player')?.textContent || '';
+  const gi = mount.querySelector('#mp-guess');
+  ok(!!gi, 'a guess input is present');
+  if (gi) {
+    gi.value = 'Xyzzyplorp Not A Real Pokemon';
+    click([...mount.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Guess'));
+    await tick();
+    const fb = mount.querySelector('#mp-feedback');
+    ok(!!fb && fb.className.includes('error'), 'an invalid guess marks the feedback element as an error (this test\u2019s mocked synchronous setTimeout clears the message text itself immediately, unlike a real browser\u2019s 2200ms delay, so the persisting error class is the reliable signal here)');
+    const namePillAfter = mount.querySelector('.mp-active-player')?.textContent || '';
+    eq(namePillAfter, namePillBefore, 'the invalid guess does NOT advance the turn (unlike a real wrong guess, which would)');
+    const poolAfter = mount.querySelector('#mp-pool-pts')?.textContent;
+    eq(poolAfter, poolBefore, 'the invalid guess does NOT deduct from the shared point pool');
   }
   ctrl.destroy();
 }

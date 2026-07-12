@@ -143,7 +143,13 @@ async function draftFresh(fb, identity) {
  *  results-table rows + whether a claim button is present. */
 async function runGauntletFromDraftComplete() {
   click(btn('Challenge the Elite 4'));
-  await wait(150);
+  // Poll rather than a fixed wait: the gauntlet runs up to 5 sequential
+  // N=501 battle simulations, which can occasionally take longer than a
+  // short fixed delay under system load -- this was causing intermittent,
+  // environment-dependent failures unrelated to any actual product bug.
+  let guard = 0;
+  while (!document.querySelector('.lb-table tbody tr') && !document.querySelector('.summary-card') && guard++ < 50) await wait(50);
+  await wait(50); // settle
   const rows = [...q('.lb-table tbody tr')].map((tr) => {
     const cells = [...tr.querySelectorAll('td')];
     return { tier: cells[0]?.textContent.trim(), opponent: cells[1]?.textContent.trim(), result: cells[2]?.textContent.trim() };

@@ -93,6 +93,17 @@ ok(snap.status === 'playing' && snap.roundNum === 1, 'game started, round 1');
 ok(snap.pool === snap.settings.poolStart, 'pool initialized');
 ok(snap.turnOrder[snap.currentTurnPos] === 'uidA', 'A acts first');
 
+// Derive the mystery now (not just later for B's correct guess) so A's
+// "wrong guess" below can use a guaranteed-different REAL Pokemon name --
+// guesses are now validated against the actual name list, so an invalid
+// string like "Magikarp-not-the-answer" would be rejected outright rather
+// than registering as a wrong guess.
+const { buildEngine: buildEngineEarly, seedFor: seedForEarly } = await import('../../docs/js/lib/mp-rules.js');
+const { poolFilterForData: poolFilterForDataEarly } = await import('../../docs/js/lib/engine.js');
+const gen2DataEarly = JSON.parse(readFileSync(dataPath('../../docs/data/gen2.json'), 'utf8'));
+const engEarly = buildEngineEarly({ data: gen2DataEarly, movelist: {}, seed: seedForEarly(snap.seed, snap.roundNum), poolFilter: poolFilterForDataEarly(snap.settings.gen), poolStart: snap.settings.poolStart });
+const wrongGuessName = gen2DataEarly.pokedex.find((p) => p.name !== engEarly.mystery.name).name;
+
 // A reveals a clue (choose mode, RTG): pick first available clue card in A's view
 let aClue = [...q('A', '.online-clue.available')][0];
 ok(!!aClue, 'A sees available clue cards on its turn');
@@ -108,7 +119,7 @@ ok([...q('B', '.online-clue.revealed')].length === 1, 'B sees the same revealed 
 // A makes a WRONG guess → turn passes to B
 const aInput = document.getElementById('A').querySelector('#online-typing');
 ok(!!aInput, 'A has a guess input');
-aInput.value = 'Magikarp-not-the-answer';
+aInput.value = wrongGuessName;
 click(findBtn('A', 'Guess')); await settle();
 snap = await db.get(`/rooms/${roomCode}`);
 ok(snap.turnOrder[snap.currentTurnPos] === 'uidB', 'after A wrong guess, B is active');
@@ -121,11 +132,8 @@ click(bClue); await settle();
 snap = await db.get(`/rooms/${roomCode}`);
 ok(snap.phase === 'guess', 'B advanced to guess phase after revealing');
 
-// B guesses correctly: derive the mystery from the seed exactly like the client
-const { buildEngine, seedFor } = await import('../../docs/js/lib/mp-rules.js');
-const { poolFilterForData } = await import('../../docs/js/lib/engine.js');
-const eng = buildEngine({ data: JSON.parse(readFileSync(dataPath('../../docs/data/gen2.json'), 'utf8')), movelist: {}, seed: seedFor(snap.seed, snap.roundNum), poolFilter: poolFilterForData(snap.settings.gen), poolStart: snap.settings.poolStart });
-const answer = eng.mystery.name;
+// B guesses correctly: mystery already derived earlier (same round, same mystery)
+const answer = engEarly.mystery.name;
 const bInput = document.getElementById('B').querySelector('#online-typing');
 ok(!!bInput, 'B has a guess input on its turn');
 bInput.value = answer;
@@ -351,8 +359,13 @@ console.log('\n— #19: online GTR after a turn-expiry — exactly one reveal, t
   ok(sg.phase === 'guess', 'G starts in the guess phase (GTR)');
 
   // G guesses wrong \u2192 mandatory single-reveal phase, SAME player.
+  const { buildEngine: buildEngineG, seedFor: seedForG } = await import('../../docs/js/lib/mp-rules.js');
+  const { poolFilterForData: poolFilterForDataG } = await import('../../docs/js/lib/engine.js');
+  const gen2DataG = JSON.parse(readFileSync(dataPath('../../docs/data/gen2.json'), 'utf8'));
+  const engG = buildEngineG({ data: gen2DataG, movelist: {}, seed: seedForG(sg.seed, sg.roundNum), poolFilter: poolFilterForDataG(sg.settings.gen), poolStart: sg.settings.poolStart });
+  const wrongGuessNameG = gen2DataG.pokedex.find((p) => p.name !== engG.mystery.name).name;
   const gInput = document.getElementById('G').querySelector('#online-typing');
-  gInput.value = 'Magikarp-not-the-answer';
+  gInput.value = wrongGuessNameG;
   click(findBtn('G', 'Guess')); await settle();
   sg = await db.get(`/rooms/${codeG}`);
   ok(sg.phase === 'reveal', 'a wrong guess in GTR moves G into the reveal phase');
@@ -491,6 +504,50 @@ console.log('\n— Requested: "Reveal Full Stat Spread" shows labeled stats (HP/
     ok(labels.includes('HP') && labels.includes('Atk') && labels.includes('SpA'), `stat abbreviations are shown above the values (got: ${labels.join(',')})`);
   }
   L.destroy(); M.destroy();
+}
+
+console.log('\n— Requested: online rejects a guess that isn\u2019t a real Pok\u00e9mon name (bug report) —');
+{
+  const idN = { uid: 'uidN', name: 'Nurse Joy' };
+  const idO = { uid: 'uidO', name: 'Officer Jenny' };
+  const nDiv = document.createElement('div'); nDiv.id = 'N'; document.body.appendChild(nDiv);
+  const oDiv = document.createElement('div'); oDiv.id = 'O'; document.body.appendChild(oDiv);
+  const N = createOnline({ mount: nDiv, config: {}, data: gen2Data, params: mkParams(idN), onExit: () => {} });
+  const O = createOnline({ mount: oDiv, config: {}, data: gen2Data, params: mkParams(idO), onExit: () => {} });
+  await settle();
+  click(findBtn('N', 'Create a room')); await settle();
+  click(findBtn('N', 'Create room')); await settle();
+  const codeInv = Object.keys(await db.get('/rooms')).find((k) => !['J', 'K'].includes(k));
+  const codeInvActual = document.getElementById('N').querySelector('.online-code')?.textContent;
+  click(findBtn('O', 'Join with a code')); await settle();
+  const codeInputInv = document.getElementById('O').querySelector('input');
+  codeInputInv.value = codeInvActual; codeInputInv.dispatchEvent(new window.Event('input', { bubbles: true }));
+  click(findBtn('O', 'Join')); await settle();
+  click(findBtn('N', 'Start game')); await settle();
+  let sInv = await db.get(`/rooms/${codeInvActual}`);
+  const activeMountInv = sInv.turnOrder[sInv.currentTurnPos] === 'uidN' ? 'N' : 'O';
+  const otherMountInv = activeMountInv === 'N' ? 'O' : 'N';
+
+  // Reveal a clue first so RTG advances to the guess phase.
+  const clueInv = [...document.getElementById(activeMountInv).querySelectorAll('.online-clue.available')][0];
+  ok(!!clueInv, 'the active player sees an available clue to reveal first');
+  click(clueInv); await settle();
+  sInv = await db.get(`/rooms/${codeInvActual}`);
+  ok(sInv.phase === 'guess', 'advanced to the guess phase');
+  const poolBeforeInv = sInv.pool;
+
+  const guessInputInv = document.getElementById(activeMountInv).querySelector('#online-typing');
+  ok(!!guessInputInv, 'the active player has a guess input');
+  guessInputInv.value = 'Not A Real Pokemon At All';
+  click([...document.getElementById(activeMountInv).querySelectorAll('button')].find((b) => b.textContent.trim() === 'Guess'));
+  await settle();
+  const fbInv = document.getElementById(activeMountInv).querySelector('#online-guess-feedback');
+  ok(!!fbInv && fbInv.className.includes('error'), 'an invalid guess is flagged as an error, not silently accepted');
+  const sAfterInv = await db.get(`/rooms/${codeInvActual}`);
+  ok(sAfterInv.turnOrder[sAfterInv.currentTurnPos] === sInv.turnOrder[sInv.currentTurnPos], 'the invalid guess does NOT advance the turn (unlike a real wrong guess, which would)');
+  ok(sAfterInv.pool === poolBeforeInv, 'the invalid guess does NOT deduct from the shared pool');
+  ok(!(sAfterInv.guessLog && sAfterInv.guessLog.length), 'the invalid guess is never written to the room\u2019s guess log at all');
+  N.destroy(); O.destroy();
 }
 
 A.destroy(); B.destroy();

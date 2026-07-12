@@ -298,6 +298,13 @@ console.log('\n— Requested: Safari Zone correctly ends the game (summary scree
   const summaryText = mount.textContent;
   ok(summaryText.includes('Caught') && summaryText.includes('Budget') && summaryText.includes('Spent'), 'Safari: the summary shows Caught/Budget/Spent stats');
   ok(!summaryText.includes('NaN') && !summaryText.includes('undefined'), 'Safari: none of the summary stats are NaN/undefined (would indicate the variable-ordering bug is still present in some form)');
+  // Requested: the summary lists every caught/run-from mon by name, and the
+  // LAST mon (the one the player was on when points ran out via a wrong
+  // guess, never explicitly caught or run from) counts as "run from" too.
+  ok(summaryText.includes('Ran From'), 'Safari: the summary has a "Ran From" section');
+  ok(summaryText.includes('Ran From (1)') || summaryText.includes('Ran From (0)') === false, 'Safari: the mon the game ended on (never caught, never explicitly run from — only ever wrong-guessed) is counted in "Ran From", not silently dropped from the summary entirely');
+  const monChips = [...mount.querySelectorAll('.sf-mon-chip')];
+  ok(monChips.length >= 1, 'Safari: at least one named mon chip is shown (the one the game ended on)');
   ctrl.destroy();
 }
 
@@ -353,6 +360,72 @@ console.log('\n— Requested: random clues (Bait/Rock) never bring Safari\u2019s
   await tick();
   const afterBait = budgetNow();
   ok(Number.isFinite(afterBait) && afterBait >= 1, `Safari: clicking Bait when its cost exactly equals the remaining budget does NOT zero it out (budget after: ${afterBait}) \u2014 the safeguard excludes a clue whose cost would leave less than 1 point`);
+  ctrl.destroy();
+}
+
+console.log('\n— Requested: Safari post-game summary lists Caught and Ran From Pok\u00e9mon by name —');
+{
+  const clickEl = (n) => n && n.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  const mod = await import('../../docs/js/modes/safari.js');
+  const mount = mk();
+  const ctrl = mod.createSafari({ mount, config: {}, data: gen2, params: { gen: 2, modeId: 'safari', rng: () => 0 }, onExit: () => {} });
+  await tick();
+  const budgetInput = mount.querySelector('#sf-start-pts');
+  ok(budgetInput && budgetInput.min === '1', `Requested: the starting-budget input's minimum is 1 (was 50), so there's no need to document the 50-999 range in the UI (got: ${budgetInput?.min})`);
+  if (budgetInput) { budgetInput.value = '50'; budgetInput.dispatchEvent(new window.Event('input', { bubbles: true })); }
+  clickEl([...mount.querySelectorAll('button')].find((b) => b.textContent.includes('Start') || b.textContent.includes('Enter the Safari Zone')));
+  await tick();
+
+  // Identify the current mystery reliably (rather than brute-forcing up to
+  // 251 names) by buying the Full Stat Spread clue and cross-referencing
+  // the exact stat line against the real pokedex data.
+  const identifyMystery = () => {
+    const grid = mount.querySelector('.stat-spread-grid');
+    if (!grid) return null;
+    const vals = [...grid.querySelectorAll('.sval')].map((e) => e.textContent.trim());
+    const line = vals.join('/');
+    return gen2.pokedex.find((p) => p.fullStats === line)?.name || null;
+  };
+  const buySpreadAndIdentify = async () => {
+    const spreadBtn = [...mount.querySelectorAll('.clue-btn')].find((b) => b.textContent.includes('Reveal Full Stat Spread') && !b.className.includes('unavailable') && !b.className.includes('cant-afford'));
+    if (!spreadBtn) return null;
+    clickEl(spreadBtn);
+    await tick();
+    return identifyMystery();
+  };
+
+  // Mon #1: catch it correctly.
+  const mon1 = await buySpreadAndIdentify();
+  ok(!!mon1, 'identified mon #1 via its stat spread');
+  const guessInput = () => mount.querySelector('#sf-guess');
+  const guessBtn = () => [...mount.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Guess') || mount.querySelector('.guess-btn');
+  if (mon1) { guessInput().value = mon1; clickEl(guessBtn()); await tick(); }
+
+  // Mon #2: run from it deliberately.
+  const mon2 = await buySpreadAndIdentify();
+  ok(!!mon2 && mon2 !== mon1, 'identified a genuinely different mon #2');
+  clickEl([...mount.querySelectorAll('button')].find((b) => b.textContent.includes('Run')));
+  await tick();
+
+  // Mon #3: let the budget run out mid-mystery (never caught, never
+  // explicitly run from) via repeated wrong guesses -- this is the
+  // requested edge case: it should still show up in "Ran From".
+  const mon3 = await buySpreadAndIdentify();
+  ok(!!mon3 && mon3 !== mon1 && mon3 !== mon2, 'identified a genuinely different mon #3');
+  let guard = 0;
+  while (!mount.querySelector('.summary-container') && guard++ < 80) {
+    guessInput().value = mon3 === 'Metapod' ? 'Kakuna' : 'Metapod'; // guaranteed wrong
+    clickEl(guessBtn());
+    await tick();
+  }
+  ok(!!mount.querySelector('.summary-container'), 'the game actually ended (points ran out)');
+
+  const summaryText = mount.textContent;
+  ok(summaryText.includes(`Caught (1)`), 'exactly one mon recorded as Caught');
+  ok(summaryText.includes(mon1), `Caught list includes mon #1 (${mon1})`);
+  ok(summaryText.includes(`Ran From (2)`), 'exactly two mons recorded as Ran From (the explicit run, plus the one active when points ran out)');
+  ok(summaryText.includes(mon2), `Ran From list includes the explicitly-run mon #2 (${mon2})`);
+  ok(summaryText.includes(mon3), `Ran From list includes mon #3 (${mon3}) \u2014 the requested edge case: the game ended mid-mystery (a wrong guess used the last point), so it counts as run from even though "Run" was never clicked for it`);
   ctrl.destroy();
 }
 
