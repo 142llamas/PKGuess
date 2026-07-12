@@ -1,8 +1,17 @@
 /**
  * @file        js/lib/engine.js
- * @version     1.3.1
- * @updated     2026-07-05
+ * @version     1.3.2
+ * @updated     2026-07-11
  * @changelog
+ *   1.3.2 — Fixed a real bug report: "Reveal One Example Moveset" could show
+ *           the same move twice (e.g. Mr. Mime's real data lists Thunderbolt
+ *           twice — once via an RBY TM import, once via Move Tutor — and 6
+ *           other species have similar source-duplicated moves). allMovesPool
+ *           pools moves across every source (unlike tmhms/eggs just above it,
+ *           which already dedupe since they each filter to ONE source), so
+ *           without its own dedup, a shuffled sample could repeat a move.
+ *           Deduplicated by move name, matching the existing tmhms/eggs
+ *           pattern.
  *   1.3.1 — #5: added SCORE_MULTIPLIERS + computeScoreMultiplier — Single
  *           Player leaderboard scores now stack a multiplier for harder
  *           SETTINGS (Forced Reveal, Random/By-category clue selection,
@@ -242,7 +251,15 @@ export class PokeGuessRound {
     const comps = [poke.compMoveset1, poke.compMoveset2, poke.compMoveset3, poke.compMoveset4];
     s.compMovesetsPool = shuffleArr(comps.map((m, i) => (m && m.trim() ? i : -1)).filter((i) => i >= 0), this.rng);
 
-    s.allMovesPool = allMoves.map((m) => m.move).filter(Boolean);
+    // Deduplicated by move name, matching tmhms/eggs above -- a handful of
+    // species (e.g. Mr. Mime learning Thunderbolt via both an RBY-TM import
+    // AND a Move Tutor) list the same move twice in the raw data, once per
+    // source. tmhms/eggs already dedupe since they filter to ONE source
+    // each; this pool intentionally spans every source, so without its own
+    // dedup, a shuffled sample could show the same move twice in one
+    // "example moveset" -- which should never happen regardless of how many
+    // ways a move can be learned.
+    s.allMovesPool = [...new Set(allMoves.map((m) => m.move).filter(Boolean))];
     if (!s.allMovesPool.length && poke.exampleMoveset) {
       s.allMovesPool = poke.exampleMoveset.split('/').map((x) => x.trim()).filter(Boolean);
     }
