@@ -1,8 +1,19 @@
 /**
  * @file        js/modes/safari.js
- * @version     1.3.0
- * @updated     2026-07-09
+ * @version     1.4.0
+ * @updated     2026-07-11
  * @changelog
+ *   1.4.0 — Two requested changes:
+ *             \u2022 Post-game summary now lists every Caught and Ran From mon
+ *               by name (sf.caughtNames/sf.ranNames, tracked alongside the
+ *               existing count). Whatever mon was active when the game
+ *               ended, if not already recorded as caught or explicitly run
+ *               from, now counts as run from too — a wrong guess or clue
+ *               purchase that used the last point, not just clicking Run,
+ *               shows up in the list.
+ *             \u2022 Lowered the starting-budget minimum from 50 to 1 (was
+ *               50-999) — avoids needing to document the range anywhere in
+ *               the UI, per the simpler of the two options discussed.
  *   1.3.0 — Fixed a real, significant bug: endGame() referenced `done.caught`/
  *           `done.startPts`/`ptsUsed` inside the submitScore() call BEFORE any
  *           of those three were actually declared later in the same function
@@ -83,7 +94,7 @@ export function createSafari({ mount, config, data, params = {}, onExit }) {
       el('p', { class: 'sf-intro' }, 'One shared point budget across many Pok\u00e9mon. Spend wisely \u2014 your score is how many you catch before the points run out.'),
       el('div', { class: 'sp-custom-panel' },
         el('label', { class: 'sp-custom-field' }, 'Starting budget',
-          el('input', { type: 'number', id: 'sf-start-pts', value: '200', min: '50', max: '999' }))),
+          el('input', { type: 'number', id: 'sf-start-pts', value: '200', min: '1', max: '999' }))),
       el('div', { class: 'sp-start-row' },
         el('button', { class: 'btn-secondary', onClick: () => onExit && onExit() }, '\u2190 Back'),
         el('button', { class: 'btn-primary', onClick: begin }, 'Enter the Safari Zone \u25b6')),
@@ -91,9 +102,9 @@ export function createSafari({ mount, config, data, params = {}, onExit }) {
   }
 
   function begin() {
-    const startPts = clampInt(root.querySelector('#sf-start-pts')?.value, 50, 999, 200);
+    const startPts = clampInt(root.querySelector('#sf-start-pts')?.value, 1, 999, 200);
     const pool = shuffle(data.pokedex.filter((p) => matchesPool(p.num, poolFilter)));
-    sf = { startPts, budget: startPts, pool, idx: 0, caught: 0 };
+    sf = { startPts, budget: startPts, pool, idx: 0, caught: 0, caughtNames: [], ranNames: [] };
     nextMon();
   }
 
@@ -292,6 +303,7 @@ export function createSafari({ mount, config, data, params = {}, onExit }) {
 
   function run() {
     if (!sf || round.gameOver) return;
+    sf.ranNames.push(round.mystery.name);
     markSeen(round.mystery.name);
     feedback(`You ran! It was ${round.mystery.name}.`, '#e0a060');
     setTimeout(() => { if (sf) nextMon(); }, 1000);
@@ -309,6 +321,7 @@ export function createSafari({ mount, config, data, params = {}, onExit }) {
     }
     if (normalizeName(val) === normalizeName(round.mystery.name)) {
       sf.caught++;
+      sf.caughtNames.push(round.mystery.name);
       markCaught(round.mystery.name);
       sf.budget = round.pointsRemaining;
       feedback(`\u2705 Caught ${round.mystery.name}!`, '#50cc80');
@@ -353,12 +366,24 @@ export function createSafari({ mount, config, data, params = {}, onExit }) {
     if (!sf) return;
     const exhausted = sf.idx >= sf.pool.length && round.pointsRemaining > 0;
     if (round.mystery && !round.gameOver) markSeen(round.mystery.name);
+    // Requested: whatever mon the player was on when the game ended, IF it
+    // isn't already recorded as caught or explicitly run from, counts as run
+    // from too — "anything other than successfully catching the Pokemon
+    // with the final point" (a guess that missed, or a clue purchase that
+    // used up the last point) should show up in the run-from list, not just
+    // vanish from the summary entirely.
+    if (round.mystery && !sf.caughtNames.includes(round.mystery.name) && !sf.ranNames.includes(round.mystery.name)) {
+      sf.ranNames.push(round.mystery.name);
+    }
     const done = sf; sf = null;
     const ptsUsed = done.startPts - round.pointsRemaining;
     const eff = done.startPts > 0 ? (done.caught / done.startPts * 100).toFixed(1) : '0';
     // Submit to leaderboard
     const gen = data.id || 'gen2';
     submitScore(gen, 'safari', { score: done.caught, detail: `budget:${done.startPts} spent:${ptsUsed}` }).catch(() => {});
+    const nameList = (names) => names.length
+      ? el('div', { class: 'sf-mon-list' }, ...names.map((n) => el('span', { class: 'sf-mon-chip' }, n)))
+      : el('p', { class: 'sf-intro' }, 'None.');
     clear(root).append(
       el('div', { class: 'summary-container' },
         el('div', { class: 'summary-card' },
@@ -366,6 +391,8 @@ export function createSafari({ mount, config, data, params = {}, onExit }) {
           el('p', { class: 'sf-intro' }, exhausted ? 'You caught everything in the pool!' : 'You ran out of points.'),
           el('div', { class: 'stats-grid' },
             stat(done.caught, 'Caught'), stat(done.startPts, 'Budget'), stat(ptsUsed, 'Spent'), stat(`${eff}%`, 'Per 100 pts')),
+          el('div', { class: 'mp-form-section' }, el('div', { class: 'sp-section-title', style: { fontSize: '11px' } }, `\uD83C\uDFC6 Caught (${done.caughtNames.length})`), nameList(done.caughtNames)),
+          el('div', { class: 'mp-form-section' }, el('div', { class: 'sp-section-title', style: { fontSize: '11px' } }, `\uD83C\uDFC3 Ran From (${done.ranNames.length})`), nameList(done.ranNames)),
           el('div', { class: 'summary-actions' },
             el('button', { class: 'btn-primary', onClick: showConfig }, 'Play again'),
             el('button', { class: 'btn-secondary', onClick: () => onExit && onExit() }, 'Main menu')))));

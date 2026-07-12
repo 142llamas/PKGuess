@@ -1,8 +1,16 @@
 /**
  * @file        js/modes/multiplayer.js
- * @version     1.3.3
- * @updated     2026-07-09
+ * @version     1.3.4
+ * @updated     2026-07-11
  * @changelog
+ *   1.3.4 — Fixed a real bug report: doGuess() never validated the guess
+ *           against the actual Pokemon name list, unlike single.js/safari.js
+ *           (which already had this check). Any text was accepted as a
+ *           valid-but-wrong guess, incrementing guess counts and deducting
+ *           the shared pool's guess cost even for nonsense input. Now shows
+ *           "Pick a Pokemon from the list" and returns without penalty,
+ *           matching the established pattern. race.js/victoryroad.js already
+ *           had this check; online.js had the same gap, fixed alongside this.
  *   1.3.3 — Fixed: the "Reveal Full Stat Spread" clue showed a bare number
  *           string with no HP/Atk/Def/... labels, matching the same fix in
  *           single.js/safari.js/online.js. Now uses the shared statSpreadEl.
@@ -536,6 +544,15 @@ export function createMultiplayer({ mount, config, data, params = {}, onExit }) 
     if (mp.phase !== 'guess' || mp.gameOver) return;
     closeAuto();
     const val = String(name || '').trim(); if (!val) return;
+    // Bug fix: must be a real Pokemon from this gen's list, matching
+    // single.js/safari.js's existing validation -- any text was previously
+    // accepted as a valid (if wrong) guess, incrementing guess counts and
+    // deducting the shared pool's guess cost even for nonsense input.
+    if (!mp.round.allNames.some((n) => normalizeName(n) === normalizeName(val))) {
+      const fb = root.querySelector('#mp-feedback');
+      if (fb) { fb.className = 'guess-feedback error'; fb.textContent = 'Pick a Pok\u00e9mon from the list.'; setTimeout(() => { if (fb) fb.textContent = ''; }, 2200); }
+      return;
+    }
     const cur = mp.players[mp.turnOrder[mp.currentTurnPos]];
     cur.guessesTotal++;
     (mp._roundGuesses ||= []).push({ pid: cur.id, name: val, correct: normalizeName(val) === normalizeName(mp.round.mystery.name) });

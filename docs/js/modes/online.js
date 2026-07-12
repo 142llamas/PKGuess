@@ -1,8 +1,14 @@
 /**
  * @file        docs/js/modes/online.js
- * @version     1.6.1
- * @updated     2026-07-09
+ * @version     1.6.2
+ * @updated     2026-07-11
  * @changelog
+ *   1.6.2 — Fixed the same guess-validation gap as multiplayer.js: doGuess()
+ *           never checked the guess against the actual Pokemon name list.
+ *           Added a dedicated #online-guess-feedback element (there wasn't
+ *           one during active gameplay before, unlike single.js/safari.js/
+ *           multiplayer.js's existing feedback slots) so the "Pick a
+ *           Pokemon from the list" message has somewhere to show.
  *   1.6.1 — Fixed: the "Reveal Full Stat Spread" clue showed a bare number
  *           string with no HP/Atk/Def/... labels, matching the same fix in
  *           single.js/safari.js/multiplayer.js. Now uses statSpreadEl.
@@ -539,6 +545,7 @@ export function createOnline({ mount, config, data, params = {}, onExit }) {
       const input = el('input', { id: 'online-typing', class: 'guess-input', type: 'text', placeholder: 'Which Pok\u00e9mon?', autocomplete: 'off', list: 'online-names', onKeydown: (e) => { if (e.key === 'Enter') doGuess(input.value); } });
       put(block,
         el('div', { class: 'guess-input-wrap' }, input, el('button', { class: 'guess-btn', onClick: () => doGuess(input.value) }, 'Guess')),
+        el('div', { class: 'guess-feedback', id: 'online-guess-feedback' }),
         el('datalist', { id: 'online-names' }, ...ds.data.pokedex.map((p) => el('option', { value: p.name }))));
       setTimeout(() => input.focus(), 30);
     }
@@ -663,6 +670,14 @@ export function createOnline({ mount, config, data, params = {}, onExit }) {
     if (!isMyTurn() || room.phase !== 'guess') return;
     const val = String(name || '').trim(); if (!val) return;
     const eng = localEngine();
+    // Bug fix: must be a real Pokemon from this gen's list, matching
+    // single.js/safari.js/multiplayer.js's validation -- any text was
+    // previously accepted as a valid (if wrong) guess.
+    if (eng && eng.round && !eng.round.allNames.some((n) => normalizeName(n) === normalizeName(val))) {
+      const fb = root.querySelector('#online-guess-feedback');
+      if (fb) { fb.className = 'guess-feedback error'; fb.textContent = 'Pick a Pok\u00e9mon from the list.'; setTimeout(() => { if (fb) fb.textContent = ''; }, 2200); }
+      return;
+    }
     const out = guessOutcome({ pool: room.pool }, val, eng.mystery.name, room.settings.guessCost);
     const log = [...(room.guessLog || []), { uid: me.uid, name: val, correct: out.correct }];
     if (out.correct) {
