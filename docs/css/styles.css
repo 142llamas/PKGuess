@@ -1,8 +1,23 @@
 /*
  * @file        docs/css/styles.css
- * @version     1.14.3
- * @updated     2026-07-05
+ * @version     1.14.5
+ * @updated     2026-07-11
  * @changelog
+*   1.14.5 — Fixed a real, confirmed bug: .vr-clue-ribbon had TWO conflicting
+*           definitions — an older one (flex-direction:column, forcing one
+*           chip per row unconditionally) that silently competed with a
+*           newer one (flex-wrap:wrap) added later in the file. The older
+*           one's column layout was winning in practice, which is exactly
+*           what was reported ("1 clue chip per row" on desktop). Removed
+*           the stale duplicate, added a flex-basis to .vr-clue-chip so
+*           multiple shorter chips can actually pack side-by-side on wider
+*           screens, and gave the stat-spread variant an explicit full-width
+*           override (it shows 6 stat values, so it should always span the
+*           row). Also removed an entirely dead, never-applied
+*           .vr-ribbon-group/.vr-ribbon-chips-row block left over from an
+*           earlier, abandoned grouped-chips design. NOTE: .vr-clue-ribbon's
+*           OWN @version field had not actually been bumped for the previous
+*           1.14.4 entry despite the changelog claiming it — fixed that too.
 *   1.14.4 — Fixed .sf-intro's centering: max-width without auto left/right
 *           margins meant the block sat left-aligned within a wider parent
 *           on desktop (e.g. the Elite 4 status screen's description text),
@@ -335,6 +350,10 @@ h1,h2,h3{font-family:var(--font-pixel);}
 .stat-row .label{color:var(--text-secondary);font-weight:600;}
 .stat-row .value{font-weight:800;text-align:right;max-width:58%;word-break:break-word;}
 .stats-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:8px;}
+/* Requested: Safari's post-game summary lists every caught/run-from mon by
+   name, not just a count -- a simple wrapping row of name chips. */
+.sf-mon-list{display:flex;flex-wrap:wrap;gap:6px;}
+.sf-mon-chip{background:var(--bg-elevated);border:1px solid var(--border-card);border-radius:var(--radius);padding:4px 10px;font-size:12px;color:var(--text-primary);}
 .stat-box{background:var(--bg-elevated);border-radius:var(--radius);padding:8px;text-align:center;}
 .stat-box .sname{font-size:9px;color:var(--text-secondary);font-weight:700;text-transform:uppercase;}
 .stat-box .sval{font-size:17px;font-weight:900;}
@@ -681,23 +700,11 @@ h1,h2,h3{font-family:var(--font-pixel);}
 .vr-stat-cell{text-align:center;min-width:0;overflow:hidden;}
 .vr-stat-name{font-size:7px;color:var(--text-dim);font-family:var(--font-pixel);display:block;margin-bottom:1px;}
 .vr-stat-val{font-size:10px;font-weight:800;color:var(--text-primary);display:block;}
-.vr-clue-chip.stat-spread{padding:8px 6px;}
+.vr-clue-chip.stat-spread{padding:8px 6px;flex:1 1 100%;}
 /* Larger stat text on desktop where full-width chip has plenty of room */
 @media(min-width:640px){
   .vr-stat-val{font-size:14px;font-weight:900;}
   .vr-stat-name{font-size:8px;}
-}
-/* VR ribbon — category groups */
-.vr-ribbon-group{margin-bottom:10px;}
-.vr-ribbon-group-label{font-family:var(--font-pixel);font-size:8px;opacity:0.75;margin-bottom:4px;padding-left:2px;letter-spacing:0.5px;}
-.vr-ribbon-chips-row{display:flex;flex-wrap:wrap;gap:6px;}
-/* Mobile: full-width chips */
-.vr-ribbon-chips-row .vr-clue-chip{flex:1 1 100%;}
-.vr-ribbon-chips-row .vr-clue-chip.stat-spread{flex:1 1 100%;}
-/* Desktop: chips share the row within their group */
-@media(min-width:640px){
-  .vr-ribbon-chips-row .vr-clue-chip{flex:1 1 calc(50% - 3px);}
-  .vr-ribbon-chips-row .vr-clue-chip.stat-spread{flex:1 1 100%;}
 }
 /* SP unified leaderboard */
 .lb-sp-unified{display:flex;flex-direction:column;gap:8px;margin-bottom:20px;}
@@ -716,8 +723,12 @@ h1,h2,h3{font-family:var(--font-pixel);}
 .cont-guess-area{background:var(--bg-elevated);border-radius:var(--radius);padding:10px;}
 .cont-guess-area .sp-section-title{font-size:9px;}
 /* VR clue ribbon - auto-show clues strip */
-.vr-clue-ribbon{display:flex;flex-direction:column;gap:8px;padding:12px;}
-.vr-clue-chip{background:var(--bg-elevated);border:1px solid var(--border-card);border-radius:var(--radius);padding:10px 14px;font-size:13px;color:var(--text-primary);}
+/* VR clue ribbon chip base styling (layout itself lives in Section F below,
+   with .vr-clue-ribbon/.vr-ribbon-wrap/.vr-no-clues -- was previously ALSO
+   defined here with a conflicting flex-direction:column (one chip per row
+   unconditionally), silently competing with Section F's flex-wrap:wrap.
+   Removed the duplicate; this block now only owns chip-level styling. */
+.vr-clue-chip{background:var(--bg-elevated);border:1px solid var(--border-card);border-radius:var(--radius);padding:10px 14px;font-size:13px;color:var(--text-primary);flex:1 1 220px;min-width:0;}
 .vr-clue-chip .vr-chip-label{font-size:9px;color:var(--text-dim);font-family:var(--font-pixel);margin-bottom:4px;}
 .vr-clue-chip.core{border-color:rgba(255,215,0,0.3);background:rgba(255,215,0,0.06);}
 /* #6i/#6ii/#6iii — merged chips: egg-move list wraps as one inline block; the
@@ -898,6 +909,9 @@ h1,h2,h3{font-family:var(--font-pixel);}
    SECTION E — Safari Zone controller
    ========================================================================= */
 .sf-intro { color: var(--text-secondary); font-size: 13px; line-height: 1.5; margin: 6px auto 14px; max-width: 640px; }
+/* Requested: Safari post-game caught/run-from name lists */
+.sf-mon-list { display:flex; flex-wrap:wrap; gap:6px; }
+.sf-mon-chip { background:var(--bg-elevated); border:1px solid var(--border-card); border-radius:var(--radius); padding:4px 10px; font-size:12px; color:var(--text-primary); }
 .sf-counters { display: flex; align-items: center; gap: 16px; flex: 1; }
 .sf-caught { font-size: 13px; font-weight: 700; color: var(--accent-gold); white-space: nowrap; }
 .sf-actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
