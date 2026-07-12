@@ -708,4 +708,77 @@ Two small things, bundled together since both were about the same shared `.sf-in
 - `tools/test/online.smoke.mjs`
 - `MANIFEST.md`, `CHANGE_TRACKER_v3.md`, `TESTING_CHECKLIST.md`
 
+---
+
+## Phase 6 continued — duplicate-move bug, Safari summary overhaul, VR ribbon layout bug, hot-seat/online guess validation
+
+### Duplicate move in "Reveal One Example Moveset" (bug report)
+
+| Location | Files |
+|---|---|
+| `docs/js/lib/` | `engine.js` (1.3.2) |
+| `tools/test/` | `engine.test.mjs` |
+
+Confirmed against the real data: Mr. Mime's movelist genuinely lists Thunderbolt twice (once via an RBY TM import, once via Move Tutor) — 6 other species have the identical shape (Pidgey's line with Steel Wing, Psyduck's line with Amnesia, Dunsparce with Defense Curl). `allMovesPool` (which the example-moveset clue shuffles and samples from) pools moves across every source, unlike the two pools right above it in the same function (`tmhms`/`eggs`), which already deduplicate — because they each filter down to one specific source first. Without its own dedup, a shuffled sample of `allMovesPool` could show the same move twice. Fixed by deduplicating it the same way.
+
+Worth noting on the testing side: my first version of the regression test tried to reproduce the bug by actually buying the clue and checking the revealed value — but with Mr. Mime's real 63-move pool, the odds of a random shuffle landing both duplicate positions within the same 4-move sample are only about 0.3%, so 50 different seeded RNGs across 8 reveals each never once hit it. Switched to checking the constructed pool directly instead, which is both correct and instant rather than probabilistic.
+
+### Safari Zone: post-game summary now lists every Pokémon by name
+
+| Location | Files |
+|---|---|
+| `docs/js/modes/` | `safari.js` (1.4.0) |
+| `docs/css/` | `styles.css` (new `.sf-mon-list`/`.sf-mon-chip` rules) |
+| `tools/test/` | `modes.smoke.mjs` |
+
+Added `caughtNames`/`ranNames` tracking alongside the existing counts, and the post-game screen now lists both by name. The requested edge case — whatever mon was active when the game ended (a wrong guess or a clue purchase that used the last point, not just an explicit "Run") — now counts as run from too, as long as it isn't already recorded as caught.
+
+Tested by driving a full game against three distinct mons (caught, explicitly run from, and left mid-mystery when points ran out) and confirming all three land in the right list. Identifying each mystery reliably (rather than brute-forcing up to 251 guesses) was done by buying the Full Stat Spread clue and cross-referencing the exact stat line against the real pokedex data.
+
+### Safari Zone: starting-budget minimum lowered to 1
+
+Per the simpler of the two options you raised — the minimum is now 1 (was 50), so there's no 50-999 range that needs documenting anywhere in the setup screen.
+
+### Victory Road: the actual cause of "1 clue chip per row" and long clue names
+
+| Location | Files |
+|---|---|
+| `docs/css/` | `styles.css` (1.14.5) |
+
+Found a genuine, confirmed bug: `.vr-clue-ribbon` had **two conflicting definitions** in the stylesheet — an older one (`flex-direction:column`, unconditionally forcing one chip per row) and a newer one (`flex-wrap:wrap`, intended to let chips pack side-by-side) added later in the file for what looks like the same feature. The older one was winning in practice — which matches "I still see 1 clue chip per row" exactly. Removed the stale duplicate, gave `.vr-clue-chip` a flex-basis so multiple shorter chips can actually share a row on wider screens, and gave the stat-spread variant (which shows 6 values) an explicit full-width override so it doesn't get squeezed. Also removed an entirely dead, never-applied `.vr-ribbon-group`/`.vr-ribbon-chips-row` block left over from an earlier, abandoned grouped-chips design — while investigating, found the file's own `@version` field for this section hadn't actually been bumped for the last changelog entry either, and fixed that.
+
+**Checked the other game modes, as asked:** their clue grids (`.cat-body`, used by Single Player/Hot-seat/Safari) already use a proper CSS grid (`grid-template-columns:repeat(auto-fill,minmax(180px,1fr))`) and pack multiple cards per row correctly — this was a Victory-Road-specific bug, not a shared one.
+
+**On "the full text for immunity and E4/rival/red":** confirmed there's no abbreviated-label mechanism anywhere in the codebase (no shortName/label field in the clue data, no abbreviation logic in any mode) — I don't have evidence this was ever actually built, as opposed to discussed. The layout fix above should already let shorter chips pack together as intended; these two specific clues have genuinely long names that will still take more room than a short one like "Generation." Flagging this rather than guessing at scope (just Victory Road's ribbon? every clue display, including the interactive purchase grid where full names arguably help?) — happy to add actual abbreviations if you'd like, once we're aligned on where.
+
+### Hot-seat and Online: guesses were never validated against the real Pokémon list
+
+| Location | Files |
+|---|---|
+| `docs/js/modes/` | `multiplayer.js` (1.3.4), `online.js` (1.6.2) |
+| `tools/test/` | `mp-cluemode.smoke.mjs`, `online.smoke.mjs` |
+
+Confirmed: `single.js`/`safari.js`/`race.js`/`victoryroad.js` all already validated a guess against the actual name list before treating it as a real (if wrong) attempt — hot-seat multiplayer and Online never did. Any text was accepted as a valid-but-wrong guess, incrementing guess counts and spending the shared pool's guess cost even for nonsense input. Both now show "Pick a Pokémon from the list" and return without any penalty, matching the established pattern. Online didn't even have a feedback slot during active gameplay before (unlike the other three modes) — added one.
+
+Existing tests in both files had been using placeholder strings like `'Definitely-Not-The-Mystery-Xyzzy'`/`'Magikarp-not-the-answer'` to simulate "an intentionally wrong guess" — these are exactly the kind of input the fix now correctly rejects, so those tests needed updating to use real (but guaranteed-different) Pokémon names instead.
+
+### A test-suite reliability fix, found while re-establishing baseline
+
+`throne.smoke.mjs`'s gauntlet-completion helper used a fixed 150ms wait after clicking "Challenge the Elite 4" — the gauntlet runs up to 5 sequential N=501 battle simulations, which occasionally took longer than that under system load, causing intermittent failures unrelated to any actual bug (caught this at the start of this session, before any of the above work). Switched to polling for the results to actually appear.
+
+**Full test tally after this batch:** 925 unit + 491 smoke = 1416 assertions, all green, stable across repeated runs.
+
+### Files changed this batch
+- `docs/js/lib/engine.js`
+- `docs/js/modes/safari.js`
+- `docs/js/modes/multiplayer.js`
+- `docs/js/modes/online.js`
+- `docs/css/styles.css`
+- `tools/test/engine.test.mjs`
+- `tools/test/modes.smoke.mjs`
+- `tools/test/mp-cluemode.smoke.mjs`
+- `tools/test/online.smoke.mjs`
+- `tools/test/throne.smoke.mjs`
+- `MANIFEST.md`, `CHANGE_TRACKER_v3.md`, `TESTING_CHECKLIST.md`
+
 

@@ -24,14 +24,18 @@ player sees.
 - [ ] 1.8 Play a full game, guess correctly or run out of points — go to the **Pokédex**, find that Pokémon, and confirm it now shows as **Caught** (or **Seen** if you lost).
 - [ ] 1.9 In the Pokédex, toggle **Seen** and **Caught** filters independently, then both together — confirm both-on shows the *union* (anything Seen OR Caught), not just one or the other.
 - [ ] 1.10 Play a round of **Safari Zone** — confirm bait/rock reveal a clue at normal cost, and manually clicking a clue costs double. Play until points run out — confirm a **post-game summary screen actually appears** (Caught/Budget/Spent, no NaN/undefined) and doesn't leave you stuck on the game screen. Afterward, check that a leaderboard entry was recorded for Safari.
+- [ ] 1.10a On that same summary screen, confirm it lists **every Pokémon caught** and **every Pokémon run from**, by name — not just the counts. Deliberately let the game end from a wrong guess or a clue purchase (not clicking "Run") — confirm that mon still shows up in the "Ran From" list, not silently dropped from the summary.
 - [ ] 1.10b Spam **Bait**/**Rock** repeatedly near the end of a Safari game — confirm the shared budget never drops to 0 from a random clue alone (at least 1 point should always remain after Bait/Rock; it's fine for a **manual** clue pick to hit 0).
+- [ ] 1.10c On Safari's starting screen, confirm the points input allows values as low as **1** (not 50) — the range no longer needs to be documented anywhere in the UI.
 - [ ] 1.11 Play a round of **Victory Road** — confirm it plays as an endless streak with fewer clues at higher tiers.
 - [ ] 1.12 Check the tier boundaries — Tier 1 should last through your **5th** correct guess (streak 0–5), Tier 2 through your **10th**, etc. — one more Pokémon per tier than before.
 - [ ] 1.13 On Tiers 1–4, confirm **"Has an Immunity"** is pre-revealed. On Tiers 3–8, confirm a combined **weakness/resistance** reveal is pre-revealed (up to 6 at Tier 3, shrinking by 1 each tier down to 1 at Tier 8) — labeled "Weak:" / "Resist:" in one chip. On Tier 7, confirm Highest/Lowest Base Stat (just the stat name, no number) are pre-revealed.
 - [ ] 1.14 Confirm the two type clues show on **one line** in one chip (e.g. "Fire / Flying"), egg moves show as **one chip listing all of them** (not one chip per move), and weakness/resistance show together in **one chip**, clearly labeled which is which.
 - [ ] 1.15 Before starting Victory Road, tap a tier row on the **preview screen** to expand it — confirm Tiers 3–8 each show a "Weakness/Resistance (up to N)" entry in the clue list (it was previously missing from the preview entirely, even though it always appeared during actual play).
 - [ ] 1.16 During an actual game (Tier 3 or higher, so weakness/resistance is present), look at the order the pre-revealed clues appear in — confirm they're grouped logically: Habitat/Generation, then Evolution Stage, then the type-matchup group (Weakness/Resistance, Has an Immunity, Type — all next to each other), then the stat clues together, then Trainer Usage, then Moves, then Anime last. It should read as organized categories, not a scattered mix.
+- [ ] 1.16a On a **wide/desktop window**, confirm Victory Road's revealed-clue chips actually pack multiple per row when they're short enough to fit (not every chip taking its own full row regardless of length) — this was a real CSS bug (two conflicting layout rules), now fixed. On mobile this should look the same as before (full-width chips), since mobile was never affected.
 - [ ] 1.17 Buy/reveal **"Reveal Full Stat Spread"** in Single Player, hot-seat Multiplayer, Online, and Safari Zone — confirm all four show labeled stats (HP/Atk/Def/SpA/SpD/Spe above the numbers), not a bare "63/60/60/130/50/65" string.
+- [ ] 1.18 Buy/reveal **"Reveal One Example Moveset"** a few times on a few different Pokémon (Mr. Mime is a known real example) — confirm no single reveal ever shows the same move twice.
 
 ## 2. Multiplayer (Hot-seat, same device)
 
@@ -42,6 +46,7 @@ player sees.
 - [ ] 2.5 Reveal a Pokémon's Evolution Stage or Can Evolve clue — confirm any logically-implied evolution clues auto-reveal for free right after.
 - [ ] 2.6 A wrong guess, a round ending, and someone quitting mid-game — confirm the Pokédex Caught/Seen status updates correctly for the mystery each time (pairs with 1.8/1.9).
 - [ ] 2.7 In **Guess → Reveal** mode, guess wrong — confirm you're forced into exactly **one** reveal (no "skip guess" or "skip reveal" option anywhere), then the turn passes to the next player automatically.
+- [ ] 2.8 Type something that **isn't a real Pokémon name** (e.g. "asdf") into the guess box and submit it — confirm it's rejected with "Pick a Pokémon from the list," and that it does NOT count as a turn, does NOT advance to the next player, and does NOT deduct from the shared point pool.
 
 ## 3. Online Multiplayer
 
@@ -54,6 +59,7 @@ player sees.
 - [ ] 3.7 In **Guess → Reveal** mode, let a turn expire then guess wrong — confirm you're forced into exactly **one** reveal (no skip option), then control passes back automatically — you should never get stuck revealing indefinitely.
 - [ ] 3.8 **Host-disconnect resilience**: with 2+ players in a room, have the host close their tab/browser (or otherwise go offline) before starting the game — confirm the remaining player(s) see a banner saying the host disconnected and who's now in control, and that player can start the game (the room should never be permanently stuck waiting for a host who's gone). Repeat after a game has started, and again in the post-game rematch lobby.
 - [ ] 3.9 **Room sharing**: in the lobby, tap **"📤 Share Room"** — confirm the message says "Join my PokeGuess Online game!" plus the gen, RTG/GTR, and win target, then a link. Send that link to a second device/browser and open it — confirm it goes straight to the "Join a room" screen with the code **already typed in** (just tap Join, no typing needed).
+- [ ] 3.10 Type something that **isn't a real Pokémon name** into the guess box and submit it — same as 2.8, confirm it's rejected without counting as a turn or costing anything from the pool.
 
 ## 4. Identity & Leaderboards
 
