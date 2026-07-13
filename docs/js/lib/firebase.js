@@ -1,8 +1,14 @@
 /**
  * @file        js/lib/firebase.js
- * @version     1.0.0
- * @updated     2026-06-24
+ * @version     1.1.0
+ * @updated     2026-07-12
  * @changelog
+ *   1.1.0 — Added serverNow()/serverTimeOffset(): subscribes to Firebase's
+ *           `.info/serverTimeOffset` and exposes a server-aligned clock so
+ *           every client agrees on "now" regardless of local clock skew.
+ *           Backs the cross-device countdown fixes in race.js and online.js
+ *           (rematch countdowns, round transitions, RTG turn timers) — each
+ *           device was previously counting down against its own clock.
  *   1.0.0 — Lazy Firebase loader. Imports the Firebase SDK from CDN only when
  *           first called; caches the result so every subsequent call is free.
  *           Returns a thin helpers object so callers never import Firebase SDK
@@ -46,6 +52,22 @@ export async function getFirebase() {
   const db  = getDatabase(app);
   const auth = getAuth(app);
 
+  // Server-clock alignment. Firebase exposes the estimated difference between
+  // the client's clock and the server's at the special path `.info/
+  // serverTimeOffset`. Subscribing keeps it live (it refines as the SDK
+  // measures round-trip latency). `serverNow()` then gives every client the
+  // SAME notion of "now" regardless of how wrong its own device clock is —
+  // this is what makes cross-device countdowns (Cycling Road rematch, online
+  // round transitions, RTG turn timers) actually agree instead of each device
+  // counting down against its own skewed local clock.
+  let _serverOffset = 0;
+  try {
+    onValue(ref(db, '.info/serverTimeOffset'), (snap) => {
+      const v = snap.val();
+      if (typeof v === 'number' && isFinite(v)) _serverOffset = v;
+    });
+  } catch { /* offline / unsupported — serverNow() just falls back to Date.now() */ }
+
   // Thin helpers — always work with string paths, return Promises
   _cached = {
     // write helpers
@@ -63,6 +85,11 @@ export async function getFirebase() {
     onDisconnectSet: (path, val) => onDisconnect(ref(db, path)).set(val),
     // server timestamp
     serverTimestamp,
+    // server-aligned clock: Date.now() corrected by the measured offset to
+    // Firebase's server, so every client agrees on "now". Falls back to a
+    // plain local clock (offset 0) until the first offset reading arrives.
+    serverNow: () => Date.now() + _serverOffset,
+    serverTimeOffset: () => _serverOffset,
     // auth object (for identity.js)
     auth,
     signInAnonymously: () => signInAnonymously(auth),

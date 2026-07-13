@@ -1,8 +1,13 @@
 /**
  * @file        js/lib/engine.js
- * @version     1.3.2
- * @updated     2026-07-11
+ * @version     1.3.3
+ * @updated     2026-07-12
  * @changelog
+ *   1.3.3 — Simplified two clue values to plain Yes/No per request: the
+ *           "Has an Immunity" clue (was "Yes — has at least one immunity" /
+ *           "No — no type immunities") and the "Used by E4/Red/Rival" clue
+ *           (was "No — not used by Elite Four, Red, or Rival"). Both are now
+ *           just "Yes" or "No".
  *   1.3.2 — Fixed a real bug report: "Reveal One Example Moveset" could show
  *           the same move twice (e.g. Mr. Mime's real data lists Thunderbolt
  *           twice — once via an RBY TM import, once via Move Tutor — and 6
@@ -430,13 +435,13 @@ export class PokeGuessRound {
         return poke.type2;
       }
       case 'immunityYesNo':
-        return (raw && raw !== '\u2014') ? 'Yes \u2014 has at least one immunity' : 'No \u2014 no type immunities';
+        return (raw && raw !== '\u2014') ? 'Yes' : 'No';
       case 'npcObtain': {
         const v = (raw || '').trim();
         return (!v || DASH_RE.test(v)) ? 'No' : raw;
       }
       case 'e4':
-        return (!raw || raw === '\u2014' || raw === 'No') ? 'No \u2014 not used by Elite Four, Red, or Rival' : raw;
+        return (!raw || raw === '\u2014' || raw === 'No') ? 'No' : 'Yes';
       case 'gymLeaderYN':
       case 'e4Gen1': {
         // Gen 1 stores the trainer's name; the clue only reveals Yes/No (#10).

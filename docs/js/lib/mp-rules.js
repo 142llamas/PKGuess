@@ -1,8 +1,16 @@
 /**
  * @file        docs/js/lib/mp-rules.js
- * @version     1.4.0
- * @updated     2026-07-05
+ * @version     1.5.0
+ * @updated     2026-07-12
  * @changelog
+ *   1.5.0 — Added makeServerNow(fb): a shared factory wrapping firebase.js's
+ *           server-aligned clock (falling back to Date.now() when fb is
+ *           absent/predates serverNow, e.g. a test fake). Lives here, shared,
+ *           so every cross-device mode (online, Cycling Road individual +
+ *           team, and any future one) aligns clocks identically instead of
+ *           re-defining its own guard — same "one source of truth" rationale
+ *           as leaderUid/computeAutoDeducedIds. Replaced the two identical
+ *           local serverNow definitions in race.js and online.js.
  *   1.4.0 — Added leaderUid(room): a single, shared host-disconnect-resilience
  *           helper (the room's original host if still connected, otherwise
  *           the earliest-joined still-connected player). Extracted from
@@ -184,6 +192,27 @@ export function buildRevealSequence({ data, movelist, mystery, seed }) {
 // ---- turn-by-turn rules (pure) ----------------------------------------------
 /** Next seat index, wrapping. */
 export function nextTurnPos(pos, n) { return n > 0 ? (pos + 1) % n : 0; }
+
+/**
+ * Server-aligned clock factory for cross-device timing. Any mode that stores
+ * an absolute deadline in Firebase (turn timers, round-transition or rematch
+ * countdowns, room-wide time caps) MUST compare it with THIS instead of a raw
+ * Date.now(): each device's own clock can be seconds off, which made
+ * countdowns disagree across devices (a rematch "stuck" at 2s on one screen
+ * while the other had already started; RTG turn timers 1-2s apart). The fb
+ * helper (firebase.js) exposes serverNow() = Date.now() + the measured offset
+ * to Firebase's server clock; this wrapper falls back to a plain local clock
+ * when fb is absent or predates serverNow (e.g. a test fake), so callers never
+ * need their own guard. This lives here, shared, precisely so a future
+ * cross-device mode inherits correct behavior by default rather than having to
+ * remember to reimplement the guard — the same "one source of truth" reason
+ * leaderUid/computeAutoDeducedIds/poolFilter were unified.
+ * @param {object|null} fb  the firebase helper (or a fake) — may be null early
+ * @returns {() => number}  server-aligned "now" in epoch ms
+ */
+export function makeServerNow(fb) {
+  return () => (fb && typeof fb.serverNow === 'function' ? fb.serverNow() : Date.now());
+}
 
 /**
  * Shared-state delta when the active player reveals a clue. The clue VALUE is
