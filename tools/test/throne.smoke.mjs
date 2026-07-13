@@ -227,14 +227,14 @@ console.log('\n— #14/#15: the Elite-4 gauntlet runs Will→Koga→Bruno→Lanc
     // as they want" is the intended rule; the previous behavior compared
     // holderUid, which incorrectly treated "same player, different mon" the
     // same as "same mon, lower tier" and blocked the claim.
-    // Seed 17, like WINNING_SEED above, was found offline for TODAY'S DATE
+    // Seed 24, like WINNING_SEED above, was found offline for TODAY'S DATE
     // specifically (Will/Koga's NPCs are period-keyed by day/week, so a
     // seed that beats Will and loses to Koga today isn't guaranteed to
     // still do so on a different day — if this ever needs re-finding, the
     // search is: draft greedily through the UI for seeds 1..N, run the
     // gauntlet, and look for Won-then-Lost in the first two rows).
     document.getElementById('app').innerHTML = '';
-    const ctrl2 = await withDraftSeed(17, async () => {
+    const ctrl2 = await withDraftSeed(24, async () => {
       const c = createDraftBattle({
         mount: document.getElementById('app'), config: {}, data: gen2,
         params: { variant: 'freeplay', _getFirebase: async () => fb, _getIdentity: async () => identity },

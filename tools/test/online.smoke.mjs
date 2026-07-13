@@ -116,6 +116,28 @@ ok(snap.phase === 'guess', 'RTG → guess phase after reveal');
 // B sees the revealed value too (derived locally, identical)
 ok([...q('B', '.online-clue.revealed')].length === 1, 'B sees the same revealed clue');
 
+// --- item 5: RTG turn timers were ~1-2s off between devices because each read
+// the shared deadline against its own local clock. Both clients now use the
+// server-aligned clock, so the displayed turn timer must match exactly and
+// tick down together. (In this harness both share one NOW, but the assertion
+// still guards against a regression that reintroduces per-client drift, e.g.
+// one client recomputing from a different base.)
+{
+  snap = await db.get(`/rooms/${roomCode}`);
+  if (snap.turnDeadline) {
+    const timerSecs = (id) => { const m = (document.getElementById(id).querySelector('.online-timer')?.textContent || '').match(/(\d+)s/); return m ? Number(m[1]) : null; };
+    await settle();
+    const aSec = timerSecs('A'), bSec = timerSecs('B');
+    ok(aSec != null && bSec != null, `both clients show a turn timer (A=${aSec}, B=${bSec})`);
+    ok(aSec === bSec, `both clients display the SAME turn-timer value from the shared deadline (A=${aSec}, B=${bSec}) — no per-device drift`);
+    const aBefore = aSec;
+    await advance(3000);
+    const aAfter = timerSecs('A');
+    ok(aAfter != null && aAfter < aBefore, `the turn timer counts down (was ${aBefore}, now ${aAfter})`);
+    ok(timerSecs('A') === timerSecs('B'), 'the two clients stay in agreement after time advances');
+  }
+}
+
 // A makes a WRONG guess → turn passes to B
 const aInput = document.getElementById('A').querySelector('#online-typing');
 ok(!!aInput, 'A has a guess input');
@@ -143,6 +165,27 @@ ok(snap.status === 'roundOver' || snap.status === 'gameOver', 'correct guess end
 ok(snap.roundResult && snap.roundResult.winnerUid === 'uidB', 'B recorded as winner');
 ok((snap.players.uidB.score || 0) > 0, `B earned points (${snap.players.uidB.score})`);
 ok(snap.roundResult.mysteryName === answer, 'round result names the verified answer');
+
+// --- item 4: the round-over "Next round in Xs" countdown must actually tick
+// down on every device, not freeze at its initial value. It was rendered once
+// and never refreshed (the ticker only knew about the turn timer + rematch
+// countdown). Advancing the shared clock and flushing the ticker must lower
+// the displayed seconds on BOTH clients.
+if (snap.status === 'roundOver') {
+  const nextText = (id) => (document.getElementById(id).querySelector('.online-nextround-countdown')?.textContent || '');
+  const secOf = (s) => { const m = s.match(/Next round in (\d+)s/); return m ? Number(m[1]) : null; };
+  await settle();
+  const aStart = secOf(nextText('A'));
+  const bStart = secOf(nextText('B'));
+  ok(aStart != null && bStart != null, `both clients show a "Next round in Ns" countdown on the round-over screen (A=${aStart}, B=${bStart})`);
+  ok(aStart === bStart, `both clients agree on the countdown value (server-aligned clock): A=${aStart}, B=${bStart}`);
+  await advance(2000);   // 2s passes; ticker flushes; text must re-render lower
+  const aAfter = secOf(nextText('A'));
+  const bAfter = secOf(nextText('B'));
+  ok(aAfter != null && aAfter < aStart, `A's countdown ticked DOWN after 2s (was ${aStart}, now ${aAfter}) — not frozen`);
+  ok(bAfter != null && bAfter < bStart, `B's countdown ticked DOWN after 2s (was ${bStart}, now ${bAfter}) — not frozen`);
+  ok(aAfter === bAfter, `both clients still agree after advancing (A=${aAfter}, B=${bAfter})`);
+}
 
 // leader auto-advances ~5s later (NOW controllable). A is host → leader.
 if (snap.status === 'roundOver') {

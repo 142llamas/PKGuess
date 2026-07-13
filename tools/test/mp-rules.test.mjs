@@ -1,6 +1,6 @@
 /**
  * @file tools/test/mp-rules.test.mjs
- * @version 1.0.0 
+ * @version 1.0.0
  * Unit tests for the pure multiplayer rules (docs/js/lib/mp-rules.js): seed
  * determinism, room codes, seed→same-mystery (the no-answer-transmitted basis),
  * reveal/guess outcomes, turn rotation, win advance, and champion detection.
@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import {
   seedFor, buildEngine, applyReveals, revealOutcome, guessOutcome,
   nextTurnPos, weightedRandomClue, advanceAfterWin, champion, makeRoomCode, buildRevealSequence,
-  computeAutoDeducedIds, leaderUid,
+  computeAutoDeducedIds, leaderUid, makeServerNow,
 } from '../../docs/js/lib/mp-rules.js';
 import { PokeGuessRound } from '../../docs/js/lib/engine.js';
 
@@ -188,5 +188,35 @@ export default function (t) {
 
     t.eq(leaderUid(null), null, 'a missing room returns null rather than throwing');
     t.eq(leaderUid({}), null, 'a room with no players object returns null rather than throwing');
+  }
+
+  t.section('mp-rules.js — makeServerNow: cross-device clock alignment (shared by every MP mode)');
+  {
+    // With a real fb exposing serverNow(), the wrapper delegates to it — this
+    // is what lets a countdown deadline written on one device be read against
+    // the SAME notion of "now" on another, regardless of local clock skew.
+    const fakeFbWithOffset = { serverNow: () => 5000 };
+    const snOffset = makeServerNow(fakeFbWithOffset);
+    t.eq(snOffset(), 5000, 'delegates to fb.serverNow() when available (server-aligned clock)');
+
+    // A live offset must be reflected on every call, not captured once — the
+    // SDK refines the offset over the session as it measures latency.
+    let live = 100;
+    const snLive = makeServerNow({ serverNow: () => 1_000_000 + live });
+    t.eq(snLive(), 1_000_100, 'reads the offset fresh each call');
+    live = 250;
+    t.eq(snLive(), 1_000_250, 'a refined offset is picked up on the next call, not stale');
+
+    // Fallbacks: a null fb (before it loads) and a fb WITHOUT serverNow (an
+    // older/fake helper) both degrade to a plain local clock so callers never
+    // need their own guard — this is why a future mode gets safe behavior for
+    // free just by using this factory.
+    const before = Date.now();
+    const snNull = makeServerNow(null);
+    const v1 = snNull();
+    t.ok(v1 >= before && v1 <= Date.now(), 'null fb (not loaded yet) falls back to a plain local Date.now()');
+    const snNoMethod = makeServerNow({ set() {}, get() {} });
+    const v2 = snNoMethod();
+    t.ok(v2 >= before && v2 <= Date.now(), 'an fb without serverNow (e.g. a test fake) also falls back to Date.now()');
   }
 }

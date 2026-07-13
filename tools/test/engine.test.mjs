@@ -311,4 +311,29 @@ export default function (t) {
     }
     t.ok(checkedAtLeastOne, 'at least one reveal of the example moveset was actually checked');
   }
+
+  t.section('engine.js — "Has an Immunity" and "Used by E4/Red/Rival" clues are plain Yes/No (requested)');
+  {
+    // Gengar has type immunities (Fighting, Normal via Ghost) AND is used by
+    // the E4/Red/Cal (e4RedCal:"Yes"); Bulbasaur has neither (immunities:"—",
+    // e4RedCal:"No") — one of each so both branches (Yes and No) are covered
+    // for both clues. (Rattata is NOT a valid "No" case here — being Normal-
+    // type, it's immune to Ghost, so its immunities field is populated.)
+    const gengar = gen2.pokedex.find((p) => p.name === 'Gengar');
+    const rattata = gen2.pokedex.find((p) => p.name === 'Bulbasaur');
+    t.ok(!!gengar && !!rattata, 'Gengar and Bulbasaur both exist in the Gen 2 pokedex');
+
+    const immuId = (r) => r._idBySpecial.immunityYesNo;
+    const e4Id = (r) => r._idBySpecial.e4;
+
+    const rG = new PokeGuessRound({ genData: gen2, movelist: {}, rng: () => 0 });
+    rG.start({ difficultyId: 'normal', mystery: gengar, guessMode: 'free', clueMode: 'choose' });
+    if (immuId(rG) != null) t.eq(rG.buyClue(immuId(rG)).value, 'Yes', 'immunity clue is exactly "Yes" for a mon WITH immunities (not "Yes — has at least one immunity")');
+    if (e4Id(rG) != null) t.eq(rG.buyClue(e4Id(rG)).value, 'Yes', 'E4/Red/Rival clue is exactly "Yes" for a mon that IS used (no trailing explanation)');
+
+    const rR = new PokeGuessRound({ genData: gen2, movelist: {}, rng: () => 0 });
+    rR.start({ difficultyId: 'normal', mystery: rattata, guessMode: 'free', clueMode: 'choose' });
+    if (immuId(rR) != null) t.eq(rR.buyClue(immuId(rR)).value, 'No', 'immunity clue is exactly "No" for a mon WITHOUT immunities (not "No — no type immunities")');
+    if (e4Id(rR) != null) t.eq(rR.buyClue(e4Id(rR)).value, 'No', 'E4/Red/Rival clue is exactly "No" for a mon that is NOT used (not "No — not used by Elite Four, Red, or Rival")');
+  }
 }
