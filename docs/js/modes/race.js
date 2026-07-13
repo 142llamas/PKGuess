@@ -1,8 +1,18 @@
 /**
  * @file        docs/js/modes/race.js
- * @version     2.3.0
- * @updated     2026-07-06
+ * @version     2.4.0
+ * @updated     2026-07-12
  * @changelog
+ *   2.4.0 — Cross-device clock fix (individual AND team mode share the same
+ *           cap-timer/rematch-countdown/tick code, so both are covered):
+ *           every shared deadline stored in RTDB (gameStartedAt, room-wide
+ *           time cap, rematchCountdownEndsAt) is now written and read via a
+ *           server-aligned clock (mp-rules makeServerNow → firebase serverNow)
+ *           instead of each device's own Date.now(). Fixes the reported
+ *           rematch countdown that sat "stuck" (e.g. never going below 2s) on
+ *           one device while the other had already started — that was pure
+ *           clock skew between the two devices. Local-only durations (per-
+ *           mystery split timing, joinedAt) intentionally still use Date.now().
  *   2.3.0 — Room sharing: a "\uD83D\uDCE4 Share Room" button in both the individual
  *           and team-builder lobbies builds an invite (game name, gen, target
  *           Pok\u00e9mon count, Team Mode note when relevant, then a deep link)
@@ -113,7 +123,7 @@
 
 import { el, clear, shareSheetEl } from '../lib/dom.js';
 import { normalizeName } from '../lib/engine.js';
-import { makeRoomCode, seedFor, buildRevealSequence, makeRng, leaderUid as sharedLeaderUid } from '../lib/mp-rules.js';
+import { makeRoomCode, seedFor, buildRevealSequence, makeRng, leaderUid as sharedLeaderUid, makeServerNow } from '../lib/mp-rules.js';
 import { roomJoinLink, buildRoomInviteText, copyToClipboard, shareWhatsApp } from '../lib/share.js';
 
 const MAX_PLAYERS = 12;
@@ -156,6 +166,13 @@ export function createRace({ mount, config, data, params = {}, onExit }) {
 
   const genLabel = data.id === 'gen1' ? 'Gen 1' : 'Gen 2';
   let fb = null, me = null, movelist = {};
+  // Server-aligned "now" for all CROSS-DEVICE timing (shared countdown/cap
+  // deadlines stored in RTDB as absolute epoch ms). Using each device's own
+  // Date.now() made countdowns disagree across devices whenever their clocks
+  // differed — e.g. a rematch countdown that sat "stuck" at 2s on one device
+  // while the other had already started. Shared factory (mp-rules) so every
+  // cross-device mode aligns clocks identically; rebound below once fb loads.
+  let serverNow = makeServerNow(null);
   let code = null, room = null, unsub = null;
   let order = null;              // shared Pokémon order (indices into data.pokedex)
   let mySolved = 0;
@@ -189,6 +206,7 @@ export function createRace({ mount, config, data, params = {}, onExit }) {
   ]).then(([fbi, idi, ml]) => {
     if (destroyed) return;
     fb = fbi; me = idi; movelist = ml || {};
+    serverNow = makeServerNow(fb);   // now bound to the real server-aligned clock
     // A shared room-invite link (#/race/2?code=ABCDEF) pre-fills the join
     // screen so the recipient doesn't have to type the code themselves.
     const invitedCode = params.query && params.query.code;
@@ -484,7 +502,7 @@ export function createRace({ mount, config, data, params = {}, onExit }) {
     mySolved = 0; mySplits = []; boardMysteryIdx = -1; order = null; lastKnownSolved = {}; toastSeenOnce = false; waitingScreenShown = false;
     teamRevealSeq = null; teamRevealIdx = 0; teamBoardKey = null; lastKnownTeamSolved = {}; teamToastSeenOnce = false;
     try {
-      const updates = { status: 'playing', gameStartedAt: Date.now() };
+      const updates = { status: 'playing', gameStartedAt: serverNow() };
       if (room.settings.teams) {
         const jo = room.joinOrder || Object.keys(room.players);
         const teamOf = (uid) => room.players[uid] && room.players[uid].team;
@@ -638,7 +656,7 @@ export function createRace({ mount, config, data, params = {}, onExit }) {
       });
     if (room.gameStartedAt) {
       const capMs = target * TIME_CAP_MS_PER_MYSTERY;
-      const remain = Math.max(0, capMs - (Date.now() - room.gameStartedAt));
+      const remain = Math.max(0, capMs - (serverNow() - room.gameStartedAt));
       strip.append(el('div', { class: 'race-timecap' }, `\u23F3 Time remaining: ${fmtTime(remain)}`));
     }
   }
@@ -666,7 +684,7 @@ export function createRace({ mount, config, data, params = {}, onExit }) {
     if (!room || room.status !== 'playing' || !isLeader() || !room.gameStartedAt) return;
     const target = room.settings.target;
     const capMs = target * TIME_CAP_MS_PER_MYSTERY;
-    const capHit = Date.now() - room.gameStartedAt >= capMs;
+    const capHit = serverNow() - room.gameStartedAt >= capMs;
     const active = activePlayers();
     const allFinished = active.length > 0 && active.every((p) => (p.solved || 0) >= target);
     if (capHit || allFinished) {
@@ -710,7 +728,7 @@ export function createRace({ mount, config, data, params = {}, onExit }) {
 
     const myPlayer = room.players[me.uid] || {};
     const rematchers = players.filter((p) => p.rematch && p.connected && !p.left);
-    const countdownActive = room.rematchCountdownEndsAt && room.rematchCountdownEndsAt > Date.now();
+    const countdownActive = room.rematchCountdownEndsAt && room.rematchCountdownEndsAt > serverNow();
 
     put(root, topbar('\uD83C\uDFC1 Cycling Road \u2014 Results'),
       el('div', { class: 'summary-container' },
@@ -740,7 +758,7 @@ export function createRace({ mount, config, data, params = {}, onExit }) {
   }
 
   function rematchCountdownText() {
-    const remain = Math.max(0, room.rematchCountdownEndsAt - Date.now());
+    const remain = Math.max(0, room.rematchCountdownEndsAt - serverNow());
     return `\u23F3 Rematch starting in ${Math.ceil(remain / 1000)}s\u2026 (stay opted in to join)`;
   }
   let rematchTickTimer = null;
@@ -749,7 +767,7 @@ export function createRace({ mount, config, data, params = {}, onExit }) {
     rematchTickTimer = setTimeout(() => {
       rematchTickTimer = null;
       if (destroyed || !room || room.status !== 'gameOver') return;
-      if (room.rematchCountdownEndsAt && room.rematchCountdownEndsAt <= Date.now()) {
+      if (room.rematchCountdownEndsAt && room.rematchCountdownEndsAt <= serverNow()) {
         if (isLeader()) resolveRematchCountdown();
       } else {
         renderGameOver();
@@ -763,7 +781,7 @@ export function createRace({ mount, config, data, params = {}, onExit }) {
   }
 
   async function startRematchCountdown() {
-    try { await fb.set(`/rooms/${code}/rematchCountdownEndsAt`, Date.now() + REMATCH_COUNTDOWN_MS); } catch { /* resync via onValue */ }
+    try { await fb.set(`/rooms/${code}/rematchCountdownEndsAt`, serverNow() + REMATCH_COUNTDOWN_MS); } catch { /* resync via onValue */ }
   }
 
   // ===== TEAM MODE (#3) =========================================================
@@ -938,7 +956,7 @@ export function createRace({ mount, config, data, params = {}, onExit }) {
     }
     if (room.gameStartedAt) {
       const capMs = target * TIME_CAP_MS_PER_MYSTERY;
-      const remain = Math.max(0, capMs - (Date.now() - room.gameStartedAt));
+      const remain = Math.max(0, capMs - (serverNow() - room.gameStartedAt));
       strip.append(el('div', { class: 'race-timecap' }, `\u23F3 Time remaining: ${fmtTime(remain)}`));
     }
   }
@@ -947,7 +965,7 @@ export function createRace({ mount, config, data, params = {}, onExit }) {
     if (!room || room.status !== 'playing' || !isLeader() || !room.gameStartedAt) return;
     const target = room.settings.target;
     const capMs = target * TIME_CAP_MS_PER_MYSTERY;
-    const capHit = Date.now() - room.gameStartedAt >= capMs;
+    const capHit = serverNow() - room.gameStartedAt >= capMs;
     const teamActive = (t) => teamState(t).memberOrder.some((uid) => { const p = room.players[uid]; return p && p.connected && !p.left; });
     const activeTeams = [0, 1].filter(teamActive);
     const allFinished = activeTeams.length > 0 && activeTeams.every((t) => (teamState(t).solved || 0) >= target);
@@ -992,7 +1010,7 @@ export function createRace({ mount, config, data, params = {}, onExit }) {
     const myPlayer = room.players[me.uid] || {};
     const allConnected = players.filter((p) => p.connected);
     const rematchers = allConnected.filter((p) => p.rematch);
-    const countdownActive = room.rematchCountdownEndsAt && room.rematchCountdownEndsAt > Date.now();
+    const countdownActive = room.rematchCountdownEndsAt && room.rematchCountdownEndsAt > serverNow();
     // #3b.i — Team Mode rematch requires ALL connected players (both teams in
     // full), not just 2 total the way individual Cycling Road does.
     const allOptedIn = allConnected.length > 0 && allConnected.every((p) => p.rematch);
@@ -1045,7 +1063,7 @@ export function createRace({ mount, config, data, params = {}, onExit }) {
           { solved: 0, splits: [], answererIdx: 0, memberOrder: jo.filter((uid) => teamOf(uid) === 1), finishedAt: null },
         ],
         seed: (Math.random() * 2 ** 31) | 0, status: 'playing',
-        gameStartedAt: Date.now(), rematchCountdownEndsAt: null,
+        gameStartedAt: serverNow(), rematchCountdownEndsAt: null,
       });
     } catch { /* onValue resyncs */ }
   }
@@ -1067,7 +1085,7 @@ export function createRace({ mount, config, data, params = {}, onExit }) {
       await fb.update(`/rooms/${code}`, {
         players: newPlayers, joinOrder: players.map((p) => p.uid),
         seed: (Math.random() * 2 ** 31) | 0, status: 'playing',
-        gameStartedAt: Date.now(), rematchCountdownEndsAt: null,
+        gameStartedAt: serverNow(), rematchCountdownEndsAt: null,
       });
     } catch { /* onValue resyncs */ }
   }

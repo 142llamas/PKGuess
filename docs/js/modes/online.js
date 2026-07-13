@@ -1,8 +1,21 @@
 /**
  * @file        docs/js/modes/online.js
- * @version     1.6.2
- * @updated     2026-07-11
+ * @version     1.7.0
+ * @updated     2026-07-12
  * @changelog
+ *   1.7.0 — Two cross-device timer fixes:
+ *           (a) The round-over "Next round in Xs" countdown was rendered once
+ *               and never refreshed (the ticker only updated the turn timer +
+ *               rematch countdown), so it sat frozen at its initial value on
+ *               every device until the round advanced. Gave it a stable class
+ *               (.online-nextround-countdown) and refresh it each tick.
+ *           (b) Turn deadlines / round-transition / rematch countdowns are now
+ *               written and read via a server-aligned clock (mp-rules
+ *               makeServerNow → firebase serverNow) instead of each device's
+ *               own Date.now() — fixes RTG turn timers reading ~1-2s apart
+ *               between devices, and the rematch clocks not reaching 0
+ *               together. Metadata-only stamps (updatedAt, joinedAt) keep
+ *               Date.now(); they're never compared across devices.
  *   1.6.2 — Fixed the same guess-validation gap as multiplayer.js: doGuess()
  *           never checked the guess against the actual Pokemon name list.
  *           Added a dedicated #online-guess-feedback element (there wasn't
@@ -80,7 +93,7 @@ import { el, clear, shareSheetEl, statSpreadEl } from '../lib/dom.js';
 import {
   seedFor, buildEngine, applyReveals, revealOutcome, guessOutcome,
   nextTurnPos, weightedRandomClue, advanceAfterWin, champion, makeRoomCode, computeAutoDeducedIds,
-  leaderUid as sharedLeaderUid,
+  leaderUid as sharedLeaderUid, makeServerNow,
 } from '../lib/mp-rules.js';
 import { normalizeName, poolFilterForData } from '../lib/engine.js';
 import { markCaught, markSeen } from '../lib/catch-tracker.js';
@@ -102,6 +115,14 @@ export function createOnline({ mount, config, data, params = {}, onExit }) {
   const defaultGen = params.gen === 1 ? 'gen1' : 'gen2';
 
   let fb = null, me = null;          // firebase helpers, identity {uid,name}
+  // Server-aligned clock for all cross-device timing (turn deadlines, round-
+  // transition and rematch countdowns are stored in RTDB as absolute epoch
+  // ms). Reading them against each device's own Date.now() made the displayed
+  // countdowns disagree by however far the two device clocks were apart — the
+  // RTG turn timers being ~1-2s off between devices, and the rematch clocks
+  // not reaching 0 together, were both this. Shared factory (mp-rules) so
+  // every cross-device mode aligns clocks identically; rebound once fb loads.
+  let serverNow = makeServerNow(null);
   let code = null;                   // current room code
   let unsub = null;                  // onValue unsubscribe
   let room = null;                   // latest snapshot
@@ -114,6 +135,7 @@ export function createOnline({ mount, config, data, params = {}, onExit }) {
   (async () => {
     try { me = await getID(); fb = await getFB(); }
     catch { showFatal('Couldn\u2019t reach the server. Online play needs a connection.'); return; }
+    serverNow = makeServerNow(fb);   // now bound to the real server-aligned clock
     // A shared room-invite link (#/online/2?code=ABCDEF) pre-fills the join
     // screen so the recipient doesn't have to type the code themselves.
     const invitedCode = params.query && params.query.code;
@@ -307,7 +329,7 @@ export function createOnline({ mount, config, data, params = {}, onExit }) {
     if (!room) return;
     updateTimerText();                          // lightweight: just the countdown
     if (!isLeader()) return;
-    const now = Date.now();
+    const now = serverNow();
     if (room.status === 'playing' && room.turnDeadline && now > room.turnDeadline + GRACE_MS) {
       await advanceTurn(true);                  // active player ran out of time / is away
     } else if (room.status === 'roundOver' && room.turnDeadline && now > room.turnDeadline) {
@@ -343,8 +365,17 @@ export function createOnline({ mount, config, data, params = {}, onExit }) {
     }
     const rc = root.querySelector('.race-rematch-countdown');
     if (rc && room && room.rematchCountdownEndsAt) {
-      const remain = Math.max(0, Math.ceil((room.rematchCountdownEndsAt - Date.now()) / 1000));
+      const remain = Math.max(0, Math.ceil((room.rematchCountdownEndsAt - serverNow()) / 1000));
       rc.textContent = `\u23F3 Rematch starting in ${remain}s\u2026 (stay opted in to join)`;
+    }
+    // The round-over "Next round in Xs" text was previously rendered once and
+    // never refreshed (the ticker only knew about .online-timer and the
+    // rematch countdown), so it sat frozen at its initial value on every
+    // device until the round advanced. Refresh it here each tick too.
+    const nrc = root.querySelector('.online-nextround-countdown');
+    if (nrc && room && room.status === 'roundOver') {
+      const secs = secondsLeft();
+      nrc.textContent = secs != null ? `Next round in ${secs}s\u2026` : 'Next round\u2026';
     }
   }
 
@@ -416,7 +447,7 @@ export function createOnline({ mount, config, data, params = {}, onExit }) {
 
   function secondsLeft() {
     if (!room.turnDeadline) return null;
-    return Math.max(0, Math.ceil((room.turnDeadline - Date.now()) / 1000));
+    return Math.max(0, Math.ceil((room.turnDeadline - serverNow()) / 1000));
   }
 
   function renderGame() {
@@ -575,7 +606,7 @@ export function createOnline({ mount, config, data, params = {}, onExit }) {
       phase: room.settings.gameMode === 'rtg' ? 'reveal' : 'guess',
       revealedClueIds: [], guessLog: [], lastRandomRevealCat: null,
       turnOrder, currentTurnPos, roundResult: null,
-      turnDeadline: Date.now() + TURN_MS,
+      turnDeadline: serverNow() + TURN_MS,
       updatedAt: Date.now(),
     });
   }
@@ -593,7 +624,7 @@ export function createOnline({ mount, config, data, params = {}, onExit }) {
       const pos = nextTurnPos(room.currentTurnPos || 0, order.length);
       await fb.update(`/rooms/${code}`, {
         pool: out.pool, revealedClueIds: [...out.revealedClueIds, ...deduced], ...extra,
-        currentTurnPos: pos, phase: 'guess', turnDeadline: Date.now() + TURN_MS,
+        currentTurnPos: pos, phase: 'guess', turnDeadline: serverNow() + TURN_MS,
         updatedAt: Date.now(),
       });
     } else {
@@ -690,7 +721,7 @@ export function createOnline({ mount, config, data, params = {}, onExit }) {
         roundResult: { winnerUid: me.uid, winnerName: room.players[me.uid].name, guessName: val, mysteryNum: eng.mystery.num, mysteryName: eng.mystery.name, earned: out.earned, roundNum: room.roundNum },
         turnOrder: rotated.turnOrder, currentTurnPos: rotated.currentTurnPos,
         status: champ ? 'gameOver' : 'roundOver',
-        turnDeadline: Date.now() + ADVANCE_MS, updatedAt: Date.now(),
+        turnDeadline: serverNow() + ADVANCE_MS, updatedAt: Date.now(),
       });
     } else {
       await fb.update(`/rooms/${code}`, { pool: out.pool, guessLog: log, updatedAt: Date.now() });
@@ -706,7 +737,7 @@ export function createOnline({ mount, config, data, params = {}, onExit }) {
     await fb.update(`/rooms/${code}`, {
       currentTurnPos: pos,
       phase: room.settings.gameMode === 'rtg' ? 'reveal' : 'guess',
-      turnDeadline: Date.now() + TURN_MS,
+      turnDeadline: serverNow() + TURN_MS,
       updatedAt: Date.now(),
     });
   }
@@ -743,7 +774,7 @@ export function createOnline({ mount, config, data, params = {}, onExit }) {
               el('span', { class: 'mp-name-swatch', style: { background: p.color } }),
               el('span', { class: 'online-player-name' }, p.name + (p.uid === me.uid ? ' (you)' : '')),
               el('span', { class: 'online-player-score' }, `${p.score || 0}`)))),
-          el('div', { style: { textAlign: 'center', color: 'var(--text-dim)', marginTop: '10px', fontSize: '12px' } },
+          el('div', { class: 'online-nextround-countdown', style: { textAlign: 'center', color: 'var(--text-dim)', marginTop: '10px', fontSize: '12px' } },
             secs != null ? `Next round in ${secs}s\u2026` : 'Next round\u2026'))));
   }
 
@@ -757,7 +788,7 @@ export function createOnline({ mount, config, data, params = {}, onExit }) {
     const connected = arr.filter((p) => p.connected);
     const rematchers = connected.filter((p) => p.rematch);
     const myPlayer = room.players[me.uid] || {};
-    const countdownActive = room.rematchCountdownEndsAt && room.rematchCountdownEndsAt > Date.now();
+    const countdownActive = room.rematchCountdownEndsAt && room.rematchCountdownEndsAt > serverNow();
 
     put(root, 
       topbar(),
@@ -781,7 +812,7 @@ export function createOnline({ mount, config, data, params = {}, onExit }) {
                 myPlayer.rematch ? '\u2705 Rematch selected' : '\uD83D\uDD01 Want a rematch?'),
               el('span', { class: 'sf-intro' }, `${rematchers.length} player${rematchers.length === 1 ? '' : 's'} want a rematch`)),
             countdownActive
-              ? el('div', { class: 'race-rematch-countdown' }, `\u23F3 Rematch starting in ${Math.ceil((room.rematchCountdownEndsAt - Date.now()) / 1000)}s\u2026 (stay opted in to join)`)
+              ? el('div', { class: 'race-rematch-countdown' }, `\u23F3 Rematch starting in ${Math.ceil((room.rematchCountdownEndsAt - serverNow()) / 1000)}s\u2026 (stay opted in to join)`)
               : (isLeader()
                   ? el('button', { class: 'btn-primary', style: { marginTop: '8px' },
                       disabled: !(myPlayer.rematch && rematchers.some((p) => p.uid !== me.uid)),
@@ -798,7 +829,7 @@ export function createOnline({ mount, config, data, params = {}, onExit }) {
   }
 
   async function startRematchCountdown() {
-    try { await fb.set(`/rooms/${code}/rematchCountdownEndsAt`, Date.now() + REMATCH_COUNTDOWN_MS); } catch { /* onValue resyncs */ }
+    try { await fb.set(`/rooms/${code}/rematchCountdownEndsAt`, serverNow() + REMATCH_COUNTDOWN_MS); } catch { /* onValue resyncs */ }
   }
 
   // #1f — leader-driven (resilient to the host disconnecting mid-countdown,
@@ -825,7 +856,7 @@ export function createOnline({ mount, config, data, params = {}, onExit }) {
         status: 'playing', roundNum: 1, pool: room.settings.poolStart,
         phase: room.settings.gameMode === 'rtg' ? 'reveal' : 'guess',
         revealedClueIds: [], guessLog: [], lastRandomRevealCat: null,
-        roundResult: null, turnDeadline: Date.now() + TURN_MS, rematchCountdownEndsAt: null,
+        roundResult: null, turnDeadline: serverNow() + TURN_MS, rematchCountdownEndsAt: null,
         updatedAt: Date.now(),
       });
     } catch { /* onValue resyncs */ }
