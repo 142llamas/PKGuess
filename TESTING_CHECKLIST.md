@@ -36,6 +36,8 @@ player sees.
 - [ ] 1.16a On a **wide/desktop window**, confirm Victory Road's revealed-clue chips actually pack multiple per row when they're short enough to fit (not every chip taking its own full row regardless of length) — this was a real CSS bug (two conflicting layout rules), now fixed. On mobile this should look the same as before (full-width chips), since mobile was never affected.
 - [ ] 1.17 Buy/reveal **"Reveal Full Stat Spread"** in Single Player, hot-seat Multiplayer, Online, and Safari Zone — confirm all four show labeled stats (HP/Atk/Def/SpA/SpD/Spe above the numbers), not a bare "63/60/60/130/50/65" string.
 - [ ] 1.18 Buy/reveal **"Reveal One Example Moveset"** a few times on a few different Pokémon (Mr. Mime is a known real example) — confirm no single reveal ever shows the same move twice.
+- [ ] 1.19 Buy/reveal the **"Has an Immunity"** clue and the **"Used by Elite Four / Red / Rival"** clue — confirm each shows a plain **"Yes"** or **"No"**, not the longer "Yes — has at least one immunity" / "No — not used by Elite Four, Red, or Rival" text.
+- [ ] 1.20 On the main mode-select screen, confirm there is **no "Build skeleton v1.0.0"** text at the bottom anymore (it was removed).
 
 ## 2. Multiplayer (Hot-seat, same device)
 
@@ -60,6 +62,9 @@ player sees.
 - [ ] 3.8 **Host-disconnect resilience**: with 2+ players in a room, have the host close their tab/browser (or otherwise go offline) before starting the game — confirm the remaining player(s) see a banner saying the host disconnected and who's now in control, and that player can start the game (the room should never be permanently stuck waiting for a host who's gone). Repeat after a game has started, and again in the post-game rematch lobby.
 - [ ] 3.9 **Room sharing**: in the lobby, tap **"📤 Share Room"** — confirm the message says "Join my PokeGuess Online game!" plus the gen, RTG/GTR, and win target, then a link. Send that link to a second device/browser and open it — confirm it goes straight to the "Join a room" screen with the code **already typed in** (just tap Join, no typing needed).
 - [ ] 3.10 Type something that **isn't a real Pokémon name** into the guess box and submit it — same as 2.8, confirm it's rejected without counting as a turn or costing anything from the pool.
+- [ ] 3.11 **Round-transition countdown (was frozen):** after a correct guess, a brief summary screen shows "Next round in X seconds…". Confirm on **both** devices that this number actually **counts down** each second (it used to sit frozen at its starting value on every device until the round advanced).
+- [ ] 3.12 **RTG turn-timer sync (was ~1–2s off):** in RTG mode, watch the per-turn timer on **both** devices at the same time — confirm they show the same value (within a second) and count down together, rather than drifting apart. Best checked with the two devices side by side.
+- [ ] 3.13 **Rematch countdown sync:** trigger a rematch countdown with two devices — confirm the 5→0 countdown reaches 0 at essentially the same time on both, rather than one device finishing seconds ahead of the other.
 
 ## 4. Identity & Leaderboards
 
@@ -82,6 +87,7 @@ player sees.
 - [ ] 5.9 Try joining a room that already has 12 players — confirm you're told the room is full.
 - [ ] 5.10 **Host-disconnect resilience**: with 2+ players, have the host disconnect before starting — confirm someone else can still start the race, with a banner explaining what happened. Try it again mid-race (the room-wide time cap should still fire on schedule) and in the post-game lobby (someone else should be able to trigger the rematch countdown).
 - [ ] 5.11 **Room sharing**: in the lobby, tap **"📤 Share Room"** — confirm the message says "Join my Cycling Road game!" plus the gen and target Pokémon count, then a link (and does NOT mention Team Mode, since this is an individual room). Open that link on a second device — confirm it lands on the join screen with the code pre-filled.
+- [ ] 5.12 **Rematch countdown sync (was "stuck"):** in the post-game lobby, have both players opt in and the host start the rematch countdown. Confirm the 5→0 countdown behaves the same on **both** devices — it should reach 0 and start the new game together, NOT sit stuck (e.g. never dropping below 2s) on one device while the other has already entered the game. Worth checking with a phone + a desktop specifically, since that's where the clock difference showed up.
 
 ## 6. Cycling Road — Team Mode
 
@@ -94,6 +100,7 @@ player sees.
 - [ ] 6.7 On the results screen, confirm rematch requires **every single player** to opt in (not just two) before the host can start it.
 - [ ] 6.8 **Host-disconnect resilience**: same as 5.10, but with Team Mode — have the host disconnect before teams are even assigned, and confirm someone else can take over assigning teams and starting the game.
 - [ ] 6.9 **Room sharing**: same as 5.11, but confirm the Team Mode invite text explicitly mentions "Team Mode" this time.
+- [ ] 6.10 **Rematch countdown sync:** same as 5.12 — team mode shares the same countdown code, so confirm its rematch countdown also reaches 0 together on both devices rather than sticking on one.
 
 ## 7. Draft Battle — drafting
 

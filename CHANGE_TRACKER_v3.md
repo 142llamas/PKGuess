@@ -782,3 +782,64 @@ Existing tests in both files had been using placeholder strings like `'Definitel
 - `MANIFEST.md`, `CHANGE_TRACKER_v3.md`, `TESTING_CHECKLIST.md`
 
 
+---
+
+## 2026-07-12 — Yes/No clues, footer removal, three cross-device timer bugs
+
+### Yes/No clue simplification (requested)
+
+| Location | Files |
+|---|---|
+| `docs/js/lib/` | `engine.js` (1.3.3) |
+| `tools/test/` | `engine.test.mjs` |
+
+The "Has an Immunity" and "Used by E4/Red/Rival" clues now return a plain `'Yes'`/`'No'` instead of the longer explanatory strings ("Yes — has at least one immunity" / "No — no type immunities" / "No — not used by Elite Four, Red, or Rival"). This was a genuinely simple two-line change in `_computeClueValue()` — the kind of thing that's fine to do by hand — flagged as such to the user. Test uses Gengar for the Yes case and Bulbasaur for the No case (Rattata is *not* a valid "No" example, since being Normal-type it has a Ghost immunity, so its immunities field is populated).
+
+### Removed the "Build skeleton v1.0.0" footer + dead-weight sweep
+
+| Location | Files |
+|---|---|
+| `docs/js/` | `main.js` (1.5.1) |
+| `docs/css/` | `styles.css` (1.14.6) |
+
+Removed the leftover footer, its now-unused `APP_VERSION` constant, and the orphaned `.shell-footer` CSS rule. Broader sweep findings: no leftover/backup files; all 11 lib modules are imported somewhere; `sim.js` is used. A scan for CSS classes with no literal source reference returned ~263 candidates, but the large majority are false positives — `type-fire`, habitat names, etc. are built dynamically via template strings (`` `type-${t.toLowerCase()}` ``). Bulk-removing those is high-risk for zero user benefit (dead CSS doesn't affect anyone), so they were left in place; a class-by-class pass could be done later if desired. The one previously-known-dead block (`.vr-ribbon-group`/`.vr-ribbon-chips-row`) was already removed in an earlier batch.
+
+### Three cross-device timer bugs — shared root cause
+
+| Location | Files |
+|---|---|
+| `docs/js/lib/` | `firebase.js` (1.1.0), `mp-rules.js` (1.5.0) |
+| `docs/js/modes/` | `race.js` (2.4.0), `online.js` (1.7.0) |
+| `tools/test/` | `mp-rules.test.mjs`, `online.smoke.mjs` |
+
+All three reported timer issues traced to two related problems, both now fixed:
+
+**Problem 1 — clock skew (the biggest one).** Every device was counting down against its *own* `Date.now()`. Deadlines are stored in Firebase as absolute epoch ms; when two devices' clocks differed by a couple of seconds, their displayed countdowns disagreed by that much. This is exactly what produced the Cycling Road rematch that sat "stuck" (never dropping below ~2s) on one device while the other had already entered the game, and the RTG turn timers reading 1–2s apart, and the rematch clocks not reaching 0 together.
+
+The fix: `firebase.js` now subscribes to Firebase's `.info/serverTimeOffset` and exposes `serverNow()` = `Date.now() + offset`, giving every client the *same* notion of "now" regardless of local clock error. All cross-device deadline math in `race.js` (individual **and** team mode — they share the cap-timer/rematch/tick code) and `online.js` now uses this instead of raw `Date.now()`. Local-only durations (per-mystery split timing, `joinedAt`/`updatedAt` metadata) intentionally still use `Date.now()`, since they're measured and read on the same device and never compared across devices.
+
+To keep this correct for the future, the wrapper was **not** left as a duplicated local helper in each mode file (which is how the first pass had it). It lives in `mp-rules.js` as `makeServerNow(fb)` — the same "one source of truth" home as `leaderUid`/`computeAutoDeducedIds` — so any cross-device mode, present or future, inherits correct clock alignment by default rather than having to remember to reimplement the guard. It falls back to a plain local clock when there's no Firebase (e.g. tests).
+
+**Problem 2 — the online round-transition countdown was frozen (item 4).** Separate from the clock skew: the round-over "Next round in Xs" text was rendered once and never refreshed. The per-second ticker only knew about the turn timer and the rematch countdown, so this third countdown element sat frozen at its initial value on *every* device until the round advanced (which is why both players saw a stuck number). Gave it a stable class (`.online-nextround-countdown`) and wired it into the ticker's per-second update.
+
+**Coverage of team mode and future modes (per an explicit follow-up question):** Cycling Road team mode shares individual mode's exact cap-timer, rematch-countdown, tick, and countdown-text code — verified every shared-deadline site in team mode uses `serverNow()`, so it's covered by the same fix with no separate code path. And because `makeServerNow` now lives in the shared `mp-rules.js`, any future cross-device mode gets the same alignment for free.
+
+**Tests:** `mp-rules.test.mjs` gets unit coverage of `makeServerNow` (delegates to `fb.serverNow()`, reads a live offset fresh each call, falls back to `Date.now()` for both a null fb and an fb without the method). `online.smoke.mjs` (which has a controllable clock) gets: the round-over countdown actually ticking down on both clients (revert-check confirmed it catches the frozen-countdown regression — it stayed at 5s with the fix removed), and both clients agreeing on the RTG turn-timer value and counting down together.
+
+**Also fixed at session start** (baseline maintenance, unrelated to the above): `throne.smoke.mjs`'s "beat Will, lose to Koga" scenario seed had gone stale with the date rollover to 2026-07-12 (the Elite-4 NPCs are period-keyed by day/week), re-found as seed 24; and the gauntlet-completion helper's fixed wait was made poll-based to stop occasional load-dependent flakiness.
+
+**Full test tally after this batch:** 935 unit + 500 smoke = 1435 assertions, all green, stable across repeated runs.
+
+### Files changed this batch
+- `docs/js/lib/engine.js`
+- `docs/js/lib/firebase.js`
+- `docs/js/lib/mp-rules.js`
+- `docs/js/main.js`
+- `docs/css/styles.css`
+- `docs/js/modes/race.js`
+- `docs/js/modes/online.js`
+- `tools/test/engine.test.mjs`
+- `tools/test/mp-rules.test.mjs`
+- `tools/test/online.smoke.mjs`
+- `tools/test/throne.smoke.mjs`
+- `MANIFEST.md`, `CHANGE_TRACKER_v3.md`, `TESTING_CHECKLIST.md`
