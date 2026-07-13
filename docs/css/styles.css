@@ -1,8 +1,10 @@
 /*
  * @file        docs/css/styles.css
- * @version     1.14.5
- * @updated     2026-07-11
+ * @version     1.14.6
+ * @updated     2026-07-12
  * @changelog
+*   1.14.6 — Removed the orphaned .shell-footer rule (its only user, the
+*           "Build skeleton" footer in main.js, was removed).
 *   1.14.5 — Fixed a real, confirmed bug: .vr-clue-ribbon had TWO conflicting
 *           definitions — an older one (flex-direction:column, forcing one
 *           chip per row unconditionally) that silently competed with a
@@ -101,7 +103,6 @@ h1,h2,h3{font-family:var(--font-pixel);}
   text-shadow:0 0 18px var(--accent-gold-glow);
 }
 .shell-tagline{ color:var(--text-secondary); font-size:13px; margin-top:10px; }
-.shell-footer{ text-align:center; color:var(--text-dim); font-size:11px; margin-top:8px; }
 
 .mode-group{ display:flex; flex-direction:column; gap:12px; }
 .mode-group-title{
