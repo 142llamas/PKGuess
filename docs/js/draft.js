@@ -1,8 +1,24 @@
 /**
  * @file        docs/js/draft.js   (PokeGuess — Draft Battle engine)
- * @version     0.9.0
- * @updated     2026-07-09
+ * @version     0.9.3
+ * @updated     2026-07-14
  * @changelog
+ *   0.9.3 — Simplified-moves pass pool adjustments: un-banned MIST (now
+ *           implemented in sim.js — blocks opponent-induced stat drops for 5
+ *           turns, meaningful in 1v1); banned HEAL BELL and PSYCH UP (tiny
+ *           wins not worth the special-casing, per request). Perish Song stays
+ *           banned.
+ *   0.9.2 — Tier-3 pool adjustments (requested rule of thumb: implement if
+ *           clean, otherwise ban). Un-banned SNORE (now implemented in sim.js
+ *           2.7.0 as an asleep-only move). Banned SLEEP TALK (needs nested
+ *           random-move execution while asleep — disproportionate risk; it was
+ *           also a draftable dead no-op until now) and FUTURE SIGHT (real
+ *           delayed 2-turn hit is a new timing system; had been firing as an
+ *           immediate 120 nuke). Disable/Encore remain banned as before.
+ *   0.9.1 — Added Destiny Bond to BANNED_DRAFT_MOVES (requested alongside the
+ *           sim.js Tier-2 batch). Like the other faint/switch-dependent bans,
+ *           it has no meaningful behavior in a switchless 1v1 win-% sim, so
+ *           it's kept out of the pool rather than modeled in sim.js.
  *   0.9.0 — Requested: no Pokemon can appear more than once in a single
  *           draft. _speciesAt() now excludes species already shown earlier
  *           in the same draft (tracked in a new _seenSpecies set, populated
@@ -479,8 +495,9 @@ const BANNED_DRAFT_MOVES = new Set([
   'attract', 'selfdestruct', 'explosion', 'batonpass', 'mirrormove', 'skullbash',
   'rage', 'teleport', 'perishsong', 'conversion', 'disable', 'encore',
   'falseswipe', 'foresight', 'meanlook', 'metronome', 'mimic', 'mindreader',
-  'mist', 'roar', 'whirlwind', 'sketch', 'skyattack', 'snore', 'spite',
-  'spikes', 'spiderweb', 'sweetscent', 'thief', 'transform',
+  'roar', 'whirlwind', 'sketch', 'skyattack', 'spite',
+  'spikes', 'spiderweb', 'sweetscent', 'thief', 'transform', 'destinybond',
+  'sleeptalk', 'futuresight', 'healbell', 'psychup',
 ].map(moveId));
 
 export function buildLearnsetMap(movelist, moveStats) {

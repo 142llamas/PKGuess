@@ -7,8 +7,155 @@
  * UI can replay one battle step-by-step while the real outcome is a win-% taken
  * over many silent simulations.
  *
- * @version 2.4.0
+ * @version 2.11.0
  * @changelog
+ *   2.11.0 — "Simplified moves" pass complete: SUBSTITUTE (requested). Spends
+ *           1/4 max HP to create a decoy with 1/4 max HP + 1 (fails if a sub is
+ *           already up or HP ≤ cost). While the sub stands, incoming damage is
+ *           routed to it (applyDamageToDefender), and gen-2 excess damage does
+ *           NOT carry over on break. A `hadSub` snapshot taken when the move
+ *           connects blocks every defender-targeting side-effect that turn —
+ *           status, confusion, flinch, stat drops, Leech Seed, trapping — even
+ *           if the sub breaks from the same hit; the attacker's own self-boost
+ *           secondary still procs. Residual chip (poison/burn/Leech/sand/trap/
+ *           nightmare/curse) still hits the mon behind the sub. New sub/
+ *           sub-damage/sub-break events. DISCLOSED simplifications: drain/recoil
+ *           use the computed damage rather than the amount the sub actually
+ *           absorbed (minor over-heal/recoil when overkilling a sub); Pain Split
+ *           ignores the sub and averages real HP; confusion self-hit strikes the
+ *           mon, not its own sub. This closes the simplified-moves list — every
+ *           draftable move now behaves per gen-2 (within the switchless-1v1
+ *           scope), with only the documented approximations remaining.
+ *   2.10.0 — "Simplified moves" pass, Mist + Weather (requested). MIST: un-
+ *           banned; 5-turn protection blocking any opponent-induced stat drop
+ *           (applyFoeBoosts filters negative components while mistTurns > 0);
+ *           positive foe-target boosts, self-boosts, and self-drops are
+ *           unaffected. WEATHER: field-level state (weather + weatherTurns)
+ *           threaded through doMove/calcDamage/endOfTurn. Rain Dance/Sunny Day/
+ *           Sandstorm each last 5 turns. Rain: Water ×1.5, Fire ×0.5, Thunder
+ *           can't miss, Synthesis-family heal 1/4. Sun: Fire ×1.5, Water ×0.5,
+ *           Solar Beam fires instantly (no charge turn), Thunder acc → 50,
+ *           Synthesis-family heal 2/3. Sandstorm: 1/16 max-HP end-of-turn chip
+ *           to anything not Rock/Ground/Steel (gen-2 sandstorm does NOT boost
+ *           Rock Sp.Def — that's gen 4). New events: mist/mist-block/mist-end,
+ *           weather-start/weather-end, sandstorm chip. Heal Bell & Psych Up
+ *           banned in draft.js instead of modeled (tiny wins, per request).
+ *           DISCLOSED: Solar Beam's power reduction in rain/sand is not modeled
+ *           (only the sun instant-charge is); no weather-setting held items
+ *           (5-turn fixed duration). Substitute is the last simplified move
+ *           still to do.
+ *   2.9.0 — "Simplified moves" pass, batch A/B (requested). Bone Rush: was
+ *           firing as a single 25-bp hit; now the real 2–5 multi-hit. Low Kick:
+ *           added its 30% flinch — and a correction to an earlier assumption,
+ *           Low Kick is NOT weight-based in gen 1/2 (that's gen 3+), so it's
+ *           just flat power + flinch, no weight data needed. Return/Frustration:
+ *           data base power 50→102 (each move's power at its own optimal
+ *           happiness — the standard assumption in a context with no happiness
+ *           stat; disclosed). Trapping moves (Wrap/Bind/Fire Spin/Clamp/
+ *           Whirlpool): a connecting hit now binds the target for 2–5 turns of
+ *           1/16 max-HP chip (TRAP_FRACTION), via a `trap` move flag +
+ *           `trappedTurns` state + endOfTurn chip; the "can't switch" half is
+ *           moot in a switchless 1v1 but the residual chip is real. New `trap`/
+ *           `trap-end` events. (Batches C–E — Heal Bell, Psych Up, Substitute,
+ *           Weather — still to come.)
+ *   2.8.0 — Tier-3: "rampage" moves OUTRAGE / THRASH / PETAL DANCE (requested).
+ *           Each locks the user into repeating it for 2–3 turns (forced via the
+ *           same chooseMoveForTurn mechanism as Rollout's lock), then the user
+ *           is confused from fatigue. Lock starts on first use (set before any
+ *           early return, so a missed/blocked/immune rampage turn still counts);
+ *           tickRampage() runs from the turn loop after the user acts, so it
+ *           advances on every path the move took. New `rampage` move flag,
+ *           `rampageMove`/`rampageTurns` state, `rampage-start`/`rampage-end`
+ *           events. Disclosed simplifications: the lock only advances on turns
+ *           the user actually acts (a disruption like paralysis/sleep pauses
+ *           rather than ends it), and the fatigue confusion is self-inflicted so
+ *           it ignores the user's own Safeguard.
+ *   2.7.0 — Tier-3 (partial): SNORE implemented (requested rule of thumb —
+ *           implement if clean, else ban). Usable ONLY while the user is
+ *           asleep: preMove now takes the chosen move, and a sleeping mon that
+ *           picks Snore acts (dealing 40 bp + 30% flinch) instead of skipping,
+ *           WITHOUT ending its sleep early — the "N sleep turns = N ticks"
+ *           invariant is preserved (guarded by a dedicated test). An awake
+ *           Snore fails (requiresSelfAsleep guard in doMove, mirroring Dream
+ *           Eater's target-asleep guard). New `asleep-acts` event. Snore's
+ *           data base power was corrected 50→40 to match real gen-2. Sleep
+ *           Talk, Future Sight, Disable, and Encore remain OUT — banned in
+ *           draft.js rather than modeled (Sleep Talk needs nested random-move
+ *           execution while asleep; Future Sight needs a delayed-hit timing
+ *           system) — flagged as deliberate scope calls, not gaps.
+ *   2.6.0 — Tier-2 move-audit batch (requested). Destiny Bond was moved to
+ *           draft.js's BANNED_DRAFT_MOVES (per request) rather than modeled;
+ *           Mind Reader was already banned, so Lock-On is the only member of
+ *           that pair implemented here.
+ *             • Nightmare: fails unless the target is asleep; then chips 1/4
+ *               max HP every end-of-turn until they wake (the wake path clears
+ *               it). New `nightmared` flag + `nightmare-end` event.
+ *             • Safeguard: 5-turn side status immunity for the user. Blocks
+ *               all major status AND confusion (confusion is applied directly,
+ *               not via tryStatus, so both the guaranteed and secondary
+ *               confuse paths were guarded too). New `safeguardTurns` state,
+ *               `safeguard`/`safeguard-block`/`safeguard-end` events.
+ *             • Lock-On / Mind Reader: the user's NEXT move can't miss —
+ *               skips the accuracy/evasion roll AND hits through Fly/Dig
+ *               semi-invulnerability (full real behavior, per request). One-
+ *               shot `lockedOn` flag consumed by the next move; `lockon`/
+ *               `lockon-hit` events.
+ *             • Fury Cutter / Rollout: power DOUBLES per consecutive
+ *               successful hit, capped at ×16 (RAMP_MAX_DOUBLINGS = 4, the
+ *               gen-2 5-hit cap). The chain resets on a miss, a Protect block,
+ *               a semi-invuln whiff, a type-immune 0-damage hit, or the user
+ *               switching moves (all routed through breakRamp()). Rollout
+ *               additionally LOCKS the user into repeating it for the 5-hit
+ *               sequence (per request — forced via chooseMoveForTurn, the same
+ *               mechanism as charge/recharge; this is the reusable forced-move
+ *               scaffold the Tier-3 Outrage/Thrash/Petal Dance will build on).
+ *               New `ramp`/`rolloutLock` move flags, `rampMoveId`/`rampStreak`/
+ *               `rolloutMove`/`rolloutTurns` state, `ramp` event. DISCLOSED:
+ *               Fury Cutter's data base power is 40 (cartridge gen-2 is 10) —
+ *               not overridden, since bp is data-driven everywhere; only the
+ *               ramp mechanic is added, so its absolute numbers run hot.
+ *               Defense Curl's Rollout-power doubling is not modeled.
+ *             • Fly/Dig semi-invulnerability exceptions: Gust/Twister now hit
+ *               a mid-Fly target and Earthquake/Magnitude a mid-Dig target,
+ *               each for DOUBLE damage (threaded through calcDamage's new
+ *               optional extraMul param). Previously invulnThisTurn blocked
+ *               everything with no exceptions.
+ *   2.5.0 — Tier-1 move-audit batch (requested): cross-referenced all 244
+ *           moves in movestats-gen2.json against MOVE_EFFECTS directly (not
+ *           the changelog prose) to find real gaps. Also cross-checked
+ *           against draft.js's BANNED_DRAFT_MOVES — Explosion/Self-Destruct,
+ *           Sweet Scent, Sky Attack, and False Swipe turned out to already be
+ *           unreachable in any real draft (banned from the pool, including
+ *           Smeargle's Sketch pool via draftpool-gen2.json going through the
+ *           same buildLearnsetMap() filter), so those were dropped from this
+ *           batch rather than "fixed" for dead code.
+ *             • Dynamicpunch: added its real 100% guaranteed confuse on hit
+ *               (was plain damage).
+ *             • Mud-Slap / Octazooka: added their real target-accuracy-drop
+ *               secondaries (100% / 40%) — meaningful now that accuracy
+ *               stages are modeled (2.4.0); previously plain damage.
+ *             • Bone Club: added its 10% flinch secondary (was missing).
+ *             • Endure: was a complete no-op despite already carrying correct
+ *               prio:4 in the base data. Now guarantees survival at 1 HP
+ *               against the turn's incoming hit (self-inflicted recoil/crash/
+ *               curse-cost are NOT covered — Endure blocks the opponent's
+ *               attack, not your own move's drawback). New `enduring` flag,
+ *               cleared every endOfTurn (before residual chip damage, so
+ *               poison/burn/Leech Seed can still finish off an Endure-saved
+ *               mon on the same turn — Endure only blocks the attack itself).
+ *             • Protect / Detect: same story — correct prio:4, zero effect.
+ *               Now blocks any incoming move that would actually affect the
+ *               defender (damage, guaranteed/secondary status, Curse, Leech
+ *               Seed, Pain Split, Haze). Self-only moves (Rest/Belly Drum/
+ *               Reflect/Light Screen/Endure, and any generic self-targeted
+ *               boost like Swords Dance) aren't blocked since they never
+ *               touch the defender. Disclosed simplification: Curse's
+ *               non-Ghost branch is a pure self-buff that doesn't strictly
+ *               need blocking, but is blocked anyway rather than special-
+ *               cased further — a harmless over-block in a rare edge case.
+ *               New `protecting` flag, same one-turn lifecycle as `enduring`.
+ *             • Haze: resets ALL stat stages (atk/def/spa/spd/spe/acc/eva) to
+ *               0 for BOTH combatants. Was a complete no-op.
  *   2.4.0 — Accuracy/evasion stages + speed-mechanics pass (requested):
  *             • ACCURACY & EVASION are now modeled as ±6 stages, using the
  *               gen-2 table (multiplier = (3+stage)/3 for +, 3/(3-stage) for -,
@@ -175,6 +322,9 @@ const PSN_FRACTION = 1 / 8;      // poison end-of-turn chip
 const TOX_FRACTION = 1 / 16;     // toxic chip, multiplied by counter
 const LEECH_SEED_FRACTION = 1 / 8;
 const CURSE_CHIP_FRACTION = 1 / 4;
+const NIGHTMARE_FRACTION = 1 / 4;   // Tier-2: Nightmare chips 1/4 max HP each turn while asleep
+const TRAP_FRACTION = 1 / 16;       // Simplified-moves: Wrap/Bind/etc. chip 1/16 max HP each turn while trapped
+const RAMP_MAX_DOUBLINGS = 4;       // Tier-2: Fury Cutter/Rollout cap at ×16 (the gen-2 5-hit cap)
 const CONFUSE_SELF = 0.33;       // chance a confused mon hits itself
 const CONFUSE_BP = 40;           // self-hit power (typeless physical)
 const CRASH_FRACTION = 1 / 8;    // Jump Kick / High Jump Kick miss "crash" damage
@@ -259,13 +409,56 @@ const MOVE_EFFECTS = {
   recover: { heal: [1, 2] },
   softboiled: { heal: [1, 2] },
   milkdrink: { heal: [1, 2] },
-  morningsun: { heal: [1, 2] },  // weather not modeled — flat 1/2, same simplification as Recover
-  synthesis: { heal: [1, 2] },
-  moonlight: { heal: [1, 2] },
+  morningsun: { heal: [1, 2], weatherHeal: true },  // weather-scaled: 2/3 sun, 1/4 rain/sand, 1/2 clear
+  synthesis: { heal: [1, 2], weatherHeal: true },
+  moonlight: { heal: [1, 2], weatherHeal: true },
   rest: { special: 'rest' },
   painsplit: { special: 'painsplit' },
   reflect: { special: 'reflect' },        // halves incoming PHYSICAL damage for 5 turns
   lightscreen: { special: 'lightscreen' }, // halves incoming SPECIAL damage for 5 turns
+  // Tier-1 batch (requested audit pass) — all three previously carried correct
+  // prio:4 data but had ZERO implementation, i.e. were completely inert moves.
+  endure: { special: 'endure' },   // survive the turn's incoming hit at 1 HP
+  protect: { special: 'protect' }, // block the turn's incoming hit entirely
+  detect: { special: 'protect' },  // same effect as Protect, different name/type
+  haze: { special: 'haze' },       // reset ALL stat stages to 0, both sides
+  // ---- Tier-2 batch (requested audit pass) ---------------------------------
+  nightmare: { special: 'nightmare' },   // fails unless target asleep; then 1/4 max HP chip/turn until they wake
+  safeguard: { special: 'safeguard' },   // 5-turn status immunity for the user's side
+  lockon: { special: 'lockon' },         // next move by the user can't miss (bypasses accuracy/evasion AND semi-invuln)
+  snore: { requiresSelfAsleep: true, secondary: { chance: 30, flinch: true } }, // Tier-3: usable ONLY while the user is asleep; 40 bp + 30% flinch
+  // ---- Tier-3: "rampage" moves — lock the user in for 2–3 turns, then the
+  // user becomes confused from fatigue. Reuses the same forced-move approach as
+  // Rollout's lock (chooseMoveForTurn), but duration-driven (not ramp-driven)
+  // and with self-confusion on completion. Disclosed simplifications: the lock
+  // runs its full 2–3 turns and only advances on turns the user actually acts
+  // (a disruption like paralysis/sleep pauses rather than ends it); the fatigue
+  // confusion is self-inflicted and ignores the user's own Safeguard.
+  outrage: { rampage: true },
+  thrash: { rampage: true },
+  petaldance: { rampage: true },
+  // ---- "Simplified moves" pass (requested) ---------------------------------
+  bonerush: { multiHit: [2, 5] },                    // was firing as a single 25-bp hit; real gen-2 is 2–5 hits
+  lowkick: { secondary: { chance: 30, flinch: true } }, // gen 1/2 Low Kick is flat power + 30% flinch (NOT weight-based — that's gen 3+)
+  // Trapping moves: damage, then bind the target for 2–5 turns of 1/16 max-HP
+  // chip. The "can't switch" half is moot in a switchless 1v1, but the residual
+  // chip is real and meaningful. Handled via a `trap` flag consumed after a
+  // connecting hit; chip + countdown live in endOfTurn.
+  wrap: { trap: true },
+  bind: { trap: true },
+  firespin: { trap: true },
+  clamp: { trap: true },
+  whirlpool: { trap: true },
+  // Mist: 5-turn protection from opponent-induced stat drops.
+  mist: { special: 'mist' },
+  // Substitute: spend 1/4 max HP to create a decoy that soaks damage/status.
+  substitute: { special: 'substitute' },
+  // Weather: 5 turns each. Rain/Sun scale Water/Fire damage and a few move
+  // interactions (Solar Beam charge, Thunder accuracy, Synthesis-family heal);
+  // Sandstorm chips non-Rock/Ground/Steel 1/16 per turn.
+  raindance: { special: 'weather', weatherKind: 'rain' },
+  sunnyday: { special: 'weather', weatherKind: 'sun' },
+  sandstorm: { special: 'weather', weatherKind: 'sand' },
 
   // ---- multi-hit (real 3/8, 3/8, 1/8, 1/8 split for 2/3/4/5 hits) ----------
   cometpunch: { multiHit: [2, 5] },
@@ -313,7 +506,19 @@ const MOVE_EFFECTS = {
   psywave: { fixedDamage: 'psywave' },
   flail: { hpBasedPower: true },
   reversal: { hpBasedPower: true },
-  magnitude: { magnitudeRoll: true }, // #6 — was flat listed bp:75; now the real random 4–10 roll
+  magnitude: { magnitudeRoll: true, hitsDig: true }, // #6 — real random 4–10 roll; also hits (2×) a target mid-Dig
+  // ---- Tier-2: ramping-power moves (double per consecutive successful hit) --
+  // Base power comes from the data file (the sim's single source of truth for
+  // bp everywhere); the ramp DOUBLES it per consecutive hit, capped at 4
+  // doublings (the real gen-2 5-hit cap). Disclosed: Fury Cutter's data base
+  // is 40, higher than cartridge gen-2's real 10 base — not overridden here,
+  // since bp is data-driven throughout; only the ramp MECHANIC is added.
+  furycutter: { ramp: true },              // free to switch away; streak resets on miss/other move
+  rollout: { ramp: true, rolloutLock: true }, // full behavior: locks the user in for up to 5 turns
+  // ---- Tier-2: moves that hit a semi-invulnerable (Fly/Dig) target ----------
+  gust: { hitsFly: true },      // hits (2×) a target mid-Fly
+  twister: { hitsFly: true, secondary: { chance: 20, flinch: true } }, // (flinch entry moved here from below)
+  earthquake: { hitsDig: true }, // hits (2×) a target mid-Dig
 
   // ---- guaranteed status (status-category moves) ---------------------------
   toxic: { status: 'tox' },
@@ -402,6 +607,11 @@ const MOVE_EFFECTS = {
   acid: { secondary: { chance: 10, boosts: { def: -1 } } },
   psychic: { secondary: { chance: 10, boosts: { spd: -1 } } },
   aurorabeam: { secondary: { chance: 10, boosts: { atk: -1 } } },
+  // ---- Tier-1 batch (requested audit pass) ---------------------------------
+  dynamicpunch: { secondary: { chance: 100, confuse: true } }, // guaranteed confuse on hit — was a plain damage no-op
+  mudslap: { secondary: { chance: 100, boosts: { acc: -1 } } }, // 100% target accuracy drop — now meaningful since acc stages are modeled (2.4.0)
+  octazooka: { secondary: { chance: 40, boosts: { acc: -1 } } }, // 40% target accuracy drop — same as Mud-Slap
+  boneclub: { secondary: { chance: 10, flinch: true } }, // 10% flinch — was missing entirely
   crunch: { secondary: { chance: 20, boosts: { def: -1 } } },
   shadowball: { secondary: { chance: 20, boosts: { spd: -1 } } },
   ancientpower: { secondary: { chance: 10, selfBoosts: { atk: 1, def: 1, spa: 1, spd: 1, spe: 1 } } },
@@ -419,7 +629,6 @@ const MOVE_EFFECTS = {
   bubblebeam: { secondary: { chance: 10, boosts: { spe: -1 } } },
   icywind: { boosts: { spe: -1 }, boostTarget: 'target' }, // 100% speed drop (a damaging move that ALWAYS lowers the target's Speed) — affects turn order for the rest of the battle
   dragonbreath: { secondary: { chance: 30, status: 'par' } },
-  twister: { secondary: { chance: 20, flinch: true } },
   metalclaw: { secondary: { chance: 10, boosts: { atk: 1 }, selfBoosts: { atk: 1 } } },
   steelwing: { secondary: { chance: 10, boosts: { def: 1 }, selfBoosts: { def: 1 } } },
 };
@@ -514,6 +723,20 @@ function makeCombatant(spec, gen, moveData) {
     mustRecharge: false,           // #6a — Hyper Beam
     reflectTurns: 0,               // Reflect: halves incoming PHYSICAL damage while > 0
     lightScreenTurns: 0,           // Light Screen: halves incoming SPECIAL damage while > 0
+    enduring: false,                // Tier-1: Endure — survive this turn's hit at 1 HP
+    protecting: false,              // Tier-1: Protect/Detect — block this turn's incoming hit
+    safeguardTurns: 0,              // Tier-2: Safeguard — status immunity while > 0 (5 turns)
+    nightmared: false,              // Tier-2: Nightmare — chips 1/4 max HP/turn while asleep
+    lockedOn: false,                // Tier-2: Lock-On/Mind Reader — next move can't miss
+    rampMoveId: null,               // Tier-2: Fury Cutter/Rollout — id of the current ramping move
+    rampStreak: 0,                  // Tier-2: consecutive successful hits with rampMoveId (0 = first)
+    rolloutMove: null,              // Tier-2: Rollout — move object the mon is locked into repeating
+    rolloutTurns: 0,                // Tier-2: Rollout — forced repeats remaining
+    rampageMove: null,              // Tier-3: Outrage/Thrash/Petal Dance — move the mon is locked into
+    rampageTurns: 0,                // Tier-3: rampage turns remaining (2–3), then self-confusion
+    trappedTurns: 0,                // Simplified-moves: Wrap/Bind/Fire Spin/Clamp/Whirlpool — 1/16 chip while > 0
+    mistTurns: 0,                   // Simplified-moves: Mist — blocks opponent-induced stat drops while > 0
+    subHp: 0,                       // Simplified-moves: Substitute — absorbs damage/status while > 0
     moves: (spec.moves || []).map((nm) => {
       const hp = HP_TYPE_RE.exec(nm);
       if (hp) {
@@ -553,7 +776,7 @@ function typeEffectiveness(moveType, defTypes, chart) {
   return m;
 }
 
-function calcDamage(atkr, defr, move, rng, gen, chart, log) {
+function calcDamage(atkr, defr, move, rng, gen, chart, log, extraMul = 1, field = null) {
   const physical = move.cat === 'Physical';
   let A, D;
   if (physical) {
@@ -588,6 +811,20 @@ function calcDamage(atkr, defr, move, rng, gen, chart, log) {
   if (!crit) {
     if (physical && defr.reflectTurns > 0) dmg = Math.max(1, Math.floor(dmg / 2));
     else if (!physical && defr.lightScreenTurns > 0) dmg = Math.max(1, Math.floor(dmg / 2));
+  }
+  // Tier-2: Fly/Dig type-exception moves (Gust/Twister vs Fly, Earthquake/
+  // Magnitude vs Dig) deal double damage to the airborne/underground target.
+  if (extraMul !== 1) dmg = Math.floor(dmg * extraMul);
+  // Weather (Simplified-moves): Rain boosts Water / weakens Fire; Sun boosts
+  // Fire / weakens Water (gen-2 ×1.5 / ×0.5).
+  if (field && field.weather) {
+    if (field.weather === 'rain') {
+      if (move.type === 'Water') dmg = Math.floor(dmg * 1.5);
+      else if (move.type === 'Fire') dmg = Math.floor(dmg * 0.5);
+    } else if (field.weather === 'sun') {
+      if (move.type === 'Fire') dmg = Math.floor(dmg * 1.5);
+      else if (move.type === 'Water') dmg = Math.floor(dmg * 0.5);
+    }
   }
   const roll = (217 + Math.floor(rng() * 39)) / 255; // gen 1/2 random spread ~0.85–1.0
   dmg = Math.max(1, Math.floor(dmg * roll));
@@ -627,6 +864,7 @@ function applyBoosts(target, boosts, gen, log, who) {
 
 function tryStatus(target, status, rng, log) {
   if (target.status) return false;            // one major status at a time
+  if (target.safeguardTurns > 0) { log.push({ t: 'safeguard-block', target: target.name }); return false; } // Tier-2: Safeguard blocks all major status
   // simple type-based immunities for the common cases
   if ((status === 'brn') && target.types.includes('Fire')) return false;
   if ((status === 'frz') && target.types.includes('Ice')) return false;
@@ -638,23 +876,194 @@ function tryStatus(target, status, rng, log) {
   return true;
 }
 
-function doMove(attacker, defender, move, rng, gen, chart, log, releasingCharge) {
-  // ---- semi-invulnerable target (Fly/Dig charge turn) — nothing can hit it -
-  if (defender.invulnThisTurn) {
-    log.push({ t: 'miss', source: attacker.name, move: move.name, reason: 'invuln' });
+// Applies incoming damage to the defender. Substitute (Simplified-moves)
+// intercepts first: while a sub is up, damage hits the sub instead of the mon,
+// and gen-2 excess damage does NOT carry over when the sub breaks. Otherwise
+// honors Endure (Tier-1): if the defender used Endure THIS turn and this hit
+// would otherwise faint it, it survives with 1 HP. Self-inflicted recoil/crash/
+// curse-cost do NOT go through this (they hit the mon, never the sub).
+function applyDamageToDefender(defender, amount, log) {
+  if (defender.subHp > 0) {
+    defender.subHp -= amount;
+    if (defender.subHp <= 0) { defender.subHp = 0; log.push({ t: 'sub-break', target: defender.name }); }
+    else log.push({ t: 'sub-damage', target: defender.name, amount });
     return;
+  }
+  const newHp = defender.hp - amount;
+  if (defender.enduring && defender.hp > 0 && newHp <= 0) {
+    defender.hp = 1;
+    log.push({ t: 'endure', target: defender.name });
+  } else {
+    defender.hp = Math.max(0, newHp);
+  }
+}
+
+// Tier-2: reset a combatant's ramping-move streak AND any Rollout lock. Called
+// whenever a ramp move fails to connect (miss / blocked / immune) or the mon
+// uses a different move — the "consecutive successful use" chain is broken.
+function breakRamp(c) {
+  c.rampMoveId = null;
+  c.rampStreak = 0;
+  c.rolloutMove = null;
+  c.rolloutTurns = 0;
+}
+
+// Tier-3: advance a rampage (Outrage/Thrash/Petal Dance) after the user has
+// acted this turn. Called from the turn loop right after doMove, so it runs on
+// every path the move actually took (hit, miss, blocked, immune). When the
+// 2–3 turn count is exhausted, the lock releases and the user is confused from
+// fatigue (self-inflicted — ignores the user's own Safeguard, disclosed).
+function tickRampage(c, rng, log) {
+  if (!c.rampageMove) return;
+  c.rampageTurns--;
+  if (c.rampageTurns <= 0) {
+    c.rampageMove = null;
+    if (c.hp > 0) {
+      if (c.confuseTurns === 0) c.confuseTurns = randint(rng, 2, 4);
+      log.push({ t: 'rampage-end', target: c.name });
+    }
+  }
+}
+
+// Apply boosts to a FOE (opponent-induced). Mist (Simplified-moves) blocks any
+// stat-lowering component while active; positive components (rare on foe-target
+// moves) still apply. Self-targeted boosts never go through here.
+function applyFoeBoosts(target, boosts, gen, log) {
+  if (target.mistTurns > 0) {
+    const kept = {};
+    let blockedAny = false;
+    for (const [k, v] of Object.entries(boosts)) {
+      if (v < 0) blockedAny = true; else kept[k] = v;
+    }
+    if (blockedAny) log.push({ t: 'mist-block', target: target.name });
+    if (Object.keys(kept).length) applyBoosts(target, kept, gen, log);
+    return;
+  }
+  applyBoosts(target, boosts, gen, log);
+}
+
+function doMove(attacker, defender, move, rng, gen, chart, log, releasingCharge, field) {
+  // ---- Tier-3 rampage start: the first time a rampage move is used, lock the
+  // user in for 2–3 turns. Set BEFORE any early return so a turn always counts
+  // (a missed/blocked/immune rampage move still burns a locked turn). The
+  // actual decrement + fatigue confusion happen in tickRampage() after doMove.
+  if (move.rampage && !attacker.rampageMove) {
+    attacker.rampageMove = move;
+    attacker.rampageTurns = randint(rng, 2, 3);
+    log.push({ t: 'rampage-start', source: attacker.name, move: move.name });
+  }
+  // ---- semi-invulnerable target (Fly/Dig charge turn) ----------------------
+  // Normally nothing can hit a mon mid-Fly/Dig. Exceptions (Tier-2): the
+  // attacker is Locked-On (Lock-On/Mind Reader — hits through anything), or the
+  // move is one that reaches the specific hiding spot (Gust/Twister hit Fly,
+  // Earthquake/Magnitude hit Dig) — those also deal DOUBLE damage. `chId` is
+  // whatever the defender is charging; it's still set this turn because
+  // chargingMove isn't cleared until next turn's chooseMoveForTurn.
+  let invulnDoubles = false;
+  if (defender.invulnThisTurn) {
+    const chId = defender.chargingMove && defender.chargingMove.id;
+    const exception = (move.hitsFly && chId === 'fly') || (move.hitsDig && chId === 'dig');
+    if (attacker.lockedOn) {
+      // Lock-On lets it through, but with no 2× bonus (that's only for the
+      // type-specific exceptions). Accuracy check below will also auto-hit.
+    } else if (exception) {
+      invulnDoubles = true;
+    } else {
+      log.push({ t: 'miss', source: attacker.name, move: move.name, reason: 'invuln' });
+      breakRamp(attacker);
+      return;
+    }
   }
 
   // ---- two-turn charge: turn 1 (not releasing) — just charge, no damage ----
-  if (move.twoTurn && !releasingCharge) {
+  // Weather (Simplified-moves): Solar Beam skips the charge turn in harsh sun,
+  // firing immediately (falls straight through to resolve this turn).
+  const solarInSun = move.id === 'solarbeam' && field && field.weather === 'sun';
+  if (move.twoTurn && !releasingCharge && !solarInSun) {
     attacker.chargingMove = move;
     if (move.semiInvuln) attacker.invulnThisTurn = true;
     log.push({ t: 'charge', source: attacker.name, move: move.name });
     return;
   }
-  // if releasingCharge is true, fall through — the move executes for real now.
+  // if releasingCharge is true (or Solar Beam in sun), fall through — the move
+  // executes for real now.
+
+  // ---- Protect / Detect (Tier-1): block any move that would actually affect
+  // the defender. Self-only special cases (Rest/Belly Drum/Reflect/Light
+  // Screen/Endure) and generic self-only boosts (Swords Dance, Agility, ...)
+  // don't target the defender at all, so Protect has nothing to block there —
+  // everything else (damage, guaranteed/secondary status, Curse, Leech Seed,
+  // Pain Split, Haze) is blocked outright. Simplification, disclosed: Curse's
+  // non-Ghost branch is a pure self-buff that doesn't need blocking, but for
+  // simplicity it's blocked like its Ghost branch rather than special-cased
+  // further — a harmless over-block in a rare edge case.
+  if (defender.protecting) {
+    const selfOnlySpecial = ['rest', 'bellydrum', 'reflect', 'lightscreen', 'endure'].includes(move.special);
+    const selfOnlyBoost = move.boostTarget === 'self' && !(move.bp > 0) && !move.ohko && move.fixedDamage == null;
+    if (!selfOnlySpecial && !selfOnlyBoost) {
+      log.push({ t: 'protect-block', source: attacker.name, target: defender.name, move: move.name });
+      breakRamp(attacker);
+      return;
+    }
+  }
 
   // ---- special-cased moves that don't fit the generic pipeline (#6) --------
+  if (move.special === 'endure') {
+    attacker.enduring = true;
+    log.push({ t: 'endure-ready', target: attacker.name });
+    return;
+  }
+  if (move.special === 'protect') {
+    attacker.protecting = true;
+    log.push({ t: 'protect-ready', target: attacker.name });
+    return;
+  }
+  if (move.special === 'haze') {
+    for (const k of Object.keys(attacker.boosts)) attacker.boosts[k] = 0;
+    for (const k of Object.keys(defender.boosts)) defender.boosts[k] = 0;
+    log.push({ t: 'haze' });
+    return;
+  }
+  if (move.special === 'safeguard') {
+    attacker.safeguardTurns = 5;
+    log.push({ t: 'safeguard', target: attacker.name });
+    return;
+  }
+  if (move.special === 'lockon') {
+    attacker.lockedOn = true;
+    log.push({ t: 'lockon', source: attacker.name, target: defender.name });
+    return;
+  }
+  if (move.special === 'mist') {
+    attacker.mistTurns = 5; // Simplified-moves: blocks opponent-induced stat drops
+    log.push({ t: 'mist', target: attacker.name });
+    return;
+  }
+  if (move.special === 'substitute') {
+    // Costs 1/4 max HP; fails if a sub is already up or HP is too low to pay.
+    const cost = Math.floor(attacker.maxhp / 4);
+    if (attacker.subHp > 0 || attacker.hp <= cost) { log.push({ t: 'fail', target: attacker.name, move: move.name }); return; }
+    attacker.hp -= cost;
+    attacker.subHp = cost + 1; // gen 1/2 sub has 1/4 max HP + 1
+    log.push({ t: 'sub', target: attacker.name, cost });
+    return;
+  }
+  if (move.special === 'weather') {
+    // Set the field weather for 5 turns. Re-using the same weather refreshes it.
+    field.weather = move.weatherKind;
+    field.weatherTurns = 5;
+    log.push({ t: 'weather-start', weather: move.weatherKind });
+    return;
+  }
+  if (move.special === 'nightmare') {
+    // Fails unless the target is asleep; sets a flag that chips 1/4 max HP each
+    // end-of-turn until they wake (the wake path clears it). Accuracy is 100
+    // and never-miss in practice here; no accuracy roll needed for a status
+    // move with acc:100 vs a sleeping target.
+    if (defender.status !== 'slp') { log.push({ t: 'fail', target: defender.name, move: move.name }); return; }
+    if (!defender.nightmared) { defender.nightmared = true; log.push({ t: 'nightmare', target: defender.name }); }
+    return;
+  }
   if (move.special === 'curse') {
     if (attacker.types.includes('Ghost')) {
       const cost = Math.max(1, Math.floor(attacker.maxhp / 2));
@@ -690,7 +1099,7 @@ function doMove(attacker, defender, move, rng, gen, chart, log, releasingCharge)
     return;
   }
   if (move.special === 'leechseed') {
-    if (defender.types.includes('Grass') || defender.seededBy) { log.push({ t: 'fail', target: defender.name, move: move.name }); return; }
+    if (defender.subHp > 0 || defender.types.includes('Grass') || defender.seededBy) { log.push({ t: 'fail', target: defender.name, move: move.name }); return; }
     defender.seededBy = attacker;
     log.push({ t: 'leechseed', target: defender.name });
     return;
@@ -709,17 +1118,21 @@ function doMove(attacker, defender, move, rng, gen, chart, log, releasingCharge)
   }
 
   // ---- accuracy (now factors in accuracy/evasion STAGES) ---------------
-  // Base move accuracy is scaled by the attacker's accuracy stage and the
-  // target's evasion stage (evasion enters as the negative of its stage, so
-  // raised evasion lowers the hit chance). acc === true means never-miss
-  // (e.g. Swift), and is left alone. This is what makes Sand-Attack /
-  // Smokescreen (−target accuracy... modeled as +attacker-miss via accuracy
-  // stage on the user side is NOT how it works — accuracy-lowering moves drop
-  // the TARGET's future accuracy) and Double Team / Minimize (+evasion) real.
-  if (move.acc !== true && move.acc != null && !move.ohko) {
-    const hitChance = (move.acc / 100) * accStageMul(attacker.boosts.acc) * accStageMul(-defender.boosts.eva);
+  // Lock-On / Mind Reader (Tier-2): if the attacker locked on last turn, this
+  // move can't miss — skip the roll and consume the one-shot flag. (It also
+  // already bypassed semi-invuln above.)
+  const noMiss = attacker.lockedOn;
+  if (attacker.lockedOn) { attacker.lockedOn = false; log.push({ t: 'lockon-hit', source: attacker.name }); }
+  // Weather (Simplified-moves): Thunder never misses in rain, and its accuracy
+  // drops to 50% in harsh sun. Applied as an accuracy multiplier / no-miss.
+  const thunderRainNoMiss = move.id === 'thunder' && field && field.weather === 'rain';
+  if (!noMiss && !thunderRainNoMiss && move.acc !== true && move.acc != null && !move.ohko) {
+    let acc = move.acc;
+    if (move.id === 'thunder' && field && field.weather === 'sun') acc = 50;
+    const hitChance = (acc / 100) * accStageMul(attacker.boosts.acc) * accStageMul(-defender.boosts.eva);
     if (!chance(rng, Math.min(1, hitChance))) {
       log.push({ t: 'miss', source: attacker.name, move: move.name });
+      breakRamp(attacker); // a missed ramp move (Fury Cutter/Rollout) resets its streak/lock
       if (move.crashOnMiss) { // #6 — Jump Kick / High Jump Kick "crash" on a miss
         const crash = Math.max(1, Math.floor(attacker.maxhp * CRASH_FRACTION));
         attacker.hp = Math.max(0, attacker.hp - crash);
@@ -730,16 +1143,47 @@ function doMove(attacker, defender, move, rng, gen, chart, log, releasingCharge)
   }
   log.push({ t: 'use', source: attacker.name, move: move.name });
 
+  // Substitute (Simplified-moves): capture whether the DEFENDER had a sub up at
+  // the moment this move connected. Damage is redirected to the sub in
+  // applyDamageToDefender; every defender-targeting side-effect below (status,
+  // confusion, flinch, stat drops, Leech Seed, trap) is blocked while the sub
+  // was up — even if this move breaks the sub, its effects still don't reach
+  // the mon this turn (authentic gen-2). Self-effects are unaffected.
+  const hadSub = defender.subHp > 0;
+
   // Dream Eater — fails outright unless the target is asleep
   if (move.requiresAsleep && defender.status !== 'slp') {
     log.push({ t: 'fail', target: defender.name, move: move.name });
     return;
   }
+  // Snore (Tier-3) — fails unless the USER is asleep. (preMove only lets Snore
+  // act while asleep, so this guards the awake case: a mon that picks Snore
+  // while awake gets here and fails, matching the real move.)
+  if (move.requiresSelfAsleep && attacker.status !== 'slp') {
+    log.push({ t: 'fail', target: attacker.name, move: move.name });
+    return;
+  }
+
+  // Tier-2 ramp setup (Fury Cutter / Rollout): power DOUBLES per consecutive
+  // successful hit with the same move. Base power stays data-driven; only the
+  // ramp mechanic lives here. Using any different move breaks the chain.
+  let dmgMove = move;
+  const extraMul = invulnDoubles ? 2 : 1; // Fly/Dig type-exception moves hit 2×
+  if (move.ramp) {
+    if (attacker.rampMoveId !== move.id) { attacker.rampMoveId = move.id; attacker.rampStreak = 0; }
+    const doublings = Math.min(attacker.rampStreak, RAMP_MAX_DOUBLINGS);
+    if (doublings > 0) {
+      dmgMove = { ...move, bp: move.bp * (2 ** doublings) };
+      log.push({ t: 'ramp', source: attacker.name, move: move.name, bp: dmgMove.bp });
+    }
+  } else if (attacker.rampMoveId) {
+    breakRamp(attacker); // used a different move → streak (and any Rollout lock) ends
+  }
 
   let dealt = 0;
   if (move.fixedDamage != null) {
     dealt = calcFixedDamage(attacker, defender, move, rng, chart, log);
-    defender.hp = Math.max(0, defender.hp - dealt);
+    applyDamageToDefender(defender, dealt, log);
   } else if (move.multiHit) {
     const [lo, hi] = move.multiHit;
     const hits = lo === hi ? lo : rollHitCount(rng);
@@ -747,8 +1191,8 @@ function doMove(attacker, defender, move, rng, gen, chart, log, releasingCharge)
     for (let i = 0; i < hits; i++) {
       if (defender.hp <= 0) break;
       const hitMove = move.rampBp ? { ...move, bp: move.rampBp[Math.min(i, move.rampBp.length - 1)] } : move;
-      const d = calcDamage(attacker, defender, hitMove, rng, gen, chart, log);
-      defender.hp = Math.max(0, defender.hp - d);
+      const d = calcDamage(attacker, defender, hitMove, rng, gen, chart, log, extraMul, field);
+      applyDamageToDefender(defender, d, log);
       total += d; actualHits++;
     }
     dealt = total;
@@ -756,16 +1200,36 @@ function doMove(attacker, defender, move, rng, gen, chart, log, releasingCharge)
   } else if (move.magnitudeRoll) {
     const roll = rollMagnitude(rng);
     log.push({ t: 'magnitude', target: defender.name, level: roll.level });
-    dealt = calcDamage(attacker, defender, { ...move, bp: roll.bp }, rng, gen, chart, log);
-    defender.hp = Math.max(0, defender.hp - dealt);
+    dealt = calcDamage(attacker, defender, { ...move, bp: roll.bp }, rng, gen, chart, log, extraMul, field);
+    applyDamageToDefender(defender, dealt, log);
   } else if (move.cat !== 'Status' && (move.bp > 0 || move.ohko)) {
-    dealt = calcDamage(attacker, defender, move, rng, gen, chart, log);
-    defender.hp = Math.max(0, defender.hp - dealt);
+    dealt = calcDamage(attacker, defender, dmgMove, rng, gen, chart, log, extraMul, field);
+    applyDamageToDefender(defender, dealt, log);
+  }
+
+  // Tier-2 ramp bookkeeping AFTER the hit is resolved.
+  if (move.ramp) {
+    if (dealt > 0) {
+      attacker.rampStreak = attacker.rampStreak + 1;
+      if (move.rolloutLock) {
+        if (!attacker.rolloutMove) attacker.rolloutMove = move;            // lock begins on the first hit
+        if (attacker.rampStreak > RAMP_MAX_DOUBLINGS) breakRamp(attacker); // 5 hits done → release; can start over
+      }
+    } else {
+      breakRamp(attacker); // immune / 0-damage hit breaks the chain
+    }
   }
 
   // self heal (Recover / Softboiled / ...)
   if (move.heal && move.cat === 'Status') {
-    const heal = Math.floor(attacker.maxhp * move.heal[0] / move.heal[1]);
+    let [num, den] = move.heal;
+    // Weather (Simplified-moves): Synthesis/Morning Sun/Moonlight heal 2/3 in
+    // sun, 1/4 in rain or sandstorm, and the normal 1/2 in clear weather.
+    if (move.weatherHeal && field && field.weather) {
+      if (field.weather === 'sun') { num = 2; den = 3; }
+      else { num = 1; den = 4; } // rain or sand
+    }
+    const heal = Math.floor(attacker.maxhp * num / den);
     const before = attacker.hp;
     attacker.hp = Math.min(attacker.maxhp, attacker.hp + heal);
     if (attacker.hp !== before) log.push({ t: 'heal', target: attacker.name, amount: attacker.hp - before });
@@ -783,11 +1247,21 @@ function doMove(attacker, defender, move, rng, gen, chart, log, releasingCharge)
     attacker.hp = Math.max(0, attacker.hp - r);
     log.push({ t: 'recoil', target: attacker.name, amount: r });
   }
+  // trapping (Wrap/Bind/Fire Spin/Clamp/Whirlpool): a connecting hit binds the
+  // target for 2–5 turns of 1/16 chip. Only sets if not already trapped, so a
+  // re-hit mid-trap doesn't stack; chip + countdown run in endOfTurn.
+  if (move.trap && dealt > 0 && !hadSub && defender.hp > 0 && defender.trappedTurns === 0) {
+    defender.trappedTurns = randint(rng, 2, 5);
+    log.push({ t: 'trap', source: attacker.name, target: defender.name, move: move.name, turns: defender.trappedTurns });
+  }
 
-  // guaranteed status / confuse / boosts (status moves)
-  if (move.status && defender.hp > 0) tryStatus(defender, move.status, rng, log);
-  if (move.confuse && defender.hp > 0 && defender.confuseTurns === 0) {
-    defender.confuseTurns = randint(rng, 2, 4); log.push({ t: 'confuse', target: defender.name });
+  // guaranteed status / confuse / boosts (status moves). Substitute blocks all
+  // defender-targeting effects (hadSub) — status/confusion/stat drops can't
+  // reach the mon behind an (even freshly-broken) sub.
+  if (move.status && defender.hp > 0 && !hadSub) tryStatus(defender, move.status, rng, log);
+  if (move.confuse && defender.hp > 0 && !hadSub && defender.confuseTurns === 0) {
+    if (defender.safeguardTurns > 0) { log.push({ t: 'safeguard-block', target: defender.name }); }
+    else { defender.confuseTurns = randint(rng, 2, 4); log.push({ t: 'confuse', target: defender.name }); }
   }
   if (move.boosts && Object.keys(move.boosts).length && defender.hp > 0) {
     // A pure Status move always applies its boost. A DAMAGING move that also
@@ -796,15 +1270,17 @@ function doMove(attacker, defender, move, rng, gen, chart, log, releasingCharge)
     // still drop the target's stat.
     const damaging = move.cat !== 'Status' && (move.bp > 0 || move.ohko);
     if (!damaging || dealt > 0) {
-      const tgt = move.boostTarget === 'self' ? attacker : defender;
-      if (tgt.hp > 0) applyBoosts(tgt, move.boosts, gen, log);
+      if (move.boostTarget === 'self') { if (attacker.hp > 0) applyBoosts(attacker, move.boosts, gen, log); }
+      else if (defender.hp > 0 && !hadSub) applyFoeBoosts(defender, move.boosts, gen, log);
     }
   }
 
   // secondary effects (from damaging moves — chance checked AFTER a successful hit)
   if (move.secondary && defender.hp > 0 && dealt > 0) {
     if (chance(rng, move.secondary.chance / 100)) {
-      if (move.secondary.status) {
+      // Defender-targeting secondaries are blocked while the target had a sub
+      // (hadSub); the attacker's own self-boost secondary still procs.
+      if (move.secondary.status && !hadSub) {
         // #6 — Tri Attack's status is an array (random pick); every other
         // move using this field still passes a plain string, unaffected.
         const st = Array.isArray(move.secondary.status)
@@ -812,9 +1288,12 @@ function doMove(attacker, defender, move, rng, gen, chart, log, releasingCharge)
           : move.secondary.status;
         tryStatus(defender, st, rng, log);
       }
-      if (move.secondary.flinch) defender.flinch = true;
-      if (move.secondary.confuse && defender.confuseTurns === 0) { defender.confuseTurns = randint(rng, 2, 4); log.push({ t: 'confuse', target: defender.name }); }
-      if (move.secondary.boosts) applyBoosts(defender, move.secondary.boosts, gen, log);
+      if (move.secondary.flinch && !hadSub) defender.flinch = true;
+      if (move.secondary.confuse && !hadSub && defender.confuseTurns === 0) {
+        if (defender.safeguardTurns > 0) { log.push({ t: 'safeguard-block', target: defender.name }); }
+        else { defender.confuseTurns = randint(rng, 2, 4); log.push({ t: 'confuse', target: defender.name }); }
+      }
+      if (move.secondary.boosts && !hadSub) applyFoeBoosts(defender, move.secondary.boosts, gen, log);
       if (move.secondary.selfBoosts) applyBoosts(attacker, move.secondary.selfBoosts, gen, log);
     }
   }
@@ -828,25 +1307,31 @@ function doMove(attacker, defender, move, rng, gen, chart, log, releasingCharge)
 function chooseMoveForTurn(c, rng) {
   if (c.mustRecharge) { c.mustRecharge = false; return { move: null, releasing: false }; }
   if (c.chargingMove) { const m = c.chargingMove; c.chargingMove = null; return { move: m, releasing: true }; }
+  if (c.rolloutMove) { return { move: c.rolloutMove, releasing: false }; } // Tier-2: Rollout forces its own repeat until the lock releases
+  if (c.rampageMove) { return { move: c.rampageMove, releasing: false }; } // Tier-3: Outrage/Thrash/Petal Dance forces itself for 2–3 turns
   return { move: pick(rng, c.moves), releasing: false };
 }
 
-// can this mon act this turn? handles slp/frz/par/flinch/confusion
-function preMove(c, rng, log) {
+// can this mon act this turn? handles slp/frz/par/flinch/confusion. `move` is
+// the move it's about to use (needed so Snore can act while asleep).
+function preMove(c, move, rng, log) {
   if (c.status === 'slp') {
     if (c.sleepTurns > 0) {
-      // Still asleep this turn: burn one sleep turn and skip the action. The
-      // mon does NOT get to act on the same turn its counter reaches 0 — a
-      // sleep of N turns means N missed turns, and the wake-up happens at the
-      // START of the next turn (handled below). Previously this woke AND acted
-      // in one turn when the counter hit 0, so a 1-turn sleep resulted in zero
-      // turns actually asleep — the reported "put to sleep but instantly woke".
+      // Still asleep this turn: sleep always ticks down by one. Snore (Tier-3)
+      // is the one move usable WHILE asleep — it acts without ending the sleep
+      // early, so the sleep-duration invariant (N turns = N ticks) is
+      // preserved whether or not Snore is the chosen move.
       c.sleepTurns--;
+      if (move && move.requiresSelfAsleep) {
+        log.push({ t: 'asleep-acts', target: c.name, move: move.name });
+        return true;
+      }
       log.push({ t: 'asleep', target: c.name });
       return false;
     }
     // counter already 0 at the start of this turn → wake up now and act
     c.status = null;
+    if (c.nightmared) { c.nightmared = false; log.push({ t: 'nightmare-end', target: c.name }); } // Tier-2: Nightmare ends on waking
     log.push({ t: 'wake', target: c.name });
   }
   if (c.status === 'frz') {
@@ -872,8 +1357,13 @@ function preMove(c, rng, log) {
   return true;
 }
 
-function endOfTurn(c, log) {
+function endOfTurn(c, log, field) {
   if (c.hp <= 0) return;
+  // Endure/Protect only guard the turn they were used — cleared here, BEFORE
+  // residual chip damage below, so poison/burn/curse/Leech Seed can still
+  // finish off an Endure-saved mon (Endure blocks the attack, not the chip).
+  c.enduring = false;
+  c.protecting = false;
   if (c.status === 'brn') { const d = Math.max(1, Math.floor(c.maxhp * BRN_FRACTION)); c.hp = Math.max(0, c.hp - d); log.push({ t: 'chip', target: c.name, cause: 'brn', amount: d }); }
   else if (c.status === 'psn') { const d = Math.max(1, Math.floor(c.maxhp * PSN_FRACTION)); c.hp = Math.max(0, c.hp - d); log.push({ t: 'chip', target: c.name, cause: 'psn', amount: d }); }
   else if (c.status === 'tox') { const d = Math.max(1, Math.floor(c.maxhp * TOX_FRACTION * c.toxCounter)); c.hp = Math.max(0, c.hp - d); log.push({ t: 'chip', target: c.name, cause: 'tox', amount: d }); c.toxCounter++; }
@@ -881,6 +1371,18 @@ function endOfTurn(c, log) {
     const d = Math.max(1, Math.floor(c.maxhp * CURSE_CHIP_FRACTION));
     c.hp = Math.max(0, c.hp - d);
     log.push({ t: 'chip', target: c.name, cause: 'curse', amount: d });
+  }
+  if (c.hp > 0 && c.nightmared && c.status === 'slp') {
+    const d = Math.max(1, Math.floor(c.maxhp * NIGHTMARE_FRACTION));
+    c.hp = Math.max(0, c.hp - d);
+    log.push({ t: 'chip', target: c.name, cause: 'nightmare', amount: d });
+  }
+  if (c.hp > 0 && c.trappedTurns > 0) {
+    const d = Math.max(1, Math.floor(c.maxhp * TRAP_FRACTION));
+    c.hp = Math.max(0, c.hp - d);
+    c.trappedTurns--;
+    log.push({ t: 'chip', target: c.name, cause: 'trap', amount: d });
+    if (c.trappedTurns === 0) log.push({ t: 'trap-end', target: c.name });
   }
   if (c.hp > 0 && c.seededBy && c.seededBy.hp > 0) {
     const d = Math.max(1, Math.floor(c.maxhp * LEECH_SEED_FRACTION));
@@ -892,6 +1394,18 @@ function endOfTurn(c, log) {
   // Reflect / Light Screen tick down and expire (5 turns each).
   if (c.reflectTurns > 0) { c.reflectTurns--; if (c.reflectTurns === 0) log.push({ t: 'reflect-end', target: c.name }); }
   if (c.lightScreenTurns > 0) { c.lightScreenTurns--; if (c.lightScreenTurns === 0) log.push({ t: 'lightscreen-end', target: c.name }); }
+  if (c.safeguardTurns > 0) { c.safeguardTurns--; if (c.safeguardTurns === 0) log.push({ t: 'safeguard-end', target: c.name }); }
+  if (c.mistTurns > 0) { c.mistTurns--; if (c.mistTurns === 0) log.push({ t: 'mist-end', target: c.name }); }
+  // Weather (Simplified-moves): Sandstorm chips 1/16 max HP to anything not
+  // Rock/Ground/Steel. (Gen-2 sandstorm does NOT boost Rock Sp.Def — that's
+  // gen 4.) Field-level, but applied per combatant here; the field countdown
+  // itself happens once per turn in the battle loop.
+  if (c.hp > 0 && field && field.weather === 'sand'
+    && !c.types.includes('Rock') && !c.types.includes('Ground') && !c.types.includes('Steel')) {
+    const d = Math.max(1, Math.floor(c.maxhp / 16));
+    c.hp = Math.max(0, c.hp - d);
+    log.push({ t: 'chip', target: c.name, cause: 'sandstorm', amount: d });
+  }
 }
 
 /**
@@ -904,6 +1418,7 @@ export function simulateBattle(aSpec, bSpec, opts) {
   const rng = makeRng(seed);
   const a = makeCombatant(aSpec, gen, moves);
   const b = makeCombatant(bSpec, gen, moves);
+  const field = { weather: null, weatherTurns: 0 }; // Simplified-moves: field-level weather
   const log = [{ t: 'start', a: a.name, b: b.name }];
 
   for (let turn = 1; turn <= turnCap; turn++) {
@@ -924,19 +1439,24 @@ export function simulateBattle(aSpec, bSpec, opts) {
     else { first = b; second = a; firstChoice = bChoice; secondChoice = aChoice; }
 
     if (!firstChoice.move) { log.push({ t: 'recharge', target: first.name }); }
-    else if (preMove(first, rng, log)) doMove(first, second, firstChoice.move, rng, gen, chart, log, firstChoice.releasing);
+    else if (preMove(first, firstChoice.move, rng, log)) { doMove(first, second, firstChoice.move, rng, gen, chart, log, firstChoice.releasing, field); tickRampage(first, rng, log); }
     if (second.hp <= 0) { log.push({ t: 'faint', target: second.name }); return finish(a, b, log, turn); }
 
     if (!secondChoice.move) { log.push({ t: 'recharge', target: second.name }); }
-    else if (preMove(second, rng, log)) doMove(second, first, secondChoice.move, rng, gen, chart, log, secondChoice.releasing);
+    else if (preMove(second, secondChoice.move, rng, log)) { doMove(second, first, secondChoice.move, rng, gen, chart, log, secondChoice.releasing, field); tickRampage(second, rng, log); }
     if (first.hp <= 0) { log.push({ t: 'faint', target: first.name }); return finish(a, b, log, turn); }
 
-    endOfTurn(first, log);
-    endOfTurn(second, log);
+    endOfTurn(first, log, field);
+    endOfTurn(second, log, field);
     if (a.hp <= 0 || b.hp <= 0) {
       if (a.hp <= 0) log.push({ t: 'faint', target: a.name });
       if (b.hp <= 0) log.push({ t: 'faint', target: b.name });
       return finish(a, b, log, turn);
+    }
+    // Weather countdown — once per turn (not per combatant).
+    if (field.weather && field.weatherTurns > 0) {
+      field.weatherTurns--;
+      if (field.weatherTurns === 0) { log.push({ t: 'weather-end', weather: field.weather }); field.weather = null; }
     }
   }
   // turn cap reached -> HP% tiebreak, champion wins exact ties
