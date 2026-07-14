@@ -1,8 +1,46 @@
 /**
  * @file        js/modes/draftbattle.js
- * @version     1.15.1
- * @updated     2026-07-12
+ * @version     1.15.8
+ * @updated     2026-07-14
  * @changelog
+ *   1.15.8 — Simplified-moves (sim.js 2.11.0): narrates Substitute — 'sub'
+ *            ("put up a substitute!"), 'sub-damage' ("the substitute took the
+ *            hit"), 'sub-break' ("substitute broke!"). Note the sim still logs
+ *            the computed 'damage' event before routing to the sub; the
+ *            'sub-damage'/'sub-break' line clarifies where it actually landed.
+ *   1.15.7 — Simplified-moves batch (sim.js 2.10.0): narrates Mist
+ *            ('mist'/'mist-block'/'mist-end') and Weather ('weather-start'/
+ *            'weather-end' with rain/sun/sand copy), plus 'sandstorm' added to
+ *            STATUS_LABELS so the per-turn chip line reads "hurt by the
+ *            sandstorm". Same drop-through guard as prior batches.
+ *   1.15.6 — Simplified-moves batch: narrates trapping moves (sim.js 2.9.0) —
+ *            'trap' ("was trapped by Wrap!") + 'trap-end' ("broke free!"), and
+ *            'trap' added to STATUS_LABELS so the per-turn chip line reads
+ *            "hurt by the trap". Bone Rush/Low Kick/Return reuse existing
+ *            multihit/flinch/damage lines — no new event types there.
+ *   1.15.5 — Battle-log playback narrates the rampage moves (sim.js 2.8.0):
+ *            'rampage-start' ("became enraged with Outrage!") and 'rampage-end'
+ *            ("rampage ended — it became confused from fatigue!"). Without the
+ *            latter, the self-confusion would appear to come from nowhere.
+ *   1.15.4 — Battle-log playback narrates Snore's 'asleep-acts' event (sim.js
+ *            2.7.0) — "used Snore while fast asleep!" — so a Snore turn shows
+ *            up instead of looking like a skipped/asleep turn.
+ *   1.15.3 — Battle-log playback narrates the Tier-2 batch from sim.js 2.6.0:
+ *            Nightmare (start/chip/end — added 'nightmare' to STATUS_LABELS so
+ *            the chip line reads "hurt by a nightmare"), Safeguard (raise/
+ *            block/expiry), Lock-On (aim + can't-miss), and the Fury Cutter/
+ *            Rollout 'ramp' power-building line. Same recurring bug class as
+ *            1.15.2/1.15.1: new sim event types must get real lines or they
+ *            hit default:continue and silently vanish from the log.
+ *   1.15.2 — Battle-log playback now narrates the Tier-1 batch from sim.js
+ *            2.5.0: Endure ("braced itself" / "endured the hit" — also
+ *            corrects the renderer's own shadow HP to exactly 1, since the
+ *            preceding 'damage' event still logs the full would-be-lethal
+ *            amount), Protect/Detect ("protected itself" / blocked-move
+ *            line), and Haze ("All stat changes were removed!"). Same
+ *            recurring bug class as 1.15.1/1.7.0: these were complete no-ops
+ *            before, so there was nothing to drop; now that they do
+ *            something, they need real lines or they hit default:continue.
  *   1.15.1 — Battle-log playback now narrates Reflect / Light Screen (and
  *            their expiry), matching sim.js 2.3.0 adding those moves. Without
  *            this the renderer's default:continue would silently drop them, so
@@ -205,7 +243,7 @@ import {
 } from '../lib/share.js';
 
 const STAT_LABELS = { hp: 'HP', atk: 'Atk', def: 'Def', spc: 'Spc', spa: 'SpA', spd: 'SpD', spe: 'Spe', acc: 'accuracy', eva: 'evasiveness' };
-const STATUS_LABELS = { par: 'paralyzed', brn: 'burned', psn: 'poisoned', tox: 'badly poisoned', slp: 'asleep', frz: 'frozen', leechseed: 'Leech Seed', curse: 'the curse' };
+const STATUS_LABELS = { par: 'paralyzed', brn: 'burned', psn: 'poisoned', tox: 'badly poisoned', slp: 'asleep', frz: 'frozen', leechseed: 'Leech Seed', curse: 'the curse', nightmare: 'a nightmare', trap: 'the trap', sandstorm: 'the sandstorm' };
 const TIERS = [
   { key: 'day',   cadence: 'Day',      npc: 'Will',     icon: '\u2460', stage: 1, statBand: [425, 450] }, // ①
   { key: 'week',  cadence: 'Week',     npc: 'Koga',     icon: '\u2461', stage: 2, statBand: [455, 480] }, // ②
@@ -928,6 +966,7 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
     const sideOf = (nm) => (nm === aSpec.name ? 'a' : nm === bSpec.name ? 'b' : null);
     const dmg = (nm, amt) => { const s = sideOf(nm); if (s === 'a') hpA = Math.max(0, hpA - amt); else if (s === 'b') hpB = Math.max(0, hpB - amt); };
     const heal = (nm, amt) => { const s = sideOf(nm); if (s === 'a') hpA = Math.min(maxA, hpA + amt); else if (s === 'b') hpB = Math.min(maxB, hpB + amt); };
+    const setHp = (nm, val) => { const s = sideOf(nm); if (s === 'a') hpA = val; else if (s === 'b') hpB = val; };
     const frames = [{ hpA, hpB, turn, line: `${aSpec.name} faces ${bSpec.name}!` }];
     const eff = (e) => (e > 1 ? ' \u2014 super effective!' : (e > 0 && e < 1) ? ' \u2014 not very effective' : '');
     for (const e of sample) {
@@ -976,6 +1015,38 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
           line = `${e.target}\u2019s ${label}${mag} ${e.delta > 0 ? 'rose' : 'fell'}!`;
           break;
         }
+        // Tier-1 batch (sim.js 2.5.0) — Endure/Protect/Detect/Haze were
+        // previously complete no-ops with no log events at all, so there was
+        // nothing for the renderer to drop; now that they do something, they
+        // need their own lines or they'd hit default:continue same as before.
+        case 'endure-ready': line = `${e.target} braced itself!`; break;
+        case 'endure': setHp(e.target, 1); line = `${e.target} endured the hit!`; break;
+        case 'protect-ready': line = `${e.target} protected itself!`; break;
+        case 'protect-block': line = `${e.target}\u2019s Protect blocked ${e.source}\u2019s ${e.move}!`; break;
+        case 'haze': line = 'All stat changes were removed!'; break;
+        // Tier-2 batch (sim.js 2.6.0) — new event types; without these they'd
+        // hit default:continue and vanish from the on-screen log.
+        case 'nightmare': line = `${e.target} began having a nightmare!`; break;
+        case 'nightmare-end': line = `${e.target}\u2019s nightmare ended.`; break;
+        case 'safeguard': line = `${e.target} is protected by Safeguard!`; break;
+        case 'safeguard-block': line = `${e.target} is protected by Safeguard!`; break;
+        case 'safeguard-end': line = `${e.target}\u2019s Safeguard wore off.`; break;
+        case 'lockon': line = `${e.source} took aim at ${e.target}!`; break;
+        case 'lockon-hit': line = `${e.source} is locked on \u2014 this attack can\u2019t miss!`; break;
+        case 'ramp': line = `${e.move} is building power! (${e.bp})`; break;
+        case 'asleep-acts': line = `${e.target} used ${e.move} while fast asleep!`; break;
+        case 'rampage-start': line = `${e.source} became enraged with ${e.move}!`; break;
+        case 'rampage-end': line = `${e.target}\u2019s rampage ended \u2014 it became confused from fatigue!`; break;
+        case 'trap': line = `${e.target} was trapped by ${e.move}!`; break;
+        case 'trap-end': line = `${e.target} broke free!`; break;
+        case 'mist': line = `${e.target} shrouded itself in mist!`; break;
+        case 'mist-block': line = `${e.target} is protected by Mist \u2014 its stats can\u2019t be lowered!`; break;
+        case 'mist-end': line = `${e.target}\u2019s Mist faded.`; break;
+        case 'weather-start': line = { rain: 'It started to rain!', sun: 'The sunlight got bright!', sand: 'A sandstorm kicked up!' }[e.weather] || 'The weather changed!'; break;
+        case 'weather-end': line = { rain: 'The rain stopped.', sun: 'The sunlight faded.', sand: 'The sandstorm subsided.' }[e.weather] || 'The weather cleared.'; break;
+        case 'sub': line = `${e.target} put up a substitute!`; break;
+        case 'sub-damage': line = `The substitute took the hit for ${e.target}!`; break;
+        case 'sub-break': line = `${e.target}\u2019s substitute broke!`; break;
         default: continue;
       }
       if (line != null) frames.push({ hpA, hpB, turn, line });
