@@ -2,6 +2,82 @@
 
 Status: ✅ done · 🔜 planned (phase noted) · ⏳ in progress
 
+---
+
+## 2026-07-14 — "Simplified moves" pass complete (Mist, Weather, Substitute) + pool adjustments
+
+Scope: docs/js/sim.js, docs/js/draft.js, docs/js/modes/draftbattle.js, docs/data/movestats-gen2.json, and their tests. This closes out the full move-audit effort started in the Tier-1/2/3 rounds — every one of the 244 Gen-2 moves has now been reviewed against the actual code (not just changelog prose), and every gap is either implemented, deliberately banned, or a disclosed approximation.
+
+**Batch A/B (2.9.0):** Bone Rush was firing as a single 25-bp hit — now real 2–5 multi-hit. Low Kick got its 30% flinch (correction: Low Kick is NOT weight-based in gen 1/2 — that's a gen-3 change — so no weight data was needed). Return/Frustration data bp 50→102 (each at its own optimal-happiness power; disclosed, no happiness stat exists here). Trapping moves (Wrap/Bind/Fire Spin/Clamp/Whirlpool) now bind for 2–5 turns of 1/16 max-HP chip on a connecting hit.
+
+**Mist + Weather (2.10.0):** Mist un-banned and implemented — 5-turn protection blocking any opponent-induced stat drop (positive foe-target boosts and self-boosts are unaffected). Weather is new field-level state (not per-combatant) threaded through the damage/accuracy/heal/end-of-turn paths: Rain Dance/Sunny Day/Sandstorm each last 5 turns. Rain: Water ×1.5, Fire ×0.5, Thunder can't miss. Sun: Fire ×1.5, Water ×0.5, Solar Beam fires instantly (skips its charge turn), Thunder accuracy drops to 50%. Sandstorm: 1/16 max-HP end-of-turn chip to anything not Rock/Ground/Steel (gen-2 sandstorm does NOT boost Rock Sp.Def — that's gen 4). Synthesis/Morning Sun/Moonlight now heal 2/3 in sun, 1/4 in rain/sand, 1/2 in clear weather (previously a flat 1/2 always). Heal Bell and Psych Up banned instead of implemented (too small a win for the special-casing, per request); Perish Song stays banned.
+
+**Substitute (2.11.0):** Spends 1/4 max HP to create a decoy with 1/4 max HP + 1 HP (fails if a sub is already up or HP ≤ cost). While the sub stands, incoming damage routes to it instead of the mon (gen-2 behavior: excess damage does NOT carry over when it breaks). A `hadSub` snapshot taken the moment the move connects blocks every defender-targeting side-effect that turn — status, confusion, flinch, stat drops, Leech Seed, trapping — even if the sub breaks from the same hit that would have applied them; the attacker's own self-boost secondary is unaffected. Residual chip (poison/burn/curse/Leech Seed/sandstorm/trap/nightmare) still hits the mon behind the sub, since that's a separate end-of-turn mechanism, not a defender-targeting move effect.
+
+**Revert-checks:** every mechanism above individually verified (pull the fix, confirm the specific test fails; restore, confirm it passes). Two test-authoring bugs were caught and fixed along the way: a Surf rain-vs-sun comparison that used different-typed weather-callers (type effectiveness swamped the weather multiplier — fixed to same-typed callers), and a Solar Beam-in-sun check that filtered on the wrong display string ("Solar Beam" vs the data's actual "Solarbeam" — fixed).
+
+**Data corrections (movestats-gen2.json), confirmed by user:** Fury Cutter 40→10, Snore 50→40, Return/Frustration 50→102. All surgical single-value edits preserving the minified format.
+
+**Tests:** sim.test.mjs 1.0.0→1.7.0, draft.test.mjs 1.0.0→1.2.0. Scoped suite (sim + sim-status + draft) = **793 passing, 0 failing**.
+
+**Renderer (draftbattle.js 1.15.5→1.15.8):** narration added for every new event type across all three batches (trap/trap-end; mist/mist-block/mist-end; weather-start/weather-end; sub/sub-damage/sub-break) so none hit the renderer's default:continue and vanish from the battle log.
+
+**Files changed (re-upload):** docs/js/sim.js (2.11.0), docs/js/draft.js (0.9.3), docs/js/modes/draftbattle.js (1.15.8), tools/test/sim.test.mjs (1.7.0), tools/test/draft.test.mjs (1.2.0), MANIFEST.md, CHANGE_TRACKER_v3.md. movestats-gen2.json unchanged since the prior round (Return/Frustration/Fury Cutter/Snore corrections already landed then).
+
+**Deliberately deferred:** Hidden Power's real behavior — a random type is assigned per-Pokémon (from hidden DVs) and appears in-game as "Hidden Power (Type)" with a corresponding fixed power. This sim has no DV/IV data to derive that from, and surfacing "Hidden Power (Fire)" as a distinct, meaningful draft option touches the draft UI/pool, not just sim.js — proposed as a separate task for a future chat. Currently Hidden Power is a fixed 60-bp Normal-type move (disclosed).
+
+**This closes the full move-audit arc.** Remaining known approximations are listed in MANIFEST.md's "Known, disclosed gaps" section; nothing else is silently wrong.
+
+---
+
+## 2026-07-13 (later) — Tier-3 rampage moves
+
+Outrage / Thrash / Petal Dance (sim.js 2.8.0, draftbattle.js 1.15.5, sim.test.mjs 1.4.0). Each locks the user into repeating the move for a random 2–3 turns, then the user is confused from fatigue. Implemented with the same forced-move mechanism as Rollout's lock (chooseMoveForTurn returns the locked move), but duration-driven via a new `rampageMove`/`rampageTurns` pair plus a `tickRampage()` helper called from the turn loop after the user acts — so the count advances on every path the move took (hit/miss/blocked/immune), and the fatigue confusion reliably fires at the end. New `rampage-start`/`rampage-end` events, both narrated. Disclosed simplifications: the lock only advances on turns the user actually acts (a paralysis/sleep disruption pauses rather than ends it), and the fatigue confusion is self-inflicted so it ignores the user's own Safeguard. Both mechanisms (the lock and the self-confusion) individually revert-checked — removing the lock produced 239 mid-rampage off-move actions (should be 0); removing the confusion failed the fatigue test. Future Sight ban and the Fury Cutter (10) / Snore (40) bp values were confirmed by the user. Scoped suite now **761 passing, 0 failing**.
+
+**Files changed (re-upload):** docs/js/sim.js, docs/js/modes/draftbattle.js, tools/test/sim.test.mjs, MANIFEST.md, CHANGE_TRACKER_v3.md. (draft.js, movestats-gen2.json, draft.test.mjs unchanged this round.)
+
+---
+
+## 2026-07-13 — sim.js move-audit (Tiers 1–3) + data/ban corrections
+
+Scope: the battle simulator only (docs/js/sim.js) plus its move-ban list (draft.js), move data (movestats-gen2.json), the battle-log renderer (draftbattle.js), and their tests. Approach: cross-referenced all 244 moves against the actual MOVE_EFFECTS table (not the changelog prose) AND against draft.js's BANNED_DRAFT_MOVES, so moves already unreachable in a real draft weren't "fixed" for dead code. Every fix followed the project convention: write/extend a test → run → revert the fix and confirm the test fails → restore. Two tests failed that revert-check on first draft (see Tier-2) and were rewritten.
+
+**Tier 1 — sim.js 2.5.0 (clean, pattern-matching existing code):**
+- Dynamicpunch: real 100% guaranteed confuse on hit (was plain damage).
+- Mud-Slap / Octazooka: real accuracy-drop secondaries (100% / 40%) — meaningful now that accuracy stages exist (2.4.0).
+- Bone Club: 10% flinch (was missing).
+- Endure: was completely inert despite correct prio:4 data — now survives the turn's hit at 1 HP; does NOT block residual chip (poison/burn/Leech Seed can still finish it that turn).
+- Protect / Detect: also inert despite prio:4 — now block any move that targets the defender; self-only moves (Rest/Belly Drum/screens/Endure, self-boosts) are exempt.
+- Haze: reset all stat stages to 0 both sides (was inert).
+- Dropped from Tier 1 as unreachable (BANNED_DRAFT_MOVES): Explosion/Self-Destruct (per user — 1v1 sim), Sweet Scent, Sky Attack, False Swipe.
+
+**Tier 2 — sim.js 2.6.0:**
+- Nightmare (1/4 max HP chip each turn until the target wakes; clears on wake).
+- Safeguard (5-turn side immunity to all major status AND confusion — confusion is applied directly, not via tryStatus, so both paths were guarded).
+- Lock-On / Mind Reader (next move can't miss: skips accuracy/evasion AND hits through Fly/Dig semi-invuln — full behavior per user).
+- Fury Cutter / Rollout ramp (×2 power per consecutive hit, cap ×16; breakRamp() resets on miss/Protect-block/invuln-whiff/immune/move-switch). Rollout additionally force-locks the user for the 5-hit sequence (per user) via the same mechanism as charge/recharge — this is the reusable forced-move scaffold the Tier-3 Outrage/Thrash/Petal Dance would build on.
+- Fly/Dig invuln exceptions: Gust/Twister hit mid-Fly, Earthquake/Magnitude hit mid-Dig, each 2× (threaded through calcDamage's new optional extraMul).
+- Destiny Bond → banned in draft.js (faint-linked; doesn't fit a switchless sim), not modeled.
+- **Revert-check caught two false-positive tests:** the Lock-On test (a 50%-accurate move connects by luck with or without the fix → rewrote to assert a 'miss' NEVER follows a 'lockon-hit' across trials: 137 misses without the fix, 0 with) and the Rollout test (random 1/4 selection can fake short consecutive runs → rewrote to count full 5-length locked runs: ~30+ with the lock, 1 without).
+
+**Tier 3 (partial) — sim.js 2.7.0 + draft.js 0.9.2 (rule of thumb: implement if clean, else ban):**
+- Snore: implemented as asleep-only (preMove now takes the chosen move; a sleeping mon that picks Snore acts for 40 bp + 30% flinch WITHOUT ending sleep early — the N-turns-= N-ticks invariant is preserved and separately tested; an awake Snore fails). Un-banned. Data bp corrected 50→40.
+- Sleep Talk → banned (needs nested random-move execution while asleep; was also a draftable dead no-op).
+- Future Sight → banned (real delayed 2-turn hit is a new timing system; had been firing as an immediate 120 nuke). Alternative on the table: keep as a disclosed immediate-nuke simplification instead of banning — awaiting user call.
+- Disable / Encore → remain banned (force/block opponent's move).
+
+**Data correction (movestats-gen2.json):** Fury Cutter 40→10, Snore 50→40 — both were inflated before their mechanics existed; bp is data-driven throughout, so the values live in data and the mechanics live in sim.js. Surgical one-line edits (minified format preserved).
+
+**Renderer (draftbattle.js 1.15.2 → 1.15.4):** added battle-log narration for every new event type across the three tiers (endure/protect/haze; nightmare/safeguard/lockon/ramp; snore asleep-acts) so they don't hit the renderer's default:continue and vanish — the recurring "sim computes it, UI silently drops it" bug class.
+
+**Tests:** sim.test.mjs 1.0.0→1.3.0, draft.test.mjs 1.0.0→1.1.0. Full scoped suite (sim + sim-status + draft via run.mjs) = **756 passing, 0 failing**; every new mechanic individually revert-checked.
+
+**Files changed (re-upload):** docs/js/sim.js, docs/js/draft.js, docs/js/modes/draftbattle.js, docs/data/movestats-gen2.json, tools/test/sim.test.mjs, tools/test/draft.test.mjs.
+
+**Still open / flagged for confirmation:** the two bp values (Fury Cutter 10, Snore 40); the Sleep Talk + Future Sight ban decisions (Future Sight could stay as a disclosed immediate nuke instead); and whether to implement Outrage/Thrash/Petal Dance now that the Rollout forced-move scaffold exists.
+
+---
+
 ## Phase 1 — quick fixes (DONE)
 | # | Item | Status | Files |
 |---|------|--------|-------|
