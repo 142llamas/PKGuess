@@ -97,16 +97,20 @@ async function withDraftSeed(seedInt, fn) {
   try { return await fn(); } finally { Math.random = REAL_RANDOM; }
 }
 
-// Seed 12, greedily drafted (first-available stat/type/move each card), reliably
-// beats all five Elite-4 tiers for today's date — found offline by searching
-// DraftSession seeds against runMatch with the exact same greedy click order
-// the UI produces. (Was seed 7 until #2 excluded duplicate species from a
-// single draft — that changed seed 7's greedy result to a mon that no longer
-// sweeps every tier, so this needed re-finding. Like any seed found this way,
-// it's for TODAY'S DATE specifically, since Will/Koga/etc.'s NPCs are
-// period-keyed — see the "Bug report" section further down for what to do
-// if this ever needs re-finding again.)
-const WINNING_SEED = 12;
+// Self-healing seed discovery (replaces the old hardcoded WINNING_SEED). The
+// Elite-4 NPCs are period-keyed by date and the greedy draft depends on the
+// move roster, so a seed that sweeps today won't necessarily sweep tomorrow or
+// after a move/draft-pool change — historically this needed manual re-finding
+// (seed 7 → 12 → 3). Rather than hardcode a value that rots, we run the exact
+// same greedy-draft-through-UI + gauntlet the test itself uses, scanning seeds
+// until we find one that sweeps all five tiers (WINNING_SEED) and a DIFFERENT
+// one that wins Will but loses Koga (WIN_THEN_LOSE_SEED). Discovery is fully
+// deterministic for a given date (battle sims are string-seeded, the greedy
+// draft is Math.random-seeded per candidate), so this finds the same seeds on
+// every run. If NO seed sweeps, discovery throws loudly — that's a genuine
+// balance regression signal, not a stale-seed nuisance.
+let WINNING_SEED;         // assigned by discoverSeeds() below, before any test block
+let WIN_THEN_LOSE_SEED;   // ditto
 
 async function greedyDraftThroughUI() {
   let steps = 0;
@@ -125,8 +129,8 @@ async function greedyDraftThroughUI() {
   }
 }
 
-async function draftFresh(fb, identity) {
-  const ctrl = await withDraftSeed(WINNING_SEED, async () => {
+async function draftFreshWithSeed(seed, fb, identity) {
+  const ctrl = await withDraftSeed(seed, async () => {
     const c = createDraftBattle({
       mount: document.getElementById('app'), config: {}, data: gen2,
       params: { variant: 'freeplay', _getFirebase: async () => fb, _getIdentity: async () => identity },
@@ -137,6 +141,10 @@ async function draftFresh(fb, identity) {
   });
   await greedyDraftThroughUI();
   return ctrl;
+}
+
+async function draftFresh(fb, identity) {
+  return draftFreshWithSeed(WINNING_SEED, fb, identity);
 }
 
 /** Runs the gauntlet from the Draft Complete screen and returns the parsed
@@ -162,6 +170,55 @@ async function runGauntletFromDraftComplete() {
 function statusBadge() {
   return [...q('.summary-card p, .summary-card div')].find((n) => n.textContent.includes('Your best'))?.textContent || null;
 }
+
+// Draft `seed` for `identity`, run the full gauntlet, claim, and read back the
+// exact mon object the app persisted (name + baseStats + types + moves). Used
+// to build the "same-mon cascade" pre-seed dynamically instead of hardcoding a
+// mon that has to be re-captured every time WINNING_SEED changes.
+async function captureMon(seed, identity) {
+  document.getElementById('app').innerHTML = '';
+  const fb = makeFakeFB();
+  const ctrl = await draftFreshWithSeed(seed, fb, identity);
+  const { claimBtn } = await runGauntletFromDraftComplete();
+  if (claimBtn) click(claimBtn);
+  await wait(60);
+  const all = await fb.get('/draft/throne/all');
+  ctrl.destroy();
+  document.getElementById('app').innerHTML = '';
+  return all && all.mon ? all.mon : null;
+}
+
+// Scan seeds for (a) one that sweeps all five tiers and (b) a DIFFERENT one
+// that wins Will / loses Koga. Deterministic per date; see the big note above.
+async function discoverSeeds({ maxSeed = 80 } = {}) {
+  const SCAN_ID = { uid: 'seedscan', name: 'Scan' };
+  let sweepSeed = null, sweepMon = null, wl = null;
+  for (let s = 1; s <= maxSeed; s++) {
+    document.getElementById('app').innerHTML = '';
+    const fb = makeFakeFB();
+    const ctrl = await draftFreshWithSeed(s, fb, SCAN_ID);
+    const monName = document.querySelector('.summary-mon')?.textContent || '';
+    const { rows } = await runGauntletFromDraftComplete();
+    ctrl.destroy();
+    const won = rows.map((r) => r.result.includes('Won'));
+    const isSweep = rows.length === 5 && won.every(Boolean);
+    const isWinLose = rows.length >= 2 && rows[0].opponent === 'Will' && won[0]
+      && rows[1].opponent === 'Koga' && rows[1].result.includes('Lost');
+    if (isSweep && sweepSeed === null) { sweepSeed = s; sweepMon = monName; }
+    if (isWinLose && wl === null) wl = { seed: s, mon: monName };
+    if (sweepSeed !== null && wl !== null) {
+      if (wl.mon !== sweepMon) break;   // both found, and they're genuinely different mons
+      wl = null;                        // collision: keep scanning for a different-species win/lose seed
+    }
+  }
+  document.getElementById('app').innerHTML = '';
+  if (sweepSeed === null) throw new Error(`discoverSeeds: no seed in 1..${maxSeed} sweeps all five Elite-4 tiers for today (${new Date().toDateString()}). A clean sweep being impossible is a real balance regression, not a test bug — investigate the move roster / stat bands.`);
+  if (wl === null) throw new Error(`discoverSeeds: found sweep seed ${sweepSeed} but no DISTINCT win-Will/lose-Koga seed in 1..${maxSeed}.`);
+  return { winningSeed: sweepSeed, winThenLoseSeed: wl.seed };
+}
+
+({ winningSeed: WINNING_SEED, winThenLoseSeed: WIN_THEN_LOSE_SEED } = await discoverSeeds());
+console.log(`\n[seed discovery] WINNING_SEED=${WINNING_SEED} (sweeps all 5), WIN_THEN_LOSE_SEED=${WIN_THEN_LOSE_SEED} (Will W / Koga L) for ${new Date().toDateString()}`);
 
 // ============================================================================
 console.log('\n— #14/#15: the Elite-4 gauntlet runs Will→Koga→Bruno→Lance→All-Time in one action —');
@@ -227,14 +284,14 @@ console.log('\n— #14/#15: the Elite-4 gauntlet runs Will→Koga→Bruno→Lanc
     // as they want" is the intended rule; the previous behavior compared
     // holderUid, which incorrectly treated "same player, different mon" the
     // same as "same mon, lower tier" and blocked the claim.
-    // Seed 24, like WINNING_SEED above, was found offline for TODAY'S DATE
-    // specifically (Will/Koga's NPCs are period-keyed by day/week, so a
-    // seed that beats Will and loses to Koga today isn't guaranteed to
-    // still do so on a different day — if this ever needs re-finding, the
-    // search is: draft greedily through the UI for seeds 1..N, run the
-    // gauntlet, and look for Won-then-Lost in the first two rows).
+    // WIN_THEN_LOSE_SEED was discovered above for TODAY specifically (see the
+    // discoverSeeds note near the top): it wins Will and loses Koga, and drafts
+    // a genuinely different species than WINNING_SEED — which is exactly what
+    // this section needs (a new, different mon that clears only the lowest
+    // spot). Discovery guarantees the "different mon" property, so this no
+    // longer depends on a hand-found seed for the current date.
     document.getElementById('app').innerHTML = '';
-    const ctrl2 = await withDraftSeed(24, async () => {
+    const ctrl2 = await withDraftSeed(WIN_THEN_LOSE_SEED, async () => {
       const c = createDraftBattle({
         mount: document.getElementById('app'), config: {}, data: gen2,
         params: { variant: 'freeplay', _getFirebase: async () => fb, _getIdentity: async () => identity },
@@ -267,14 +324,17 @@ console.log('\n— The one-Pok\u00e9mon-one-throne cascade still applies when it
   const fb = makeFakeFB();
   const identity = { uid: 'player10', name: 'Falkner' };
   // WINNING_SEED's draft is fully deterministic regardless of player name --
-  // only the "X's " name prefix changes. Pre-seed Will with the EXACT shape
-  // this specific seed+identity combination is about to produce (confirmed
-  // via this exact seed/name pair, matching the app's own real stats), as if
-  // this same mon had separately claimed Will at some earlier point -- this
-  // avoids the unrelated "re-fighting your own prior claim" edge case that
-  // coming at this via two live gauntlet runs would have triggered instead.
+  // only the "X's " name prefix changes. Capture the EXACT mon this seed+
+  // identity produces (via a throwaway draft+claim), then pre-seed Will with
+  // it, as if this same mon had separately claimed Will at some earlier point
+  // -- this avoids the unrelated "re-fighting your own prior claim" edge case
+  // that coming at this via two live gauntlet runs would have triggered
+  // instead. Capturing (rather than hardcoding the mon) means this keeps
+  // working automatically whenever discoverSeeds() picks a new WINNING_SEED.
+  const falknerMon = await captureMon(WINNING_SEED, identity);
+  ok(!!falknerMon && !!falknerMon.name && !!falknerMon.baseStats, 'captured the deterministic winning mon for pre-seeding');
   await fb._forceSet('/draft/throne/day', {
-    mon: { name: 'Falkner\'s Machamp', types: ['Ground'], baseStats: { hp: 90, atk: 130, def: 60, spa: 130, spd: 75, spe: 130 }, moves: ['Tackle', 'Flame Wheel', 'Frustration', 'Growl'] },
+    mon: falknerMon,
     holderUid: 'player10', holderName: 'Falkner', takenAt: Date.now(), period: 'day-preexisting',
   });
 
@@ -289,7 +349,7 @@ console.log('\n— The one-Pok\u00e9mon-one-throne cascade still applies when it
   });
   await greedyDraftThroughUI();
   const monName = document.querySelector('.summary-mon')?.textContent;
-  eq(monName, 'Falkner\'s Machamp', 'sanity check: this seed+identity combination produces the exact mon the throne was pre-seeded with');
+  eq(monName, falknerMon.name, 'sanity check: this seed+identity combination produces the exact mon the throne was pre-seeded with');
   const { claimBtn } = await runGauntletFromDraftComplete();
   click(claimBtn);
   await wait(60);

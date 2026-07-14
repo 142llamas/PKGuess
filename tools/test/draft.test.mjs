@@ -1,6 +1,16 @@
 /**
  * @file tools/test/draft.test.mjs
- * @version 1.0.0
+ * @version 1.3.0
+ * @changelog
+ *   1.3.0 — Hidden Power type selection (draft.js 0.9.4): HP is no longer
+ *           stripped from learnsets, and when offered on a card it comes out as
+ *           a randomly-typed, Gen-2-legal "Hidden Power (Type)". New section
+ *           covers un-stripping, typed/legal format, determinism, per-seed
+ *           variety, and that plain "Hidden Power" is never offered.
+ *   1.2.0 — Ban-list: removed Mist (now implemented + un-banned); added Heal
+ *           Bell and Psych Up.
+ *   1.1.0 — Ban-list assertions updated: added Destiny Bond, Sleep Talk, and
+ *           Future Sight; removed Snore (now implemented + un-banned).
  * Unit tests for the reworked draft engine (docs/js/draft.js v0.5.0): two picks
  * per card sourced from the CORRECT card, type-drafted-twice → mono, "—" picks,
  * completion with no mis-sourced picks, daily determinism, weighted move reroll,
@@ -26,8 +36,9 @@ export default function (t) {
   {
     const banned = ['Attract', 'Self-Destruct', 'Explosion', 'Baton Pass', 'Mirror Move', 'Skull Bash',
       'Rage', 'Teleport', 'Perish Song', 'Conversion', 'Disable', 'Encore', 'False Swipe', 'Foresight',
-      'Mean Look', 'Metronome', 'Mimic', 'Mind Reader', 'Mist', 'Roar', 'Whirlwind', 'Sketch',
-      'Sky Attack', 'Snore', 'Spite', 'Spikes', 'Spider Web', 'Sweet Scent', 'Thief', 'Transform'];
+      'Mean Look', 'Metronome', 'Mimic', 'Mind Reader', 'Roar', 'Whirlwind', 'Sketch',
+      'Sky Attack', 'Spite', 'Spikes', 'Spider Web', 'Sweet Scent', 'Thief', 'Transform',
+      'Destiny Bond', 'Sleep Talk', 'Future Sight', 'Heal Bell', 'Psych Up'];
     let leaked = [];
     for (const [sp, moves] of Object.entries(learnset)) {
       for (const b of banned) if (moves.includes(b)) leaked.push(`${b} on ${sp}`);
@@ -335,5 +346,48 @@ export default function (t) {
       seenNames.push(probe.current.name);
     }
     t.eq(new Set(seenNames).size, seenNames.length, 'a manually-stepped session (stat-only picks, one per card) also shows no repeats');
+  }
+
+  t.section('draft.js — Hidden Power comes up randomly typed (0.9.4)');
+  {
+    const HP_LEGAL = new Set(['Fighting', 'Flying', 'Poison', 'Ground', 'Rock', 'Bug', 'Ghost', 'Steel',
+      'Fire', 'Water', 'Grass', 'Electric', 'Psychic', 'Ice', 'Dragon', 'Dark']);
+
+    // (1) buildLearnsetMap no longer strips Hidden Power — it's kept as the
+    // plain name in the pool (it used to be filtered out entirely).
+    const keptPlainHP = Object.values(learnset).filter((mv) => mv.some((m) => /^hidden power$/i.test(m))).length;
+    t.ok(keptPlainHP > 100, `Hidden Power is kept in learnsets, not stripped (${keptPlainHP} species retain the plain name)`);
+
+    // (2) When actually offered on a draft card it is transformed into a
+    // randomly-typed, Gen-2-legal "Hidden Power (Type)". A synthetic single-
+    // species pool with a tiny learnset guarantees HP is always in the view.
+    const hpMon = {
+      name: 'HPTestMon', num: 9999, spriteId: 0, types: ['Normal'],
+      baseStats: { hp: 100, atk: 100, def: 100, spa: 100, spd: 100, spe: 100 },
+      learnset: ['Hidden Power', 'Tackle', 'Growl'],
+    };
+    const offeredHP = (seed) => new DraftSession({ species: [hpMon], gen: 2, seed })
+      .availablePicks().moves.find((m) => /hidden power/i.test(m));
+
+    const sample = offeredHP(1);
+    const m = /^Hidden Power \((\w+)\)$/.exec(sample || '');
+    t.ok(!!m, `offered HP is typed, format "Hidden Power (Type)" (got: ${sample})`);
+    t.ok(m && HP_LEGAL.has(m[1]), `assigned type is Gen-2-legal / never Normal (got: ${m && m[1]})`);
+
+    // Plain, untyped "Hidden Power" must never be what's offered.
+    let sawPlain = false, types = new Set();
+    for (let seed = 1; seed <= 40; seed++) {
+      const off = offeredHP(seed);
+      if (/^hidden power$/i.test(off || '')) sawPlain = true;
+      const mm = /^Hidden Power \((\w+)\)$/.exec(off || '');
+      if (mm) types.add(mm[1]);
+    }
+    t.ok(!sawPlain, 'plain untyped "Hidden Power" is never the offered move — it is always typed');
+    t.ok(types.size >= 3, `the type genuinely varies per occurrence (saw ${types.size} distinct types across 40 seeds)`);
+    t.ok([...types].every((ty) => HP_LEGAL.has(ty)), 'every assigned type across seeds is Gen-2-legal');
+
+    // (3) Deterministic: the same seed reproduces the same typed HP (so a
+    // replayed draft is identical).
+    t.eq(offeredHP(42), offeredHP(42), 'same seed → identical typed Hidden Power (draft stays replayable)');
   }
 }
