@@ -4,6 +4,24 @@ Status: ✅ done · 🔜 planned (phase noted) · ⏳ in progress
 
 ---
 
+## 2026-07-14 (integration) — Full-repo integration + self-healing throne seeds + Hidden Power type selection
+
+Scope: this chat folded the prior move-mechanics rewrite (which had only ever seen sim.js/draft.js/draftbattle.js + data + tests) back into the **complete** game repo and verified it all works together, then shipped Hidden Power type selection. Baseline is now docs/js/sim.js 2.11.0.
+
+**Integration verified.** First run of sim.test.mjs (1.7.0) + draft.test.mjs alongside the untouched suites (engine, mp-rules, identity, catch-tracker, share, leaderboard-data, sim-status): `npm test` = **1058 passing, 0 failing** (the prior chat's scoped run was 793). First-ever run of the game-loop smoke tests (they import lib/dom.js + lib/share.js, absent in the prior chat's scope): `npm run test:smoke` = all 10 suites green. The new move behaviors work through the real draftbattle.js UI + gauntlet, not just headless sim harnesses.
+
+**throne.smoke.mjs seed drift → made self-healing.** As the handoff anticipated, the hardcoded `WINNING_SEED=12` no longer swept all five Elite-4 tiers (the new move roster shifted the period-keyed NPC matchups); it cleared only 2. Rather than re-find-and-hardcode a fourth time (7→12→3→…), the test now discovers its seeds at runtime: `discoverSeeds()` scans candidates via the same greedy-draft-through-UI + gauntlet the test uses, finding one that sweeps (WINNING_SEED) and a distinct one that wins Will/loses Koga (WIN_THEN_LOSE_SEED); the "same-mon cascade" pre-seed mon is captured live via `captureMon()` instead of hardcoded. Deterministic per date, throws loudly if no sweep exists (that would be a real balance regression). Revert-checked both ways (old seed 12 fails; a forced non-sweep seed fails downstream). Proven durable: the later Hidden Power change shifted the sweeping seed from 3→7 and discovery adapted with zero edits.
+
+**Elite-4 balance sanity batch.** 60 natural auto-draft players × 51 battles/pairing per tier. Natural-player win rates: Will 48.1% → Koga 44.2% → Bruno 37.8% → Lance 26.3%, Champion (unscaled) 48.4%. Clean monotonic difficulty gradient, nothing pinned at 0/100%; a deliberate (greedy) build still sweeps. The forced-lock / Substitute / weather moves did not skew the previously-tuned bands — no retune needed.
+
+**Sketch/ban-list check.** BANNED_DRAFT_MOVES confirmed correct shape (Destiny Bond, Sleep Talk, Future Sight, Heal Bell, Psych Up banned; Snore, Mist un-banned; Sketch itself banned). Smeargle's 210-move Sketch pool has zero banned leaks; Snore/Mist are learnable again; Hidden Power is filtered from ordinary learnsets by `isHiddenPower` (relevant to the feature below).
+
+**Hidden Power type selection (draft.js 0.9.4, draft.test.mjs 1.3.0).** UX decision (offered as random-per-occurrence / weighted / player-choice): chose **fully random per occurrence**, consistent with the draft's take-what-you're-offered format and the lowest-risk option. Implementation is contained entirely in draft.js: Hidden Power is no longer stripped from learnsets, and `DraftSession._typeHiddenPower` rewrites an offered "Hidden Power" to "Hidden Power (Type)" using a random Gen-2-legal type (any type except Normal — no Fairy in Gen 2; `HP_DRAFT_TYPES`). Type is deterministic per (seed, position, reroll, slot) so drafts replay identically, and per-occurrence so a reroll/other card can differ. **The sim already resolves the typed name (HP_TYPE_RE) and the draft-card UI renders the move-name string verbatim — so neither sim.js nor draftbattle.js needed any change.** Revert-checked (neutering the transform fails exactly the 4 new HP assertions).
+
+**Files changed (re-upload):** docs/js/draft.js (0.9.3→0.9.4), tools/test/draft.test.mjs (1.2.0→1.3.0), tools/test/throne.smoke.mjs (self-healing seed discovery; no version header on smoke files), MANIFEST.md, CHANGE_TRACKER_v3.md. Unchanged this pass: docs/js/sim.js (2.11.0), docs/js/modes/draftbattle.js (1.15.8), docs/data/movestats-gen2.json, and all other suites.
+
+---
+
 ## 2026-07-14 — "Simplified moves" pass complete (Mist, Weather, Substitute) + pool adjustments
 
 Scope: docs/js/sim.js, docs/js/draft.js, docs/js/modes/draftbattle.js, docs/data/movestats-gen2.json, and their tests. This closes out the full move-audit effort started in the Tier-1/2/3 rounds — every one of the 244 Gen-2 moves has now been reviewed against the actual code (not just changelog prose), and every gap is either implemented, deliberately banned, or a disclosed approximation.
