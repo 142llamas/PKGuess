@@ -1,8 +1,17 @@
 /**
  * @file        docs/js/draft.js   (PokeGuess — Draft Battle engine)
- * @version     0.9.3
+ * @version     0.9.4
  * @updated     2026-07-14
  * @changelog
+ *   0.9.4 — Hidden Power type selection: Hidden Power is no longer stripped
+ *           from learnsets; when it is offered on a draft card it is assigned a
+ *           random Gen-2-legal elemental type (any type except Normal) and
+ *           shown as "Hidden Power (Type)". The type is deterministic per
+ *           (seed, card position, reroll) so drafts still replay identically,
+ *           and per-occurrence so re-rolling or a later card can surface a
+ *           different type. The sim already resolves the typed name (HP_TYPE_RE
+ *           in sim.js); the draft-card UI renders the move name verbatim, so no
+ *           UI change was needed. See HP_DRAFT_TYPES / _typeHiddenPower below.
  *   0.9.3 — Simplified-moves pass pool adjustments: un-banned MIST (now
  *           implemented in sim.js — blocks opponent-induced stat drops for 5
  *           turns, meaningful in 1v1); banned HEAL BELL and PSYCH UP (tiny
@@ -181,7 +190,7 @@ export class DraftSession {
   _moveListAt(species, position, pokeReroll, moveReroll) {
     const pool = species.learnset || [];
     const K = this.moveSample;
-    if (pool.length <= K) return pool.slice();   // fewer than K moves → show them all
+    if (pool.length <= K) return this._typeHiddenPower(pool.slice(), position, pokeReroll, moveReroll);   // fewer than K moves → show them all
     let seen = new Set();
     let view = [];
     for (let r = 0; r <= moveReroll; r++) {
@@ -190,7 +199,21 @@ export class DraftSession {
       for (const m of view) seen.add(m);
       if (seen.size >= pool.length) seen = new Set();   // wrapped the pool → reset
     }
-    return view;
+    return this._typeHiddenPower(view, position, pokeReroll, moveReroll);
+  }
+  // Replace a plain "Hidden Power" offered on this card with a randomly-typed
+  // "Hidden Power (Type)" (Gen-2-legal types only — see HP_DRAFT_TYPES). The
+  // type is a pure function of (seed, position, pokeReroll, moveReroll, slot),
+  // so a replayed draft is identical, while a different card / reroll / slot
+  // can surface a different type ("random per occurrence"). Already-typed
+  // names (containing "(") are left untouched so this never double-types.
+  _typeHiddenPower(view, position, pokeReroll, moveReroll) {
+    return view.map((nm, i) => {
+      if (!isHiddenPower(nm) || String(nm).includes('(')) return nm;
+      const rng = makeRng(subSeed(this.seed, 7, position, pokeReroll, moveReroll, i));
+      const type = HP_DRAFT_TYPES[Math.floor(rng() * HP_DRAFT_TYPES.length)];
+      return `Hidden Power (${type})`;
+    });
   }
   _refresh() {
     this._card = this._speciesAt(this.position, this.pokeReroll);
@@ -455,6 +478,16 @@ const DASH = /^[\s\-\u2012\u2013\u2014\u2015\u2212]*$/;
 const isBlank = (v) => v == null || DASH.test(String(v).trim()) || String(v).trim() === '';
 const isHiddenPower = (n) => /^(hidden\s*power|hp)\b/i.test(String(n));
 
+// Gen-2-legal Hidden Power types: every type EXCEPT Normal (Gen 2's DV-based
+// type calc can never produce Normal, and Fairy doesn't exist in Gen 2). When
+// Hidden Power is offered in a draft it's assigned one of these at random (see
+// DraftSession._typeHiddenPower); the sim resolves the resulting
+// "Hidden Power (Type)" name via HP_TYPE_RE in sim.js.
+const HP_DRAFT_TYPES = [
+  'Fighting', 'Flying', 'Poison', 'Ground', 'Rock', 'Bug', 'Ghost', 'Steel',
+  'Fire', 'Water', 'Grass', 'Electric', 'Psychic', 'Ice', 'Dragon', 'Dark',
+];
+
 /** Parse "39/52/43/60/50/65" → base stats (HP,Atk,Def,SpA,SpD,Spe). */
 export function parseBaseStats(fullStats, gen = 2) {
   if (isBlank(fullStats)) return null;
@@ -509,7 +542,11 @@ export function buildLearnsetMap(movelist, moveStats) {
     for (const item of (list || [])) {
       const raw = typeof item === 'string' ? item : (item && item.move);
       const nm = canonicalizeMove(raw);
-      if (!nm || isHiddenPower(nm)) continue;
+      if (!nm) continue;
+      // Hidden Power is kept (previously stripped): it stays as the plain
+      // "Hidden Power" name in the learnset pool and is assigned a random
+      // elemental type only when actually offered on a card, by
+      // DraftSession._typeHiddenPower — see HP_DRAFT_TYPES.
       const id = moveId(nm);
       if (!have.has(id) || seenIds.has(id) || BANNED_DRAFT_MOVES.has(id)) continue;     // sim-valid + dedupe + not banned
       seenIds.add(id); out.push(nm);
