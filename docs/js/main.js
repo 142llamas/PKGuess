@@ -1,8 +1,12 @@
 /**
  * @file        docs/js/main.js
- * @version     1.5.0
- * @updated     2026-07-06
+ * @version     1.5.1
+ * @updated     2026-07-12
  * @changelog
+ *   1.5.1 — Removed the "Build skeleton v1.0.0" footer from the mode-select
+ *           screen (a leftover from the initial app shell), along with its
+ *           now-unused APP_VERSION constant and the orphaned .shell-footer
+ *           CSS rule.
  *   1.5.0 — parseHash() now supports an optional query string
  *           (#/online/2?code=ABCDEF), threaded through route()/launchMode()
  *           into the controller's params.query. Backs online.js's and
@@ -29,8 +33,6 @@
 
 import { el, mount, clear } from './lib/dom.js';
 import { MODES, getMode, resolveFactory } from './modes.js';
-
-const APP_VERSION = '1.0.0';
 
 // Kick off anonymous auth in the background — never blocks the UI.
 // If it fails (offline), the app still works; scores just won't submit.
@@ -171,7 +173,6 @@ function renderMenu() {
         ),
       ),
     ),
-    el('footer', { class: 'shell-footer' }, `Build skeleton v${APP_VERSION}`),
   );
   refreshProfilePill();
 }

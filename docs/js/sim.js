@@ -7,8 +7,57 @@
  * UI can replay one battle step-by-step while the real outcome is a win-% taken
  * over many silent simulations.
  *
- * @version 2.2.0
+ * @version 2.4.0
  * @changelog
+ *   2.4.0 — Accuracy/evasion stages + speed-mechanics pass (requested):
+ *             • ACCURACY & EVASION are now modeled as ±6 stages, using the
+ *               gen-2 table (multiplier = (3+stage)/3 for +, 3/(3-stage) for -,
+ *               i.e. 1.0 at 0, up to 3.0 at +6, down to ~0.33 at -6). Hit chance
+ *               = move.acc/100 × accStageMul(attacker.acc) × accStageMul(-def.eva).
+ *               A 100%-accuracy move can now miss a foe that raised evasion,
+ *               and a sub-100 move can be made more reliable. This makes the
+ *               previously-no-op moves real: Double Team / Minimize (+evasion),
+ *               Sand-Attack / Smokescreen / Flash / Kinesis (-target accuracy).
+ *               (This reverses 2.3.0's note that accuracy/evasion were out of
+ *               scope — it was explicitly requested with the gen-2 formula.)
+ *             • Icy Wind now applies its real 100% Speed-drop secondary (a
+ *               damaging move that also lowers the target's Speed every hit),
+ *               and Bubble/Bubblebeam their 10% Speed-drop secondary. Combined
+ *               with the already-correct speed-stage handling, this means moves
+ *               like Icy Wind / Agility change turn order for the rest of the
+ *               battle, while priority moves (Quick Attack +1, Extreme Speed
+ *               +2, Mach Punch +1) win the current turn regardless of Speed.
+ *               (Both were verified already-correct; only the Icy Wind/Bubble
+ *               data was missing.)
+ *             • A guaranteed target boost on a DAMAGING move (e.g. Icy Wind)
+ *               now only applies when the hit actually connected (a type-immune
+ *               no-op no longer still drops the target's stat); pure Status
+ *               moves are unaffected.
+ *   2.3.0 — Battle-mechanics bug-fix + deep-dive pass (requested):
+ *             • SLEEP fix (reported bug: "put to sleep 4x but only asleep 1
+ *               turn total"). A sleeping mon was waking AND acting on the same
+ *               turn its counter hit 0, so a 1-turn sleep cost 0 missed turns.
+ *               Now a sleeping mon always skips its turn while the counter is
+ *               > 0 and wakes at the START of a later turn once it has expired
+ *               — sleep of N turns = N missed turns. (Rest, a fixed 2-turn
+ *               sleep, now correctly costs exactly 2 turns.)
+ *             • REFLECT and LIGHT SCREEN were entirely absent from the effects
+ *               table (they resolved as no-op status moves — "16 dmg before
+ *               and after Reflect"). Implemented both: 5-turn side screens that
+ *               halve incoming physical (Reflect) / special (Light Screen)
+ *               damage, bypassed by crits (authentic Gen 2), with end-of-turn
+ *               expiry. Added reflectTurns/lightScreenTurns combatant state.
+ *             • Deep-dive audit of the rest of the engine confirmed working:
+ *               all status moves (Thunder Wave/Toxic/Spore/Confuse Ray/Glare/
+ *               etc.), all secondary-effect procs (Body Slam para, Flamethrower
+ *               burn, Ice Beam freeze, Bite flinch, Psychic/Crunch drops), and
+ *               all stat-stage moves (Swords Dance doubling physical dmg, etc.)
+ *               fire with correct numbers. Will-O-Wisp is correctly ABSENT (a
+ *               Gen 3 move, not in the Gen 2 data). Documented the one genuine
+ *               structural gap explicitly in-code: accuracy/evasion STAGES
+ *               (Sand-Attack, Smokescreen, Double Team, Minimize, Sweet Scent)
+ *               are not modeled, so those moves are deliberate no-ops rather
+ *               than half-implemented.
  *   2.2.0 — Move-accuracy pass, requested explicitly after the Fairy-type fix
  *           below prompted a closer look at every previously-disclosed
  *           simplification:
@@ -215,6 +264,8 @@ const MOVE_EFFECTS = {
   moonlight: { heal: [1, 2] },
   rest: { special: 'rest' },
   painsplit: { special: 'painsplit' },
+  reflect: { special: 'reflect' },        // halves incoming PHYSICAL damage for 5 turns
+  lightscreen: { special: 'lightscreen' }, // halves incoming SPECIAL damage for 5 turns
 
   // ---- multi-hit (real 3/8, 3/8, 1/8, 1/8 split for 2/3/4/5 hits) ----------
   cometpunch: { multiHit: [2, 5] },
@@ -297,9 +348,11 @@ const MOVE_EFFECTS = {
   defensecurl: { boosts: { def: 1 }, boostTarget: 'self' },
   barrier: { boosts: { def: 2 }, boostTarget: 'self' },
   acidarmor: { boosts: { def: 2 }, boostTarget: 'self' },
-  minimize: { boosts: {}, boostTarget: 'self' },   // evasion not modeled — kept as a harmless status use
-  doubleteam: { boosts: {}, boostTarget: 'self' },
-  focusenergy: { boosts: {}, boostTarget: 'self' }, // crit-rate boost not modeled separately here
+  // ---- EVASION / ACCURACY moves (accuracy & evasion stages ARE modeled) ----
+  // These affect the hit-chance formula in doMove's accuracy check.
+  minimize: { boosts: { eva: 1 }, boostTarget: 'self' },     // +1 evasion
+  doubleteam: { boosts: { eva: 1 }, boostTarget: 'self' },   // +1 evasion
+  focusenergy: { boosts: {}, boostTarget: 'self' },          // crit-rate boost (still not modeled)
 
   // ---- guaranteed self stat DROPS from a "trade-off" status move ----------
   // (none currently in-pool beyond Curse's non-Ghost branch, handled specially)
@@ -310,10 +363,10 @@ const MOVE_EFFECTS = {
   tailwhip: { boosts: { def: -1 }, boostTarget: 'target' },
   screech: { boosts: { def: -2 }, boostTarget: 'target' },
   charm: { boosts: { atk: -2 }, boostTarget: 'target' }, // was missing entirely — found while fixing #6's Fairy-type retag; Charm did nothing on use before this
-  sandattack: { boosts: {}, boostTarget: 'target' }, // accuracy-drop not modeled — harmless no-op beyond the "used move" log
-  smokescreen: { boosts: {}, boostTarget: 'target' },
-  flash: { boosts: {}, boostTarget: 'target' },
-  kinesis: { boosts: {}, boostTarget: 'target' },
+  sandattack: { boosts: { acc: -1 }, boostTarget: 'target' }, // -1 target accuracy
+  smokescreen: { boosts: { acc: -1 }, boostTarget: 'target' }, // -1 target accuracy
+  flash: { boosts: { acc: -1 }, boostTarget: 'target' },       // -1 target accuracy
+  kinesis: { boosts: { acc: -1 }, boostTarget: 'target' },     // -1 target accuracy
   stringshot: { boosts: { spe: -1 }, boostTarget: 'target' },
   scaryface: { boosts: { spe: -2 }, boostTarget: 'target' },
   cottonspore: { boosts: { spe: -2 }, boostTarget: 'target' },
@@ -362,6 +415,9 @@ const MOVE_EFFECTS = {
   irontail: { secondary: { chance: 30, boosts: { def: -1 } } },
   // mudslap: accuracy-drop not modeled — plain damage, no table entry needed.
   constrict: { secondary: { chance: 10, boosts: { spe: -1 } } },
+  bubble: { secondary: { chance: 10, boosts: { spe: -1 } } },
+  bubblebeam: { secondary: { chance: 10, boosts: { spe: -1 } } },
+  icywind: { boosts: { spe: -1 }, boostTarget: 'target' }, // 100% speed drop (a damaging move that ALWAYS lowers the target's Speed) — affects turn order for the rest of the battle
   dragonbreath: { secondary: { chance: 30, status: 'par' } },
   twister: { secondary: { chance: 20, flinch: true } },
   metalclaw: { secondary: { chance: 10, boosts: { atk: 1 }, selfBoosts: { atk: 1 } } },
@@ -397,6 +453,18 @@ function stageMul(stage) {
   return stage >= 0 ? (2 + stage) / 2 : 2 / (2 - stage);
 }
 
+// Accuracy / evasion stages use a DIFFERENT table from the stat stages above.
+// Per Bulbapedia (gen 2): the multiplier is (3 + stage)/3 for a positive stage
+// and 3/(3 - stage) for a negative one — i.e. 3/3 = 1.0 at stage 0, up to
+// 9/3 = 3.0 at +6 and down to 3/9 ≈ 0.33 at -6. The final hit chance is:
+//   move.acc/100 × accStageMul(attacker.acc) × accStageMul(-defender.eva)
+// (the target's evasion enters as the negative of its stage, so +evasion makes
+// the attacker LESS likely to hit).
+function accStageMul(stage) {
+  stage = clamp(stage, -6, 6);
+  return stage >= 0 ? (3 + stage) / 3 : 3 / (3 - stage);
+}
+
 export function moveId(name) {
   return String(name).toLowerCase().replace(/[^a-z0-9]/g, '');
 }
@@ -425,7 +493,7 @@ function hpBasedBp(user) {
 // ---- combatant construction -------------------------------------------------
 function makeCombatant(spec, gen, moveData) {
   const types = (spec.types || []).filter(Boolean);
-  const boosts = { atk: 0, def: 0, spe: 0 };
+  const boosts = { atk: 0, def: 0, spe: 0, acc: 0, eva: 0 };
   if (gen === 1) boosts.spc = 0; else { boosts.spa = 0; boosts.spd = 0; }
   return {
     name: spec.name,
@@ -444,6 +512,8 @@ function makeCombatant(spec, gen, moveData) {
     chargingMove: null,            // #6b — Fly/Dig/Solarbeam/Razor Wind mid-charge
     invulnThisTurn: false,         // #6b — Fly/Dig semi-invulnerability
     mustRecharge: false,           // #6a — Hyper Beam
+    reflectTurns: 0,               // Reflect: halves incoming PHYSICAL damage while > 0
+    lightScreenTurns: 0,           // Light Screen: halves incoming SPECIAL damage while > 0
     moves: (spec.moves || []).map((nm) => {
       const hp = HP_TYPE_RE.exec(nm);
       if (hp) {
@@ -512,6 +582,13 @@ function calcDamage(atkr, defr, move, rng, gen, chart, log) {
   dmg = Math.floor(dmg * stab);
   dmg = Math.floor(dmg * eff);
   if (crit) dmg = Math.floor(dmg * CRIT_MULT);
+  // Reflect halves physical damage; Light Screen halves special damage. A
+  // critical hit ignores screens (authentic Gen 2). Applied here so it
+  // composes with STAB/effectiveness like the real damage formula.
+  if (!crit) {
+    if (physical && defr.reflectTurns > 0) dmg = Math.max(1, Math.floor(dmg / 2));
+    else if (!physical && defr.lightScreenTurns > 0) dmg = Math.max(1, Math.floor(dmg / 2));
+  }
   const roll = (217 + Math.floor(rng() * 39)) / 255; // gen 1/2 random spread ~0.85–1.0
   dmg = Math.max(1, Math.floor(dmg * roll));
 
@@ -618,10 +695,30 @@ function doMove(attacker, defender, move, rng, gen, chart, log, releasingCharge)
     log.push({ t: 'leechseed', target: defender.name });
     return;
   }
+  if (move.special === 'reflect') {
+    // Guards the USER's side, halving incoming physical damage for 5 turns.
+    // (No stacking/failure-on-reactivation modeled — just refreshes to 5.)
+    attacker.reflectTurns = 5;
+    log.push({ t: 'reflect', target: attacker.name });
+    return;
+  }
+  if (move.special === 'lightscreen') {
+    attacker.lightScreenTurns = 5;
+    log.push({ t: 'lightscreen', target: attacker.name });
+    return;
+  }
 
-  // ---- accuracy --------------------------------------------------------
-  if (move.acc !== true && move.acc != null && move.acc < 100) {
-    if (!chance(rng, move.acc / 100)) {
+  // ---- accuracy (now factors in accuracy/evasion STAGES) ---------------
+  // Base move accuracy is scaled by the attacker's accuracy stage and the
+  // target's evasion stage (evasion enters as the negative of its stage, so
+  // raised evasion lowers the hit chance). acc === true means never-miss
+  // (e.g. Swift), and is left alone. This is what makes Sand-Attack /
+  // Smokescreen (−target accuracy... modeled as +attacker-miss via accuracy
+  // stage on the user side is NOT how it works — accuracy-lowering moves drop
+  // the TARGET's future accuracy) and Double Team / Minimize (+evasion) real.
+  if (move.acc !== true && move.acc != null && !move.ohko) {
+    const hitChance = (move.acc / 100) * accStageMul(attacker.boosts.acc) * accStageMul(-defender.boosts.eva);
+    if (!chance(rng, Math.min(1, hitChance))) {
       log.push({ t: 'miss', source: attacker.name, move: move.name });
       if (move.crashOnMiss) { // #6 — Jump Kick / High Jump Kick "crash" on a miss
         const crash = Math.max(1, Math.floor(attacker.maxhp * CRASH_FRACTION));
@@ -693,8 +790,15 @@ function doMove(attacker, defender, move, rng, gen, chart, log, releasingCharge)
     defender.confuseTurns = randint(rng, 2, 4); log.push({ t: 'confuse', target: defender.name });
   }
   if (move.boosts && Object.keys(move.boosts).length && defender.hp > 0) {
-    const tgt = move.boostTarget === 'self' ? attacker : defender;
-    if (tgt.hp > 0) applyBoosts(tgt, move.boosts, gen, log);
+    // A pure Status move always applies its boost. A DAMAGING move that also
+    // carries a guaranteed boost (e.g. Icy Wind's 100% Speed drop) should only
+    // apply it when the hit actually connected — a type-immune no-op must not
+    // still drop the target's stat.
+    const damaging = move.cat !== 'Status' && (move.bp > 0 || move.ohko);
+    if (!damaging || dealt > 0) {
+      const tgt = move.boostTarget === 'self' ? attacker : defender;
+      if (tgt.hp > 0) applyBoosts(tgt, move.boosts, gen, log);
+    }
   }
 
   // secondary effects (from damaging moves — chance checked AFTER a successful hit)
@@ -730,7 +834,20 @@ function chooseMoveForTurn(c, rng) {
 // can this mon act this turn? handles slp/frz/par/flinch/confusion
 function preMove(c, rng, log) {
   if (c.status === 'slp') {
-    if (c.sleepTurns > 0) { c.sleepTurns--; if (c.sleepTurns === 0) { c.status = null; log.push({ t: 'wake', target: c.name }); } else { log.push({ t: 'asleep', target: c.name }); return false; } }
+    if (c.sleepTurns > 0) {
+      // Still asleep this turn: burn one sleep turn and skip the action. The
+      // mon does NOT get to act on the same turn its counter reaches 0 — a
+      // sleep of N turns means N missed turns, and the wake-up happens at the
+      // START of the next turn (handled below). Previously this woke AND acted
+      // in one turn when the counter hit 0, so a 1-turn sleep resulted in zero
+      // turns actually asleep — the reported "put to sleep but instantly woke".
+      c.sleepTurns--;
+      log.push({ t: 'asleep', target: c.name });
+      return false;
+    }
+    // counter already 0 at the start of this turn → wake up now and act
+    c.status = null;
+    log.push({ t: 'wake', target: c.name });
   }
   if (c.status === 'frz') {
     if (chance(rng, FREEZE_THAW)) { c.status = null; log.push({ t: 'thaw', target: c.name }); }
@@ -772,6 +889,9 @@ function endOfTurn(c, log) {
     c.seededBy.hp = Math.min(c.seededBy.maxhp, c.seededBy.hp + d);
     log.push({ t: 'chip', target: c.name, cause: 'leechseed', amount: d, healed: c.seededBy.hp - before });
   }
+  // Reflect / Light Screen tick down and expire (5 turns each).
+  if (c.reflectTurns > 0) { c.reflectTurns--; if (c.reflectTurns === 0) log.push({ t: 'reflect-end', target: c.name }); }
+  if (c.lightScreenTurns > 0) { c.lightScreenTurns--; if (c.lightScreenTurns === 0) log.push({ t: 'lightscreen-end', target: c.name }); }
 }
 
 /**
