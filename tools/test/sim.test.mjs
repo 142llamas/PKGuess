@@ -1,6 +1,6 @@
 /**
  * @file tools/test/sim.test.mjs
- * @version 1.0.0 
+ * @version 1.0.0
  * Unit tests for the VETTED battle simulator (docs/js/sim.js): stat conversion,
  * determinism, complementary win counts, and that the damage pipeline lets a
  * clearly-stronger mon win the majority. Run via `node tools/test/run.mjs`.

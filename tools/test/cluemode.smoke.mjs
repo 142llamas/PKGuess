@@ -1,7 +1,7 @@
 // Clue-selection-mode smoke for single.js (#10/#11/#15b/#15c).
 // Exercises real DOM clicks against the actual controller — not just engine
 // unit tests — so a UI wiring mistake (missing class, stray click handler)
-// would be caught here even if the engine itself is correct. 
+// would be caught here even if the engine itself is correct.
 // Run: node tools/test/cluemode.smoke.mjs
 import { JSDOM } from 'jsdom';
 import { readFileSync } from 'node:fs';

@@ -1,5 +1,5 @@
 /**
- * @file tools/test/run.mjs 
+ * @file tools/test/run.mjs
  * @version 1.0.0
  * Runs every pure-logic unit test and prints one summary. Zero dependencies.
  *
@@ -17,8 +17,9 @@ import mprules from './mp-rules.test.mjs';
 import identity from './identity.test.mjs';
 import catchTracker from './catch-tracker.test.mjs';
 import share from './share.test.mjs';
+import leaderboardData from './leaderboard-data.test.mjs';
 
-const SUITES = [['sim', sim], ['sim-status', simStatus], ['draft', draft], ['engine', engine], ['mp-rules', mprules], ['identity', identity], ['catch-tracker', catchTracker], ['share', share]];
+const SUITES = [['sim', sim], ['sim-status', simStatus], ['draft', draft], ['engine', engine], ['mp-rules', mprules], ['identity', identity], ['catch-tracker', catchTracker], ['share', share], ['leaderboard-data', leaderboardData]];
 
 const t = makeHarness();
 for (const [name, fn] of SUITES) {

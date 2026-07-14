@@ -1,4 +1,4 @@
-import { JSDOM } from 'jsdom'; 
+import { JSDOM } from 'jsdom';
 import { readFileSync } from 'node:fs';
 const dom = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>', { url:'https://example.com/' });
 const { window } = dom;

@@ -1,5 +1,5 @@
 /**
- * @file tools/test/catch-tracker.test.mjs 
+ * @file tools/test/catch-tracker.test.mjs
  * @version 1.0.0
  * Unit tests for docs/js/lib/catch-tracker.js (#17): the shared Caught/Seen
  * store every guess mode + the Pokédex now go through. Uses a tiny fake

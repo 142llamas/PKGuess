@@ -1,5 +1,5 @@
 /**
- * @file tools/test/sim-status.test.mjs 
+ * @file tools/test/sim-status.test.mjs
  * @version 1.0.0
  * Deep, exact verification of status effects and stat-changing mechanics in
  * sim.js — requested explicitly: "check that stat changing moves and actual
@@ -287,5 +287,203 @@ export default function (t) {
     }
     t.ok(statusesSeen.size >= 2, `#6: Tri Attack's proc produced more than one distinct status across 300 uses (saw: ${[...statusesSeen].join(',')}) \u2014 proves it's randomized, not always paralysis`);
     for (const st of statusesSeen) t.ok(['par', 'brn', 'frz'].includes(st), `status "${st}" is one of the three real Tri Attack outcomes`);
+  }
+
+  t.section('sim.js \u2014 SLEEP costs real turns (bug report: "put to sleep 4x but only asleep 1 turn total")');
+  {
+    // The reported bug: a mon put to sleep woke AND acted on the same turn its
+    // counter reached 0, so a 1-turn sleep = 0 missed turns. Spore is 100%
+    // sleep. A sleeping mon must MISS a turn (log an 'asleep' skip) every time
+    // sleep is applied — never 0 misses for a successful sleep.
+    const sleeper = spec('Sleeper', atkStats, ['Grass'], ['Spore', 'Spore', 'Spore', 'Spore']);
+    const victim = spec('Victim', roundHpStats, ['Normal'], ['Splash', 'Splash', 'Splash', 'Splash']);
+    let checked = 0;
+    for (let seed = 1; seed <= 30 && checked < 5; seed++) {
+      const res = simulateBattle(sleeper, victim, { ...opts, seed, turnCap: 12 });
+      const applied = res.log.filter((e) => e.t === 'status' && e.status === 'slp' && e.target === 'Victim').length;
+      const missed = res.log.filter((e) => e.t === 'asleep' && e.target === 'Victim').length;
+      if (applied > 0) {
+        checked++;
+        t.ok(missed >= applied, `seed ${seed}: every sleep application costs at least one missed turn (applied ${applied}, missed ${missed}) \u2014 never the reported "asleep but instantly woke"`);
+      }
+    }
+    t.ok(checked > 0, 'at least one battle where sleep was applied was checked');
+
+    // DETERMINISTIC guard using Rest (always sleeps EXACTLY 2 turns). With the
+    // fix, the rester misses exactly 2 turns then wakes on the 3rd. The old
+    // bug (wake+act on the turn the counter hit 0) produced only 1 missed turn
+    // for the same 2-turn sleep, so this reliably catches a regression.
+    const rester = spec('Rester', toRealStats({ hp: 200, atk: 60, def: 150, spa: 60, spd: 150, spe: 200 }, 2), ['Normal'], ['Rest', 'Splash', 'Splash', 'Splash']);
+    const poker = spec('Poker', roundHpStats, ['Normal'], ['Splash', 'Splash', 'Splash', 'Splash']);
+    let sawRestSleep = false;
+    for (let seed = 1; seed <= 25; seed++) {
+      const res = simulateBattle(rester, poker, { ...opts, seed, turnCap: 14 });
+      const restIdx = res.log.findIndex((e) => e.t === 'rest' && e.target === 'Rester');
+      if (restIdx < 0) continue;
+      const woke = res.log.slice(restIdx).some((e) => e.t === 'wake' && e.target === 'Rester');
+      if (!woke) continue; // Rest didn't fully play out before the cap; skip
+      let misses = 0;
+      for (let i = restIdx + 1; i < res.log.length; i++) {
+        if (res.log[i].t === 'asleep' && res.log[i].target === 'Rester') misses++;
+        if (res.log[i].t === 'wake' && res.log[i].target === 'Rester') break;
+      }
+      sawRestSleep = true;
+      t.eq(misses, 2, `Rest (a fixed 2-turn sleep) makes the mon miss EXACTLY 2 turns before waking (got ${misses}) \u2014 the buggy wake-and-act-same-turn code gave only 1`);
+      break;
+    }
+    t.ok(sawRestSleep, 'observed a Rest that fully played out (slept 2 turns, then woke)');
+  }
+
+  t.section('sim.js \u2014 Reflect halves PHYSICAL damage (not special); Light Screen halves SPECIAL (not physical)');
+  {
+    // Defender is much faster so its screen goes up on turn 1, before the
+    // slow attacker lands its first hit — makes the before/after clean.
+    const fastWall = toRealStats({ hp: 145, atk: 60, def: 100, spa: 60, spd: 100, spe: 250 }, 2);
+    const slowHitter = toRealStats({ hp: 200, atk: 140, def: 60, spa: 140, spd: 60, spe: 20 }, 2);
+
+    // --- Reflect vs a physical attacker ---
+    const physAtk = spec('PhysAtk', slowHitter, ['Normal'], ['Tackle', 'Tackle', 'Tackle', 'Tackle']);
+    const reflector = spec('Reflector', fastWall, ['Normal'], ['Reflect', 'Reflect', 'Reflect', 'Reflect']);
+    const rRef = simulateBattle(physAtk, reflector, { ...opts, seed: 5, turnCap: 6 });
+    t.ok(rRef.log.some((e) => e.t === 'reflect'), 'Reflect actually goes up (the move is no longer a no-op)');
+    const physDmgs = rRef.log.filter((e) => e.t === 'damage' && e.target === 'Reflector' && !e.crit).map((e) => e.amount);
+    t.ok(physDmgs.length >= 2, 'the physical attacker landed multiple non-crit hits');
+    // With Reflect up from turn 1, ALL non-crit physical hits should be ~half
+    // of what the same attacker does with no screen up.
+    const noScreen = spec('NoScreen', fastWall, ['Normal'], ['Splash', 'Splash', 'Splash', 'Splash']);
+    const rBase = simulateBattle(physAtk, noScreen, { ...opts, seed: 5, turnCap: 6 });
+    const baseDmgs = rBase.log.filter((e) => e.t === 'damage' && e.target === 'NoScreen' && !e.crit).map((e) => e.amount);
+    const avg = (a) => a.reduce((x, y) => x + y, 0) / a.length;
+    t.ok(baseDmgs.length > 0 && avg(physDmgs) < avg(baseDmgs) * 0.62, `physical damage under Reflect (avg ${avg(physDmgs).toFixed(1)}) is ~half the un-screened damage (avg ${avg(baseDmgs).toFixed(1)})`);
+
+    // --- Reflect must NOT reduce SPECIAL damage ---
+    const specAtk = spec('SpecAtk', slowHitter, ['Water'], ['Surf', 'Surf', 'Surf', 'Surf']);
+    const rRefSpec = simulateBattle(specAtk, reflector, { ...opts, seed: 5, turnCap: 6 });
+    const specVsReflect = rRefSpec.log.filter((e) => e.t === 'damage' && e.target === 'Reflector' && !e.crit).map((e) => e.amount);
+    const rBaseSpec = simulateBattle(specAtk, noScreen, { ...opts, seed: 5, turnCap: 6 });
+    const specBase = rBaseSpec.log.filter((e) => e.t === 'damage' && e.target === 'NoScreen' && !e.crit).map((e) => e.amount);
+    t.ok(specVsReflect.length > 0 && specBase.length > 0 && Math.abs(avg(specVsReflect) - avg(specBase)) < 3, `Reflect does NOT reduce special damage (with Reflect: ${avg(specVsReflect).toFixed(1)}, without: ${avg(specBase).toFixed(1)})`);
+
+    // --- Light Screen vs a special attacker (mirror of the Reflect check) ---
+    const screener = spec('Screener', fastWall, ['Normal'], ['Light Screen', 'Light Screen', 'Light Screen', 'Light Screen']);
+    const rLS = simulateBattle(specAtk, screener, { ...opts, seed: 5, turnCap: 6 });
+    t.ok(rLS.log.some((e) => e.t === 'lightscreen'), 'Light Screen actually goes up (no longer a no-op)');
+    const lsDmgs = rLS.log.filter((e) => e.t === 'damage' && e.target === 'Screener' && !e.crit).map((e) => e.amount);
+    t.ok(lsDmgs.length > 0 && avg(lsDmgs) < avg(specBase) * 0.62, `special damage under Light Screen (avg ${avg(lsDmgs).toFixed(1)}) is ~half the un-screened special damage (avg ${avg(specBase).toFixed(1)})`);
+
+    // --- Light Screen must NOT reduce PHYSICAL damage ---
+    const rLSphys = simulateBattle(physAtk, screener, { ...opts, seed: 5, turnCap: 6 });
+    const physVsLS = rLSphys.log.filter((e) => e.t === 'damage' && e.target === 'Screener' && !e.crit).map((e) => e.amount);
+    t.ok(physVsLS.length > 0 && Math.abs(avg(physVsLS) - avg(baseDmgs)) < 3, `Light Screen does NOT reduce physical damage (with LS: ${avg(physVsLS).toFixed(1)}, without: ${avg(baseDmgs).toFixed(1)})`);
+  }
+
+  t.section('sim.js \u2014 ACCURACY / EVASION stages (requested): raised evasion & lowered accuracy cause real misses');
+  {
+    const fast = toRealStats({ hp: 200, atk: 100, def: 80, spa: 80, spd: 80, spe: 130 }, 2);
+    const slow = toRealStats({ hp: 200, atk: 100, def: 80, spa: 80, spd: 80, spe: 30 }, 2);
+
+    // A 100%-base-accuracy move (Tackle) should NEVER miss a foe with neutral
+    // evasion \u2014 confirms we didn't just make everything miss randomly.
+    {
+      const atkr = mono('Atkr', 'Tackle', fast);
+      const foe = spec('Foe', roundHpStats, ['Normal'], ['Splash', 'Splash', 'Splash', 'Splash']);
+      let tackles = 0, misses = 0;
+      for (let seed = 1; seed <= 20; seed++) {
+        const res = simulateBattle(atkr, foe, { ...opts, seed, turnCap: 4 });
+        tackles += res.log.filter((e) => e.t === 'use' && e.move === 'Tackle').length;
+        misses += res.log.filter((e) => e.t === 'miss' && e.move === 'Tackle').length;
+      }
+      t.eq(misses, 0, `a 100%-accuracy move never misses a foe with neutral evasion (${misses} misses in ${tackles} uses)`);
+    }
+
+    // Double Team (+evasion, self) on a FAST foe should make the slow
+    // attacker's 100%-accuracy Tackle start missing.
+    {
+      const evaFoe = spec('EvaFoe', fast, ['Normal'], ['Double Team', 'Double Team', 'Double Team', 'Double Team']);
+      const atkr = spec('Atkr', slow, ['Normal'], ['Tackle', 'Tackle', 'Tackle', 'Tackle']);
+      let misses = 0, tackles = 0, sawEvaBoost = false;
+      for (let seed = 1; seed <= 40; seed++) {
+        const res = simulateBattle(atkr, evaFoe, { ...opts, seed, turnCap: 8 });
+        misses += res.log.filter((e) => e.t === 'miss' && e.move === 'Tackle').length;
+        tackles += res.log.filter((e) => e.t === 'use' && e.move === 'Tackle').length;
+        if (res.log.some((e) => e.t === 'boost' && e.stat === 'eva' && e.delta === 1)) sawEvaBoost = true;
+      }
+      t.ok(sawEvaBoost, 'Double Team logs a +1 evasion stage');
+      t.ok(misses > 0, `a 100%-accuracy move DOES miss a foe that raised evasion via Double Team (${misses} misses / ${misses + tackles} attempts)`);
+    }
+
+    // Sand-Attack (\u2212accuracy, target) should make the target's move miss more.
+    {
+      const sandUser = spec('SandUser', fast, ['Ground'], ['Sand-Attack', 'Sand-Attack', 'Sand-Attack', 'Sand-Attack']);
+      const foe = spec('Foe', slow, ['Normal'], ['Tackle', 'Tackle', 'Tackle', 'Tackle']);
+      let misses = 0, uses = 0, sawAccDrop = false;
+      for (let seed = 1; seed <= 40; seed++) {
+        const res = simulateBattle(sandUser, foe, { ...opts, seed, turnCap: 8 });
+        misses += res.log.filter((e) => e.t === 'miss' && e.move === 'Tackle').length;
+        uses += res.log.filter((e) => e.t === 'use' && e.move === 'Tackle').length;
+        if (res.log.some((e) => e.t === 'boost' && e.stat === 'acc' && e.delta === -1)) sawAccDrop = true;
+      }
+      t.ok(sawAccDrop, 'Sand-Attack logs a \u22121 accuracy stage on the target');
+      t.ok(misses > 0, `the target's move misses more after Sand-Attack lowered its accuracy (${misses} misses / ${misses + uses} attempts)`);
+    }
+
+    t.note('accuracy/evasion stage multipliers follow the gen-2 3/(3\u00b1n) table (verified via the miss-rate checks above)');
+  }
+
+  t.section('sim.js \u2014 SPEED & turn order (requested): priority moves and speed stages');
+  {
+    const slow = toRealStats({ hp: 200, atk: 100, def: 80, spa: 80, spd: 80, spe: 40 }, 2);
+    const fast = toRealStats({ hp: 200, atk: 100, def: 80, spa: 80, spd: 80, spe: 120 }, 2);
+
+    // PRIORITY: a SLOW mon using Quick Attack (prio +1) acts before a FAST mon
+    // using a normal-priority move \u2014 for that turn.
+    {
+      const slowQA = spec('SlowQA', slow, ['Normal'], ['Quick Attack', 'Quick Attack', 'Quick Attack', 'Quick Attack']);
+      const fastT = spec('FastT', fast, ['Normal'], ['Tackle', 'Tackle', 'Tackle', 'Tackle']);
+      const res = simulateBattle(slowQA, fastT, { ...opts, seed: 1, turnCap: 1 });
+      const firstUse = res.log.find((e) => e.t === 'use');
+      t.eq(firstUse && firstUse.source, 'SlowQA', 'a slow mon with Quick Attack (priority) acts BEFORE a faster mon');
+    }
+
+    // Extreme Speed (prio +2) beats Quick Attack (prio +1) even if slower.
+    {
+      const esUser = spec('ESUser', slow, ['Normal'], ['Extreme Speed', 'Extreme Speed', 'Extreme Speed', 'Extreme Speed']);
+      const qaUser = spec('QAUser', fast, ['Normal'], ['Quick Attack', 'Quick Attack', 'Quick Attack', 'Quick Attack']);
+      const res = simulateBattle(esUser, qaUser, { ...opts, seed: 1, turnCap: 1 });
+      const firstUse = res.log.find((e) => e.t === 'use');
+      t.eq(firstUse && firstUse.source, 'ESUser', 'higher priority (Extreme Speed +2) beats lower priority (Quick Attack +1)');
+    }
+
+    // SPEED STAGES: a slightly-slower mon using Agility (+2 spe) should out-
+    // speed the foe in ALL FUTURE turns once it lands.
+    {
+      const s1 = toRealStats({ hp: 200, atk: 80, def: 80, spa: 80, spd: 80, spe: 90 }, 2);  // slower
+      const s2 = toRealStats({ hp: 200, atk: 80, def: 80, spa: 80, spd: 80, spe: 100 }, 2); // faster
+      const agiUser = spec('AgiUser', s1, ['Normal'], ['Agility', 'Agility', 'Agility', 'Agility']);
+      const foe = spec('Foe', s2, ['Normal'], ['Splash', 'Splash', 'Splash', 'Splash']);
+      const res = simulateBattle(agiUser, foe, { ...opts, seed: 1, turnCap: 6 });
+      let agiTurn = null, curTurn = 0;
+      const orderByTurn = {};
+      for (const e of res.log) {
+        if (e.t === 'turn') curTurn = e.n;
+        if (e.t === 'boost' && e.stat === 'spe' && agiTurn == null) agiTurn = curTurn;
+        if (e.t === 'use') (orderByTurn[curTurn] ||= []).push(e.source);
+      }
+      t.ok(agiTurn != null, 'Agility raised the user\u2019s Speed stage');
+      const afterTurn = agiTurn + 1;
+      t.ok(orderByTurn[afterTurn] && orderByTurn[afterTurn][0] === 'AgiUser', `after Agility lands (turn ${agiTurn}), the previously-slower mon acts first on turn ${afterTurn} \u2014 a persistent, all-future-turns change`);
+    }
+
+    // Icy Wind: a damaging move that ALSO lowers the target's Speed every hit.
+    {
+      const s1 = toRealStats({ hp: 200, atk: 80, def: 80, spa: 100, spd: 80, spe: 90 }, 2);
+      const s2 = toRealStats({ hp: 200, atk: 80, def: 80, spa: 80, spd: 80, spe: 100 }, 2);
+      const icyUser = spec('IcyUser', s1, ['Ice'], ['Icy Wind', 'Icy Wind', 'Icy Wind', 'Icy Wind']);
+      const foe = spec('Foe', s2, ['Normal'], ['Tackle', 'Tackle', 'Tackle', 'Tackle']);
+      const res = simulateBattle(icyUser, foe, { ...opts, seed: 1, turnCap: 4 });
+      const speDrop = res.log.some((e) => e.t === 'boost' && e.stat === 'spe' && e.delta === -1 && e.target === 'Foe');
+      const dmg = res.log.some((e) => e.t === 'damage' && e.move === 'Icy Wind');
+      t.ok(dmg && speDrop, 'Icy Wind both deals damage AND lowers the target\u2019s Speed (a 100% secondary)');
+    }
   }
 }

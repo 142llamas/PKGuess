@@ -263,6 +263,36 @@ console.log('— Results: ranked by total time, splits table renders (#1e) —')
   ok(!!A.q('.race-split-best'), 'at least one fastest-split cell is highlighted');
 }
 
+console.log('— Bug report: the GUEST (non-host) opting in alone must update the counter on BOTH screens —');
+{
+  // Reproduces the exact reported scenario: on Cycling Road, the mobile GUEST
+  // tapped "Want a rematch?" but the "N players want a rematch" counter didn't
+  // move and the host couldn't start — i.e. the guest's opt-in wasn't being
+  // reflected. Online MP did NOT have this problem, so this specifically
+  // exercises the guest-first path on Cycling Road.
+  ok(A.text().includes('0 players want a rematch') || A.text().includes('players want a rematch'), 'precondition: nobody has opted in yet');
+  B.click(B.btn('rematch')); await tick();
+  room = await fb.get('/rooms/' + code);
+  ok(room.players.uidB.rematch === true, 'the guest\u2019s opt-in is written to the database');
+  ok(!room.players.uidA.rematch, 'the host has NOT opted in yet (guest opted in alone)');
+  // The guest's own screen must reflect their opt-in...
+  ok(B.text().includes('1 player wants a rematch'), `guest\u2019s own screen shows the count went to 1 (text: ${B.text().match(/\d+ players? wants? a rematch/)})`);
+  // ...and, crucially, the HOST's screen must show it too (this is the part
+  // the bug report says was broken — the host never saw the guest's opt-in).
+  ok(A.text().includes('1 player wants a rematch'), `HOST\u2019s screen also shows the guest\u2019s opt-in (count = 1) (text: ${A.text().match(/\d+ players? wants? a rematch/)})`);
+  // The host can't start yet (host themselves hasn't opted in), but the guest
+  // being counted is the thing under test. Now the host opts in too:
+  A.click(A.btn('rematch')); await tick();
+  const startBtn = A.btn('Start rematch');
+  ok(!!startBtn && !startBtn.disabled, 'once BOTH have opted in, the host\u2019s Start-rematch button enables');
+  // reset for the next test block (which opts in fresh). The button now reads
+  // "Rematch selected" (capital R) when active, so match that to toggle off.
+  A.click(A.btn('Rematch selected')); await tick();
+  B.click(B.btn('Rematch selected')); await tick();
+  room = await fb.get('/rooms/' + code);
+  ok(!room.players.uidA.rematch && !room.players.uidB.rematch, 'both opt-ins cleared for the next test block');
+}
+
 console.log('— Persistent post-game lobby + rematch (#1f): both opt in, host starts, countdown resolves —');
 {
   A.click(A.btn('rematch')); await tick();

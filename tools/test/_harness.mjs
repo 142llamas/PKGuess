@@ -1,4 +1,4 @@
-/** 
+/**
  * @file tools/test/_harness.mjs
  * @version 1.0.0
  * Minimal zero-dependency assertion harness for the pure-logic unit tests.
