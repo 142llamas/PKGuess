@@ -1,8 +1,14 @@
 /**
  * @file        js/lib/leaderboard-data.js
- * @version     1.0.0
- * @updated     2026-06-24
+ * @version     1.1.0
+ * @updated     2026-07-12
  * @changelog
+ *   1.1.0 — Added an optional numeric secondary metric (+ metricLabel) to
+ *           submitScore, stored alongside score. rankEntries/topEntries gained
+ *           a sort option ({ sortBy:'metric', metricAsc }) so a board can rank
+ *           by the metric instead of score. Backs Safari's catch-per-100-points
+ *           ranking and Victory Road's optional time-per-catch sort. Entries
+ *           without a metric sink to the bottom under a metric sort.
  *   1.0.0 — Pure data helpers for leaderboards (no UI, no DOM). Matches the
  *           SPEC §6 interface: submitScore, topEntries, rankEntries.
  *           Schema (SPEC §9):
@@ -38,6 +44,14 @@ export async function submitScore(gen, mode, entry) {
       detail: String(entry.detail || '').slice(0, 200),
       at:     Date.now(),
     };
+    // Optional numeric secondary metric (e.g. Safari catch-per-100-pts, or
+    // Victory Road time-per-catch). Stored so the board can display AND sort
+    // by it without re-parsing the free-text `detail`. Omitted entirely (not
+    // written as undefined — RTDB rejects that) when not provided.
+    if (entry.metric != null && isFinite(Number(entry.metric))) {
+      record.metric = Number(entry.metric);
+      if (entry.metricLabel) record.metricLabel = String(entry.metricLabel).slice(0, 24);
+    }
     await fb.push(`/leaderboard/${gen}/${mode}`, record);
   } catch (e) {
     console.warn('leaderboard submit failed:', e);
@@ -52,13 +66,13 @@ export async function submitScore(gen, mode, entry) {
  * @param {number} n
  * @returns {Promise<Array<{uid,name,score,detail,at,_key}>>}
  */
-export async function topEntries(gen, mode, n = 10) {
+export async function topEntries(gen, mode, n = 10, opts = {}) {
   if (!VALID_GENS.has(gen) || !VALID_MODES.has(mode)) return [];
   try {
     const fb = await getFirebase();
     const raw = await fb.get(`/leaderboard/${gen}/${mode}`);
     if (!raw) return [];
-    return rankEntries(raw, n);
+    return rankEntries(raw, n, opts);
   } catch (e) {
     console.warn('leaderboard read failed:', e);
     return [];
@@ -71,10 +85,25 @@ export async function topEntries(gen, mode, n = 10) {
  * @param {Record<string, {uid,name,score,detail,at}>} obj
  * @param {number} n
  */
-export function rankEntries(obj, n = 10) {
-  return Object.entries(obj || {})
+export function rankEntries(obj, n = 10, opts = {}) {
+  const { sortBy = 'score', metricAsc = false } = opts;
+  const rows = Object.entries(obj || {})
     .map(([_key, v]) => ({ ...v, _key }))
-    .filter((e) => typeof e.score === 'number')
-    .sort((a, b) => b.score - a.score || a.at - b.at)
-    .slice(0, n);
+    .filter((e) => typeof e.score === 'number');
+  if (sortBy === 'metric') {
+    // Sort by the numeric secondary metric. Entries without a metric sink to
+    // the bottom regardless of direction. metricAsc = lower-is-better (e.g.
+    // fastest average time per catch); default = higher-is-better.
+    rows.sort((a, b) => {
+      const am = typeof a.metric === 'number' ? a.metric : null;
+      const bm = typeof b.metric === 'number' ? b.metric : null;
+      if (am == null && bm == null) return b.score - a.score || a.at - b.at;
+      if (am == null) return 1;
+      if (bm == null) return -1;
+      return (metricAsc ? am - bm : bm - am) || b.score - a.score || a.at - b.at;
+    });
+  } else {
+    rows.sort((a, b) => b.score - a.score || a.at - b.at);
+  }
+  return rows.slice(0, n);
 }
