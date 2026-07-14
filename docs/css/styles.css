@@ -1,8 +1,10 @@
 /*
  * @file        docs/css/styles.css
- * @version     1.14.6
+ * @version     1.14.7
  * @updated     2026-07-12
  * @changelog
+*   1.14.7 — Added .lb-sort-row (Victory Road leaderboard's Total-caught /
+*           Avg-time-per-catch sort toggle).
 *   1.14.6 — Removed the orphaned .shell-footer rule (its only user, the
 *           "Build skeleton" footer in main.js, was removed).
 *   1.14.5 — Fixed a real, confirmed bug: .vr-clue-ribbon had TWO conflicting
@@ -1147,6 +1149,11 @@ h1,h2,h3{font-family:var(--font-pixel);}
 .lb-tab:hover { border-color:var(--accent-gold-dim); }
 .lb-tab.active { background:var(--accent-gold); color:#1a1205; font-weight:700; border-color:var(--accent-gold); }
 .lb-board { margin-bottom:16px; }
+/* Victory Road sort toggle (Total caught / Avg time per catch). The active
+   button is highlighted; buttons reuse .btn-secondary + .active. */
+.lb-sort-row { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-bottom:12px; }
+.lb-sort-row .btn-secondary { font-size:12px; padding:5px 12px; }
+.lb-sort-row .btn-secondary.active { border-color:var(--accent-gold); color:var(--accent-gold); background:rgba(255,215,0,0.08); }
 .lb-empty { color:var(--text-dim); font-size:13px; padding:24px; text-align:center; }
 .lb-table { width:100%; border-collapse:collapse; font-size:13px; }
 .lb-table th { color:var(--text-dim); font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.5px; padding:6px 10px; border-bottom:1px solid var(--border-card); text-align:left; }
