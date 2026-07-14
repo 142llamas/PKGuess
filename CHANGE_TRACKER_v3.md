@@ -843,3 +843,74 @@ To keep this correct for the future, the wrapper was **not** left as a duplicate
 - `tools/test/online.smoke.mjs`
 - `tools/test/throne.smoke.mjs`
 - `MANIFEST.md`, `CHANGE_TRACKER_v3.md`, `TESTING_CHECKLIST.md`
+---
+
+## 2026-07-12 (batch 3) — Battle-mechanics deep dive: sleep, screens, accuracy/evasion, speed; leaderboard metrics
+
+### Sleep bug + Reflect/Light Screen (bug reports)
+
+| Location | Files |
+|---|---|
+| `docs/js/` | `sim.js` (2.3.0), `modes/draftbattle.js` (1.15.1) |
+| `tools/test/` | `sim-status.test.mjs` |
+
+**Sleep**, reported: "put to sleep a total of 4 times, but spent a total of 1 turn actually asleep." Root cause confirmed: a sleeping mon woke AND acted on the same turn its counter reached 0, so a 1-turn sleep (the low end of the real 1–7 roll) cost zero missed turns. Fixed: a sleeping mon always misses its turn while the counter is > 0; it wakes at the START of a later turn once the counter has already expired. Regression guard uses Rest (a fixed, deterministic 2-turn sleep) rather than the random 1–7 roll — the buggy code gives exactly 1 missed turn where the fix gives exactly 2, so this can't pass by accident.
+
+**Reflect / Light Screen**, reported: "physical attack did 16 damage both before and after Reflect." Both moves were entirely absent from the effects table — they resolved as no-op status moves. Implemented from scratch: 5-turn side screens halving incoming physical (Reflect) / special (Light Screen) damage, bypassed by a critical hit (authentic Gen 2), with end-of-turn expiry and battle-log narration for both the screen going up and wearing off (without narration, the renderer's `default: continue` would silently drop these events, same class of bug fixed for other mechanics in an earlier batch).
+
+### Full battle-mechanics deep dive (requested)
+
+Audited every status move, secondary-effect proc, and stat-stage move: all fire correctly with the right numbers (Body Slam's 30% paralysis, Swords Dance's damage-doubling, etc. — an earlier "Body Slam never procs" reading during the audit turned out to be a test error, testing it against a Ghost-type foe immune to the Normal-type move). Will-O-Wisp is correctly absent from the Gen 2 data (it's a Gen 3 move; Gen 2 burns only come from Fire-type moves). One real, disclosed gap found: accuracy/evasion stages weren't modeled at all, so Sand-Attack/Smokescreen/Double Team/Minimize/Sweet Scent were documented no-ops rather than half-implemented — flagged clearly rather than silently left broken.
+
+### Accuracy / evasion stages (explicit follow-up request, with the exact gen-2 formula)
+
+| Location | Files |
+|---|---|
+| `docs/js/` | `sim.js` (2.4.0), `modes/draftbattle.js` (1.15.1) |
+| `tools/test/` | `sim-status.test.mjs` |
+
+Implemented using the gen-2 Bulbapedia table supplied: accuracy multiplier = `(3+stage)/3` for a positive stage, `3/(3−stage)` for a negative one (1.0 at stage 0, up to 3.0 at +6, down to ~0.33 at −6); evasion enters as the negative of its own stage in the same formula. Final hit chance = `move.acc/100 × accStageMul(attacker.acc) × accStageMul(−defender.eva)`. This makes five previously-dead moves real: Double Team / Minimize (+evasion, self), Sand-Attack / Smokescreen / Flash / Kinesis (−accuracy, target). Verified: a 100%-accuracy move never misses a foe with neutral evasion (0 misses in 20 seeds), but does miss a Double-Teaming foe (~50% over 320 attempts across 40 seeds); Sand-Attack similarly causes real misses on the target's own moves. A guaranteed target boost on a DAMAGING move (relevant for Icy Wind below) was also tightened to only apply when the hit actually connected — a type-immune no-op no longer still drops the target's stat, while pure Status moves are unaffected.
+
+### Speed & turn order (explicit follow-up question)
+
+Asked to confirm: (1) priority moves like Quick Attack can let a slower mon act first for just that turn, and (2) moves like Agility/Icy Wind can change turn order for all future turns via Speed stat stages. **Both were already correct** — verified directly:
+- A slow mon with Quick Attack (priority +1) acts before a faster mon using a normal-priority move, for that turn. Extreme Speed (+2) beats Quick Attack (+1) even when slower.
+- A slightly-slower mon that lands Agility (+2 Speed) outspeeds the foe in every turn from that point forward — a persistent change, not a one-turn effect.
+
+One real gap found while verifying this: **Icy Wind** (specifically named as an example) was missing its real 100% Speed-drop secondary effect entirely — it dealt damage but never lowered the target's Speed, so it couldn't have been flipping turn order as expected. Fixed, along with Bubble/Bubblebeam's 10% Speed-drop secondary (same gap, smaller scope). Verified Icy Wind now both damages and drops Speed on the same hit, and that repeated hits accumulate to eventually flip turn order.
+
+### Cycling Road rematch counter + footer (bug reports — confirmed NOT code bugs)
+
+Reproduced the exact reported scenario (guest/non-host opts into a rematch alone, on mobile) in a new test — the counter updates correctly on BOTH screens and the host's Start button enables once both have opted in. Online MP's equivalent flow was already known-working. Root cause of the discrepancy: the reported symptoms (frozen counter, "Build skeleton" footer still showing) match code that is fixed in this repo but evidently wasn't reflected in what was actually deployed — i.e. a stale upload of `main.js`/`race.js` from an earlier batch, not a regression. One genuine small thing WAS found and fixed while reproducing this: a grammar bug, "1 player **want** a rematch" → "1 player **wants** a rematch" (`race.js` 2.4.1).
+
+### Leaderboard metrics (requested)
+
+| Location | Files |
+|---|---|
+| `docs/js/lib/` | `leaderboard-data.js` (1.1.0) |
+| `docs/js/modes/` | `leaderboard.js` (1.3.0), `safari.js` (1.5.0), `victoryroad.js` (1.5.0) |
+| `docs/css/` | `styles.css` (1.14.7) |
+| `tools/test/` | `leaderboard-data.test.mjs` (new) |
+
+`submitScore` now accepts an optional numeric `metric` (+ `metricLabel`), stored alongside `score`. `rankEntries`/`topEntries` gained a `sortBy:'metric'` option (with `metricAsc` for lower-is-better boards); entries without a metric sink to the bottom rather than sorting arbitrarily or crashing.
+- **Safari** now submits catch-per-100-points as the metric, and its leaderboard **always** ranks by it (shown in its own column) — this IS the requested Safari ranking.
+- **Victory Road** now submits average time-per-catch as the metric. The board still defaults to ranking by total caught (score), per the request to keep that as the default, with a new sort-toggle (`.lb-sort-row`) on the leaderboard screen to re-rank by the time metric instead.
+- New dedicated unit suite (`leaderboard-data.test.mjs`) covers `rankEntries`'s sort behavior in isolation (the pure, directly-testable piece); `submitScore`/`topEntries` need a live/fake Firebase and aren't covered here.
+
+**A process note, disclosed for transparency:** while editing `MANIFEST.md` in this batch, a parameter-naming slip in an editing tool call (the same mistake flagged in the previous batch) briefly deleted two more rows (`sim.js` and `share.test.mjs`). Both were caught immediately by checking the file right after each edit and were fully reconstructed from content already visible earlier in the same turn. The final file was reviewed end-to-end afterward to confirm no other damage.
+
+**Full test tally after this batch:** 971 unit + 507 smoke = 1478 assertions, all green, stable across repeated runs.
+
+### Files changed this batch
+- `docs/js/sim.js`
+- `docs/js/modes/draftbattle.js`
+- `docs/js/modes/race.js`
+- `docs/js/lib/leaderboard-data.js`
+- `docs/js/modes/leaderboard.js`
+- `docs/js/modes/safari.js`
+- `docs/js/modes/victoryroad.js`
+- `docs/css/styles.css`
+- `tools/test/sim-status.test.mjs`
+- `tools/test/leaderboard-data.test.mjs` (new)
+- `tools/test/run.mjs`
+- `MANIFEST.md`, `CHANGE_TRACKER_v3.md`, `TESTING_CHECKLIST.md`

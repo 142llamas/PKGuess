@@ -38,6 +38,8 @@ player sees.
 - [ ] 1.18 Buy/reveal **"Reveal One Example Moveset"** a few times on a few different Pokémon (Mr. Mime is a known real example) — confirm no single reveal ever shows the same move twice.
 - [ ] 1.19 Buy/reveal the **"Has an Immunity"** clue and the **"Used by Elite Four / Red / Rival"** clue — confirm each shows a plain **"Yes"** or **"No"**, not the longer "Yes — has at least one immunity" / "No — not used by Elite Four, Red, or Rival" text.
 - [ ] 1.20 On the main mode-select screen, confirm there is **no "Build skeleton v1.0.0"** text at the bottom anymore (it was removed).
+- [ ] 1.21 Play a Safari Zone game to completion, then check the **Leaderboard** screen's Safari tab — confirm there's a "Catch / 100 pts" column and the board is ranked by it (not by raw caught count).
+- [ ] 1.22 Play a Victory Road run to completion, then check the **Leaderboard** screen's Victory Road tab — confirm it's ranked by **total caught** by default, and there's a toggle to switch to "Avg time / catch" (lower should rank first when toggled).
 
 ## 2. Multiplayer (Hot-seat, same device)
 
@@ -88,6 +90,8 @@ player sees.
 - [ ] 5.10 **Host-disconnect resilience**: with 2+ players, have the host disconnect before starting — confirm someone else can still start the race, with a banner explaining what happened. Try it again mid-race (the room-wide time cap should still fire on schedule) and in the post-game lobby (someone else should be able to trigger the rematch countdown).
 - [ ] 5.11 **Room sharing**: in the lobby, tap **"📤 Share Room"** — confirm the message says "Join my Cycling Road game!" plus the gen and target Pokémon count, then a link (and does NOT mention Team Mode, since this is an individual room). Open that link on a second device — confirm it lands on the join screen with the code pre-filled.
 - [ ] 5.12 **Rematch countdown sync (was "stuck"):** in the post-game lobby, have both players opt in and the host start the rematch countdown. Confirm the 5→0 countdown behaves the same on **both** devices — it should reach 0 and start the new game together, NOT sit stuck (e.g. never dropping below 2s) on one device while the other has already entered the game. Worth checking with a phone + a desktop specifically, since that's where the clock difference showed up.
+- [ ] 5.13 **Guest-opts-in-alone (bug report):** have ONLY the non-host player tap "Want a rematch?" — confirm the "N players want a rematch" counter goes up on **both** screens (not just the guest's own), and that once the host also opts in, the host's Start-rematch button enables. If this still doesn't work after re-uploading the latest files, it needs a fresh look — a dedicated test reproducing this exact scenario passes against the current code.
+
 
 ## 6. Cycling Road — Team Mode
 
@@ -130,6 +134,10 @@ so actually *read* the log lines here, not just the win/loss result.
 - [ ] 8.13 Watch **Tri Attack**'s secondary effect proc a few times across battles — confirm you see a mix of paralysis, burn, *and* freeze (not paralysis every single time).
 - [ ] 8.14 Watch **Charm** land — confirm the target's Attack visibly drops (it used to do nothing at all).
 - [ ] 8.15 Check **Charm**, **Sweet Kiss**, and **Moonlight**'s type in the Pokédex/movelist (e.g. via a "Reveal One Egg Move" or TM/HM clue that surfaces one of them) — confirm none of them show as "Fairy" anymore (Fairy didn't exist in Gen 1/2; Charm/Sweet Kiss are now Normal, Moonlight is now Dark).
+- [ ] 8.16 Watch a **sleep** (Spore/Sleep Powder/Sing/Rest/etc.) play out across several turns — confirm the sleeping Pokémon actually **misses at least one full turn** before waking (a real, fixed bug: it previously could wake up and act on the very same turn it fell asleep, showing "asleep" and then immediately attacking).
+- [ ] 8.17 Watch **Reflect** and, separately, **Light Screen** go up — confirm a physical move's damage roughly **halves** after Reflect (and stays the same after Light Screen), and a special move's damage halves after Light Screen (and stays the same after Reflect). These previously did nothing at all — same damage before and after.
+- [ ] 8.18 Watch **Double Team** or **Minimize** — confirm the user's foe starts **missing more often** afterward (evasion is now real). Watch **Sand-Attack** or **Smokescreen** — confirm the *target* starts missing more often. Neither used to have any effect.
+- [ ] 8.19 Watch a **Quick Attack** (or Mach Punch/Extreme Speed) user go **first** even against a faster opponent — confirm priority moves win the turn regardless of Speed. Watch **Agility** — confirm the user's Speed increase changes turn order **on every turn after that**, not just once. Watch **Icy Wind** — confirm it damages AND drops the target's Speed on the same hit.
 
 ## 9. Elite 4 Gauntlet
 
