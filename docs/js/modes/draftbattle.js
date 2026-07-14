@@ -1,8 +1,14 @@
 /**
  * @file        js/modes/draftbattle.js
- * @version     1.15.0
- * @updated     2026-07-09
+ * @version     1.15.1
+ * @updated     2026-07-12
  * @changelog
+ *   1.15.1 — Battle-log playback now narrates Reflect / Light Screen (and
+ *            their expiry), matching sim.js 2.3.0 adding those moves. Without
+ *            this the renderer's default:continue would silently drop them, so
+ *            a screen would halve damage correctly but show nothing on screen.
+ *            Also added accuracy/evasion to STAT_LABELS so sim.js 2.4.0's
+ *            accuracy/evasion stage changes narrate ("accuracy fell", etc.).
  *   1.15.0 — Three requested changes:
  *             \u2022 Narrowed the Elite-4 stat bands: Will 425-450 (unchanged),
  *               Koga 455-480 (was 475-500), Bruno 485-510 (was 525-550),
@@ -198,7 +204,7 @@ import {
   copyToClipboard, shareWhatsApp, draftBattleLink, dailyChallengeLink, stablePlayerFallbackName,
 } from '../lib/share.js';
 
-const STAT_LABELS = { hp: 'HP', atk: 'Atk', def: 'Def', spc: 'Spc', spa: 'SpA', spd: 'SpD', spe: 'Spe' };
+const STAT_LABELS = { hp: 'HP', atk: 'Atk', def: 'Def', spc: 'Spc', spa: 'SpA', spd: 'SpD', spe: 'Spe', acc: 'accuracy', eva: 'evasiveness' };
 const STATUS_LABELS = { par: 'paralyzed', brn: 'burned', psn: 'poisoned', tox: 'badly poisoned', slp: 'asleep', frz: 'frozen', leechseed: 'Leech Seed', curse: 'the curse' };
 const TIERS = [
   { key: 'day',   cadence: 'Day',      npc: 'Will',     icon: '\u2460', stage: 1, statBand: [425, 450] }, // ①
@@ -958,6 +964,10 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
         case 'rest': line = `${e.target} went to sleep and became healthy!`; break;
         case 'painsplit': line = `${e.source} and ${e.target} shared their pain \u2014 HP equalized.`; break;
         case 'leechseed': line = `${e.target} was seeded!`; break;
+        case 'reflect': line = `${e.target} raised Reflect \u2014 physical damage halved.`; break;
+        case 'lightscreen': line = `${e.target} raised Light Screen \u2014 special damage halved.`; break;
+        case 'reflect-end': line = `${e.target}\u2019s Reflect wore off.`; break;
+        case 'lightscreen-end': line = `${e.target}\u2019s Light Screen wore off.`; break;
         case 'crash': dmg(e.target, e.amount); line = `${e.target} kept going and crashed! (${e.amount})`; break;
         case 'fail': line = 'But it failed!'; break;
         case 'boost': {

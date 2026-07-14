@@ -1,8 +1,14 @@
 /**
  * @file        docs/js/modes/race.js
- * @version     2.4.0
+ * @version     2.4.1
  * @updated     2026-07-12
  * @changelog
+ *   2.4.1 — Grammar: the rematch counter read "1 player want a rematch"; now
+ *           "1 player wants a rematch" (plural "N players want" unchanged).
+ *           Confirmed via a new smoke test (the GUEST opting in alone) that
+ *           the counter itself works correctly on both screens and the host's
+ *           Start button enables — the reported "counter didn't move" is a
+ *           stale-upload symptom, not a logic bug in the current code.
  *   2.4.0 — Cross-device clock fix (individual AND team mode share the same
  *           cap-timer/rematch-countdown/tick code, so both are covered):
  *           every shared deadline stored in RTDB (gameStartedAt, room-wide
@@ -742,7 +748,7 @@ export function createRace({ mount, config, data, params = {}, onExit }) {
             el('div', { class: 'sp-start-row' },
               el('button', { class: 'btn-secondary' + (myPlayer.rematch ? ' active' : ''), onClick: toggleRematch },
                 myPlayer.rematch ? '\u2705 Rematch selected' : '\uD83D\uDD01 Want a rematch?'),
-              el('span', { class: 'sf-intro' }, `${rematchers.length} player${rematchers.length === 1 ? '' : 's'} want a rematch`)),
+              el('span', { class: 'sf-intro' }, `${rematchers.length} player${rematchers.length === 1 ? ' wants' : 's want'} a rematch`)),
             countdownActive
               ? el('div', { class: 'race-rematch-countdown' }, rematchCountdownText())
               : (isHost

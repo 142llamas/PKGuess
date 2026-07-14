@@ -1,8 +1,13 @@
 /**
  * @file        js/modes/victoryroad.js
- * @version     1.4.1
- * @updated     2026-07-09
+ * @version     1.5.0
+ * @updated     2026-07-12
  * @changelog
+ *   1.5.0 — Leaderboard submission now includes a time-per-catch metric
+ *           (average ms per successful guess; lower is better), surfaced in
+ *           the detail text and as the sortable metric on the leaderboard
+ *           screen. Total caught (score) remains the DEFAULT board sort; the
+ *           new metric is opt-in via a toggle on the leaderboard screen.
  *   1.4.1 — Minor, low-priority: the intro paragraph unnecessarily wrapped to
  *           2 lines on wide desktop screens (fine on mobile, the priority
  *           platform) because .sf-intro's shared max-width:640px is narrower
@@ -646,10 +651,15 @@ export function createVictoryRoad({ mount, config, data, params = {}, onExit }) 
     const avgMs = s.streak > 0 ? Math.round(totalMs / s.streak) : null;
     const tier = getTier(s.streak);
     const isPerfect = s.perfectLaps > 0;
-    // Submit to leaderboard
+    // Submit to leaderboard. Requested: include a time-per-successful-guess
+    // metric (average time to catch each mon; lower is better). Boards still
+    // rank by total caught (score) by DEFAULT, but the leaderboard screen
+    // offers a toggle to re-sort by this metric.
     submitScore(data.id || 'gen2', 'victoryroad', {
       score: s.streak,
-      detail: `time:${fmtTime(totalMs)} best:${s.bestPokeMs ? (s.bestPokeMs/1000).toFixed(1)+'s' : '-'} laps:${s.perfectLaps}`,
+      metric: avgMs != null ? avgMs : null,
+      metricLabel: 'avg time/catch',
+      detail: `${avgMs != null ? (avgMs / 1000).toFixed(1) + 's/catch \u00b7 ' : ''}time:${fmtTime(totalMs)} best:${s.bestPokeMs ? (s.bestPokeMs / 1000).toFixed(1) + 's' : '-'} laps:${s.perfectLaps}`,
     }).catch(() => {});
     const done = s; vr = null;
     clear(root).append(

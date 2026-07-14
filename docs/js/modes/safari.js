@@ -1,8 +1,11 @@
 /**
  * @file        js/modes/safari.js
- * @version     1.4.0
- * @updated     2026-07-11
+ * @version     1.5.0
+ * @updated     2026-07-12
  * @changelog
+ *   1.5.0 — Leaderboard submission now includes the catch-per-100-points
+ *           efficiency as a sortable metric (Safari boards rank by it), and
+ *           shows it in the detail text.
  *   1.4.0 — Two requested changes:
  *             \u2022 Post-game summary now lists every Caught and Ran From mon
  *               by name (sf.caughtNames/sf.ranNames, tracked alongside the
@@ -378,9 +381,16 @@ export function createSafari({ mount, config, data, params = {}, onExit }) {
     const done = sf; sf = null;
     const ptsUsed = done.startPts - round.pointsRemaining;
     const eff = done.startPts > 0 ? (done.caught / done.startPts * 100).toFixed(1) : '0';
-    // Submit to leaderboard
+    // Submit to leaderboard. Requested: include the catch-per-100-points
+    // efficiency as the sortable metric (Safari boards rank by it), and show
+    // it in the detail line too.
     const gen = data.id || 'gen2';
-    submitScore(gen, 'safari', { score: done.caught, detail: `budget:${done.startPts} spent:${ptsUsed}` }).catch(() => {});
+    submitScore(gen, 'safari', {
+      score: done.caught,
+      metric: done.startPts > 0 ? done.caught / done.startPts * 100 : 0,
+      metricLabel: 'catch/100pts',
+      detail: `${eff} per 100pts \u00b7 budget:${done.startPts} spent:${ptsUsed}`,
+    }).catch(() => {});
     const nameList = (names) => names.length
       ? el('div', { class: 'sf-mon-list' }, ...names.map((n) => el('span', { class: 'sf-mon-chip' }, n)))
       : el('p', { class: 'sf-intro' }, 'None.');
