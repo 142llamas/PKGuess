@@ -1,8 +1,20 @@
 /**
  * @file        js/modes/draftbattle.js
- * @version     1.15.9
+ * @version     1.16.0
  * @updated     2026-07-14
  * @changelog
+ *   1.16.0 — Bug fix: the Gauntlet Results screen's separate "Claim the Xth
+ *            spot" button was an unnecessary (and unclear) extra step — a
+ *            player who reached a spot but didn't think to click a second
+ *            button never actually got credit for it. Claiming the highest
+ *            spot reached is now automatic: it happens once, right when the
+ *            results are computed (before the results screen ever renders),
+ *            and its outcome (claimed / bumped someone / already held a
+ *            higher spot / save failed) is folded straight into the summary
+ *            line instead of a separate post-claim toast. The old primary
+ *            "Claim" button slot is now the "📤 Share" button. Re-rendering
+ *            the results screen after watching a replay reuses the same
+ *            claim result rather than claiming a second time.
  *   1.15.9 — Elite-4 Gauntlet Results page now has a "Draft Again" button
  *            (between "Elite 4 Status" and "Main Menu"), starting a fresh
  *            free-play draft with the same random seed + 3/3 rerolls as the
@@ -753,7 +765,7 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
     const thrones = TIERS.map((tier) => resolveThrone(tier, raw && raw[tier.key]));
     const challengerSpec = specFromResult(lastResult);
     // defer so the spinner paints before the (synchronous) sim burst
-    setTimeout(() => {
+    setTimeout(async () => {
       const rows = [];
       let highestIndex = -1;
       for (let i = 0; i < TIERS.length; i++) {
@@ -769,11 +781,50 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
         rows.push({ throne: t, champSpec, res, pb, beat });
         if (beat) highestIndex = i; else break;
       }
-      renderGauntletResults(rows, highestIndex, challengerSpec);
+      // Auto-claim (requested): the highest spot actually reached used to
+      // require an extra "Claim the Xth spot" button click, and a player who
+      // didn't click it (not realizing it was a separate, required step)
+      // simply never got credit for a run they'd already won. There's no
+      // real choice being offered by that button — reaching the spot IS the
+      // claim — so it now happens automatically, once, before the results
+      // screen ever renders. claimResult is threaded through to
+      // renderGauntletResults so its outcome (or failure) shows directly in
+      // the summary, and so returning from a "Watch" replay re-render reuses
+      // the same result instead of claiming a second time.
+      let claimResult = null;
+      if (highestIndex >= 0) {
+        const row = rows[highestIndex];
+        claimResult = await claimThrone(row.throne.tier, {
+          defeatedUid: row.throne.holderUid, defeatedMon: row.throne.mon, champLabel: row.throne.holderName,
+        });
+      }
+      renderGauntletResults(rows, highestIndex, challengerSpec, claimResult);
     }, 30);
   }
 
-  function renderGauntletResults(rows, highestIndex, challengerSpec) {
+  // Builds the one-line summary shown on the Gauntlet Results screen,
+  // including the auto-claim outcome (claimed / bumped someone / already held
+  // a higher spot / save failed) so nothing needs a separate button or toast
+  // to surface it.
+  function buildGauntletSummary(placementLabel, claimResult, fellToNpc) {
+    if (!placementLabel) return `You fell to ${fellToNpc}.`;
+    if (!claimResult) return `\uD83C\uDFC6 You took the ${placementLabel} spot on the Elite 4!`; // shouldn't happen, safe fallback
+    if (!claimResult.ok) {
+      return `\uD83C\uDFC6 You took the ${placementLabel} spot, but it couldn\u2019t be saved (${claimResult.msg || 'connection issue'}). Try challenging again.`;
+    }
+    if (claimResult.keptHigherTier) {
+      const keptLabel = TIERS.find((t) => t.key === claimResult.keptHigherTier)?.cardLabel || claimResult.keptHigherTier;
+      return `\uD83C\uDFC6 You took the ${placementLabel} spot \u2014 but you already hold a higher one (${keptLabel}), so that stays as-is. Great run!`;
+    }
+    if (claimResult.vacatedTier) {
+      const vacatedLabel = TIERS.find((t) => t.key === claimResult.vacatedTier)?.cardLabel || claimResult.vacatedTier;
+      const vacateMsg = claimResult.bumpedName ? `${claimResult.bumpedName} was bumped down to the ${vacatedLabel} spot.` : `The ${vacatedLabel} spot is now open for a fresh challenger.`;
+      return `\uD83D\uDC51 You claimed the ${placementLabel} spot! (${vacateMsg})`;
+    }
+    return `\uD83D\uDC51 You claimed the ${placementLabel} spot!`;
+  }
+
+  function renderGauntletResults(rows, highestIndex, challengerSpec, claimResult = null) {
     stopPlay();
     const reachedAny = highestIndex >= 0;
     const placementLabel = reachedAny ? ORDINALS[highestIndex] : null;
@@ -786,31 +837,10 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
         el('td', { style: { color: 'var(--text-dim)', fontSize: '11px' } }, oppLabel),
         el('td', { style: { fontWeight: 700, color: row.beat ? '#29cc66' : '#e06060' } }, row.beat ? `\u2705 Won (${pct}%)` : `\u274C Lost (${pct}%)`),
         el('td', {}, el('button', { class: 'btn-secondary', style: { padding: '5px 10px', fontSize: '11px' },
-          onClick: () => renderGauntletRow(row, challengerSpec, () => renderGauntletResults(rows, highestIndex, challengerSpec)) }, '\u25B6 Watch')));
+          onClick: () => renderGauntletRow(row, challengerSpec, () => renderGauntletResults(rows, highestIndex, challengerSpec, claimResult)) }, '\u25B6 Watch')));
     });
 
-    const summaryMsg = reachedAny
-      ? `\uD83C\uDFC6 You took the ${placementLabel} spot on the Elite 4!`
-      : `You fell to ${rows[0].throne.tier.npc}.`;
-
-    async function doClaim() {
-      const row = rows[highestIndex];
-      const r = await claimThrone(row.throne.tier, {
-        defeatedUid: row.throne.holderUid, defeatedMon: row.throne.mon, champLabel: row.throne.holderName,
-      });
-      if (r.ok && r.keptHigherTier) {
-        const keptLabel = TIERS.find((t) => t.key === r.keptHigherTier)?.cardLabel || r.keptHigherTier;
-        flash(`You already hold a higher Elite 4 spot (${keptLabel}) \u2014 great run, but that spot stays as-is.`);
-      } else if (r.ok && r.vacatedTier) {
-        const vacatedLabel = TIERS.find((t) => t.key === r.vacatedTier)?.cardLabel || r.vacatedTier;
-        const vacateMsg = r.bumpedName ? `${r.bumpedName} was bumped down to the ${vacatedLabel} spot.` : `The ${vacatedLabel} spot is now open for a fresh challenger.`;
-        flash(`\uD83D\uDC51 You took the ${placementLabel} spot! (${vacateMsg})`);
-      } else if (r.ok) {
-        flash(`\uD83D\uDC51 You took the ${placementLabel} spot!`);
-      } else {
-        flash(r.msg || 'Could not claim the spot.');
-      }
-    }
+    const summaryMsg = buildGauntletSummary(placementLabel, claimResult, rows[0] && rows[0].throne.tier.npc);
 
     clear(root).append(
       el('div', { class: 'summary-container' },
@@ -821,10 +851,8 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
               el('thead', {}, el('tr', {}, el('th', {}, 'Tier'), el('th', {}, 'Opponent'), el('th', {}, 'Result'), el('th', {}, ''))),
               el('tbody', {}, ...rowEls))),
           el('div', { class: 'summary-score', style: { textAlign: 'center', margin: '10px 0' } }, summaryMsg),
-          reachedAny ? el('div', { class: 'summary-actions', style: { marginBottom: '8px' } },
-            el('button', { class: 'btn-primary', onClick: doClaim }, `\uD83D\uDC51 Claim the ${placementLabel} spot`)) : null,
           el('div', { class: 'summary-actions' },
-            reachedAny ? el('button', { class: 'btn-secondary', onClick: shareGauntletResult(placementLabel) }, '\uD83D\uDCE4 Share') : null,
+            reachedAny ? el('button', { class: 'btn-primary', onClick: shareGauntletResult(placementLabel) }, '\uD83D\uDCE4 Share') : null,
             el('button', { class: 'btn-secondary', onClick: () => renderBuild(lastResult) }, '\u2190 My Build'),
             el('button', { class: 'btn-secondary', onClick: showThrones }, 'Elite 4 Status'),
             el('button', { class: 'btn-secondary', onClick: () => startDraft(((Math.random() * 2 ** 31) | 0), { pokemon: 3, moves: 3 }) }, '\uD83D\uDD01 Draft Again'),

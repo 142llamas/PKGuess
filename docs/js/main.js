@@ -1,8 +1,16 @@
 /**
  * @file        docs/js/main.js
- * @version     1.5.1
- * @updated     2026-07-12
+ * @version     1.6.0
+ * @updated     2026-07-14
  * @changelog
+ *   1.6.0 — Background music: imports the music manager (lib/music.js),
+ *           initializes it in init() and mounts a persistent 🔊/🔇 toggle
+ *           button (appended to <body>, not #app, so it survives every
+ *           mode-swap re-render), and calls music.setRoute(modeId) from
+ *           route() on every navigation so the track follows the current
+ *           screen (each game mode + main menu / pokedex / leaderboard).
+ *           Playback is gesture-gated and missing audio files fail silently,
+ *           so this is inert until the user drops mp3s into docs/audio/music/.
  *   1.5.1 — Removed the "Build skeleton v1.0.0" footer from the mode-select
  *           screen (a leftover from the initial app shell), along with its
  *           now-unused APP_VERSION constant and the orphaned .shell-footer
@@ -33,6 +41,7 @@
 
 import { el, mount, clear } from './lib/dom.js';
 import { MODES, getMode, resolveFactory } from './modes.js';
+import { music } from './lib/music.js';
 
 // Kick off anonymous auth in the background — never blocks the UI.
 // If it fails (offline), the app still works; scores just won't submit.
@@ -80,9 +89,28 @@ async function init() {
     document.body.appendChild(el('div', { id: 'app' }));
     appRoot = document.getElementById('app');
   }
+  music.init();
+  mountMusicToggle();
   CONFIG = await loadConfig();
   window.addEventListener('hashchange', route);
   route();
+}
+
+// Appended once, as a sibling of #app (not inside it) — so it persists across
+// every mode's mount()/screenShell() swap instead of being torn down on each
+// navigation. Mirrors .profile-pill-slot's top-right placement on the left.
+function mountMusicToggle() {
+  const icon = () => (music.isMuted() ? '🔇' : '🔊');
+  const btn = el('button', {
+    class: `music-toggle${music.isMuted() ? ' is-muted' : ''}`,
+    title: 'Toggle music',
+    onClick: () => {
+      const muted = music.toggleMute();
+      btn.className = `music-toggle${muted ? ' is-muted' : ''}`;
+      btn.textContent = icon();
+    },
+  }, icon());
+  document.body.appendChild(btn);
 }
 
 async function loadConfig() {
@@ -127,6 +155,7 @@ function navigate(hash) {
 async function route() {
   teardownActive();
   const { modeId, gen, view, query } = parseHash();
+  music.setRoute(modeId);
 
   if (!modeId) { renderMenu(); return; }
 

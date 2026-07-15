@@ -1,8 +1,13 @@
 /*
  * @file        docs/css/styles.css
- * @version     1.14.7
- * @updated     2026-07-12
+ * @version     1.14.8
+ * @updated     2026-07-14
  * @changelog
+*   1.14.8 — Added .music-toggle: a small fixed-position speaker button (top-
+*           left, mirroring .profile-pill-slot's top-right placement) that
+*           persists across every screen since it's appended to <body> as a
+*           sibling of #app rather than rendered inside any one mode's markup
+*           — see docs/js/lib/music.js.
 *   1.14.7 — Added .lb-sort-row (Victory Road leaderboard's Total-caught /
 *           Avg-time-per-catch sort toggle).
 *   1.14.6 — Removed the orphaned .shell-footer rule (its only user, the
@@ -1101,6 +1106,15 @@ h1,h2,h3{font-family:var(--font-pixel);}
 /* Profile pill (#16) — always-visible header control that opens the identity
    panel. Positioned top-right of the shell header. */
 .profile-pill-slot{ position:absolute; top:14px; right:14px; }
+.music-toggle{
+  position:fixed; top:14px; left:14px; z-index:50;
+  width:32px; height:32px; display:flex; align-items:center; justify-content:center;
+  font-size:15px; line-height:1; border-radius:100px; border:1px solid var(--border-card);
+  background:var(--bg-elevated); color:var(--text-secondary); cursor:pointer;
+  transition:var(--transition);
+}
+.music-toggle:hover{ border-color:var(--accent-gold-dim); color:var(--text-primary); }
+.music-toggle.is-muted{ opacity:0.5; }
 .profile-pill{
   font-family:var(--font-body); font-size:11px; font-weight:700;
   padding:6px 12px; border-radius:100px; border:1px solid var(--border-card);
