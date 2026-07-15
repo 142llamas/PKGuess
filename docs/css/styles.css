@@ -1,8 +1,12 @@
 /*
  * @file        docs/css/styles.css
- * @version     1.14.8
+ * @version     1.14.9
  * @updated     2026-07-14
  * @changelog
+*   1.14.9 — Added .poke-silhouette: the reveal/Pokédex silhouette image (96×96,
+*           object-fit:contain, centred). Deliberately applies NO filter — the
+*           source files are already silhouettes, unlike .draft-silhouette which
+*           blacks out full-colour art. See docs/js/lib/pokeinfo.js 1.1.0.
 *   1.14.8 — Added .music-toggle: a small fixed-position speaker button (top-
 *           left, mirroring .profile-pill-slot's top-right placement) that
 *           persists across every screen since it's appended to <body> as a
@@ -351,6 +355,11 @@ h1,h2,h3{font-family:var(--font-pixel);}
 .summary-card{background:var(--bg-card);border:1px solid var(--border-card);border-radius:var(--radius-lg);padding:18px;}
 .summary-card h3{font-family:var(--font-pixel);font-size:8px;color:var(--accent-gold);margin-bottom:12px;}
 .poke-name-big{font-family:var(--font-pixel);font-size:14px;color:#fff;margin-bottom:9px;}
+/* Reveal/Pokédex silhouette. The source files are ALREADY silhouettes, so unlike
+   .draft-silhouette (which blacks out full-colour art) this applies NO filter —
+   it just sizes and centres the supplied image. Hidden by its own inline onerror
+   when the file is missing, so the card has no gap until sprites are supplied. */
+.poke-silhouette{display:block;width:96px;height:96px;object-fit:contain;margin:0 auto 10px;image-rendering:pixelated;}
 .type-pills{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:9px;}
 .type-pill{padding:3px 11px;border-radius:100px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;}
 .stat-row{display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid var(--border-card);font-size:12px;}

@@ -1,8 +1,22 @@
 /**
  * @file        docs/js/lib/pokeinfo.js
- * @version     1.0.0
- * @updated     2026-06-26
+ * @version     1.1.0
+ * @updated     2026-07-14
  * @changelog
+ *   1.1.0 — The info card now shows the Pokémon's silhouette image, loaded
+ *           from ./img/silhouettes/<num>.png (National Dex number, matching
+ *           gen2.json's `num`). Because this builder is the single source of
+ *           truth for both the Pokédex detail view AND the guess-mode
+ *           post-game reveal card, adding the <img> here puts the silhouette
+ *           on exactly those two screens and nowhere else. The image files
+ *           are ALREADY silhouettes (pre-blacked-out shapes), so this renders
+ *           them as-is with the new `.poke-silhouette` class — it does NOT
+ *           apply the `.draft-silhouette` blackout filter, which exists to
+ *           convert full-colour art into a silhouette and would double-
+ *           process an already-silhouette file. A missing file hides itself
+ *           via an inline onerror (works because the card is injected via
+ *           innerHTML), so the card degrades gracefully with no broken-image
+ *           icon and no layout gap when a sprite hasn't been supplied yet.
  *   1.0.0 — Extracted the Pokédex detail card builder so the guess post-game
  *           screen can mirror it exactly (#13). One source of truth for the
  *           per-Pokémon info layout (info, type matchups, competitive sets,
@@ -53,6 +67,8 @@ export function pokemonInfoHTML(poke, movelist = {}) {
   }
 
   return '<div class="summary-grid"><div class="summary-card"><h3>Pok\u00e9mon Info</h3>'
+    + `<img class="poke-silhouette" src="./img/silhouettes/${encodeURIComponent(poke.num)}.png" alt="" `
+    + 'onerror="this.style.display=\'none\'">'
     + `<div class="poke-name-big">${escHtml(poke.name)}</div><div class="type-pills">${typePills}</div>`
     + '<div style="display:flex;flex-direction:column;gap:3px">'
     + `<div class="stat-row"><span class="label">Pok\u00e9dex #</span><span class="value">${escHtml(poke.num)}</span></div>`
@@ -71,4 +87,26 @@ export function pokemonInfoHTML(poke, movelist = {}) {
     + '<div class="info-subhead" style="margin-top:10px">Immunities</div><div>' + immuneT + '</div>'
     + '<h3 style="margin-top:16px">Competitive Movesets</h3><div class="comp-movesets">' + compH + '</div></div></div>'
     + `<div class="movelist-section"><button class="collapsible-toggle">\uD83D\uDCD6 Full Move List (${moves.length} moves) <span>\u25bc</span></button><div class="collapsible-body">${mlH}</div></div>`;
+}
+
+/**
+ * Post-injection wiring for a container whose innerHTML was set from
+ * pokemonInfoHTML(). Currently just the silhouette's missing-file fallback:
+ * the <img> also carries an inline onerror (which fires in real browsers), but
+ * wiring it here too means the graceful-hide works even where inline handlers
+ * are disabled (a strict CSP, or a test DOM like jsdom that doesn't execute
+ * inline handler attributes) and makes the behaviour unit-testable. Idempotent
+ * and null-safe — safe to call once after each render.
+ * @param {ParentNode} root the element the info HTML was injected into
+ */
+export function wirePokemonInfo(root) {
+  if (!root || typeof root.querySelector !== 'function') return;
+  const sil = root.querySelector('.poke-silhouette');
+  if (sil) {
+    const hide = () => { sil.style.display = 'none'; };
+    sil.addEventListener('error', hide);
+    // If it already failed before this handler attached (image errors can fire
+    // before JS runs), catch that: complete + zero natural size = broken/missing.
+    if (sil.complete && sil.naturalWidth === 0 && sil.getAttribute('src')) hide();
+  }
 }

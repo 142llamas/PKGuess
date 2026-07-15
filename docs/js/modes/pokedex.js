@@ -1,8 +1,13 @@
 /**
  * @file        js/modes/pokedex.js
- * @version     1.1.0
- * @updated     2026-06-24
+ * @version     1.2.0
+ * @updated     2026-07-14
  * @changelog
+ *   1.2.0 — Detail view now shows the Pokémon's silhouette (via the shared
+ *           pokemonInfoHTML in pokeinfo.js 1.1.0). Calls the new
+ *           wirePokemonInfo(root) after injecting the card so a missing
+ *           silhouette file hides gracefully even where inline handlers are
+ *           disabled. No other behaviour change.
  *   1.1.0 — Seen/Caught are now independent toggle filters whose union applies when both are active (#17), replacing the old exclusive All/Caught/Not-caught radio. Uses the shared lib/catch-tracker.js.
  *   1.0.0 — Pokédex / study reference, ported from the canonical study screen.
  *           Browse the full dex (search by name or number, sort #/A–Z), a catch
@@ -16,7 +21,7 @@
  */
 
 import { el, clear, statSpreadEl, genBar } from '../lib/dom.js';
-import { pokemonInfoHTML } from '../lib/pokeinfo.js';
+import { pokemonInfoHTML, wirePokemonInfo } from '../lib/pokeinfo.js';
 import { loadCatchMap, getCatchStatus, setCatchStatus } from '../lib/catch-tracker.js';
 
 const SOURCE_ORDER = ['Level-up', 'TM / HM', 'Egg Move', 'Move Tutor', 'RBY TM (import)'];
@@ -202,6 +207,7 @@ export function createPokedex({ mount, config, data, params, onExit }) {
     // Replace placeholder with actual statSpreadEl (since infoHTML uses innerHTML)
     const placeholder = root.querySelector('#poke-stat-spread-placeholder');
     if (placeholder && poke.fullStats) placeholder.replaceWith(statSpreadEl(poke.fullStats));
+    wirePokemonInfo(root); // silhouette missing-file fallback
 
     const toggle = root.querySelector('.collapsible-toggle');
     if (toggle) toggle.addEventListener('click', () => {

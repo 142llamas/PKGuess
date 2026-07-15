@@ -1,8 +1,13 @@
 /**
  * @file        js/modes/single.js
- * @version     1.2.3
- * @updated     2026-07-09
+ * @version     1.2.4
+ * @updated     2026-07-14
  * @changelog
+ *   1.2.4 — Post-game reveal card now shows the mystery Pokémon's silhouette
+ *           (via the shared pokemonInfoHTML in pokeinfo.js 1.1.0). Calls the
+ *           new wirePokemonInfo(root) after injecting the card so a missing
+ *           silhouette file hides gracefully even where inline handlers are
+ *           disabled. No other behaviour change.
  *   1.2.3 — Fixed: the in-game "Reveal Full Stat Spread" clue showed a bare
  *           "63/60/60/130/50/65" string with no HP/Atk/Def/... labels above
  *           each number — unlike the labeled version already used on the
@@ -35,7 +40,7 @@
 
 import { el, clear, genBar } from '../lib/dom.js';
 import { statSpreadEl } from '../lib/dom.js';
-import { pokemonInfoHTML } from '../lib/pokeinfo.js';
+import { pokemonInfoHTML, wirePokemonInfo } from '../lib/pokeinfo.js';
 import { markCaught, markSeen } from '../lib/catch-tracker.js';
 import { PokeGuessRound, normalizeName, poolFilterForData, matchesPool, computeScoreMultiplier } from '../lib/engine.js';
 import { submitScore } from '../lib/leaderboard-data.js';
@@ -624,6 +629,7 @@ export function createSingle({ mount, config, data, params = {}, onExit }) {
     // the info HTML leaves a placeholder for the rich stat spread + a collapsible
     const ph = root.querySelector('#poke-stat-spread-placeholder');
     if (ph && m.fullStats) ph.replaceWith(statSpreadEl(m.fullStats));
+    wirePokemonInfo(root); // silhouette missing-file fallback
     const toggle = root.querySelector('.collapsible-toggle');
     if (toggle) toggle.addEventListener('click', () => {
       toggle.classList.toggle('open');
