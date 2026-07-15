@@ -4,6 +4,28 @@ Status: ✅ done · 🔜 planned (phase noted) · ⏳ in progress
 
 ---
 
+## 2026-07-14 (silhouettes) — Pokémon silhouette images on the reveal + Pokédex screens
+
+Scope: docs/js/lib/pokeinfo.js (1.0.0→1.1.0), docs/css/styles.css (1.14.8→1.14.9), docs/js/modes/single.js (1.2.3→1.2.4), docs/js/modes/pokedex.js (1.1.0→1.2.0), tools/test/modes.smoke.mjs, docs/img/silhouettes/README.md (NEW), MANIFEST.md, CHANGE_TRACKER_v3.md.
+
+**What it does:** shows the Pokémon's silhouette image on the two screens that display a single Pokémon's full information — the **Single-Player post-game reveal card** and the **Pokédex detail view** — and nowhere else, exactly as requested.
+
+**Why just those two:** both screens render through one shared builder, `pokemonInfoHTML()` in lib/pokeinfo.js, so adding the `<img>` there (right below the "Pokémon Info" header, above the name) puts the silhouette on precisely those two surfaces with a single edit. The competitive/multiplayer end screens and the Draft Battle build screen don't use this builder, so they're untouched. (Draft Battle in particular shows a build the player assembled, not a mystery reveal, so a silhouette wouldn't fit there anyway.)
+
+**Files & naming:** `docs/img/silhouettes/<num>.png`, National Dex number as a plain integer (1.png … 251.png, no zero-padding), matching gen2.json's `num`. Documented in docs/img/silhouettes/README.md.
+
+**Rendered as-is, no filter:** the user's supplied files are ALREADY silhouettes (solid dark shapes — a deliberate choice, since the game is a live public site even though it's for friends). So the new `.poke-silhouette` CSS class just sizes/centres the image (96×96, object-fit:contain, pixelated scaling) and applies NO filter. This is intentionally different from the pre-existing `.draft-silhouette` class, whose `brightness(0) invert(.15)` filter exists to convert full-colour artwork into a silhouette — running that over an already-silhouette file would be wrong.
+
+**Graceful when files are missing:** the app is fully playable before any sprites are added, and works with a partially-filled folder. Each `<img>` carries an inline `onerror` that hides it (fires in real browsers), and — because a test DOM/strict CSP won't run inline handlers — a new exported helper `wirePokemonInfo(root)` re-attaches the same hide via addEventListener, called by both single.js and pokedex.js after they inject the card. So a missing file leaves no broken-image icon and no layout gap.
+
+**Note on the OTHER silhouette path:** the draft card's `.draft-silhouette` styling and the `silhouetteSpecies`/`silhouetteSpriteId` data remain UNWIRED (draft cards still render no image). That's a separate, still-dormant concept; this change is a complete, self-contained feature for the reveal + Pokédex screens only.
+
+**Tests:** modes.smoke.mjs now asserts, on both the Pokédex detail view and the Single-Player reveal card, that the `.poke-silhouette` `<img>` is present with the correct `./img/silhouettes/<num>.png` src (dex #1 on the deterministic Bulbasaur reveal), and that firing an `error` event hides it. Revert-checked: deleting the silhouette line from pokeinfo.js fails both "silhouette present" assertions. `npm test` 1111/1111 unchanged (this is UI/DOM, covered by the smoke suite); `npm run test:smoke` all green (modes.smoke 61→70 assertions).
+
+**Files changed (re-upload):** docs/js/lib/pokeinfo.js (1.1.0), docs/css/styles.css (1.14.9), docs/js/modes/single.js (1.2.4), docs/js/modes/pokedex.js (1.2.0), tools/test/modes.smoke.mjs, docs/img/silhouettes/README.md (NEW), MANIFEST.md, CHANGE_TRACKER_v3.md.
+
+---
+
 ## 2026-07-14 (background music) — per-screen music system + persistent mute toggle
 
 Scope (NEW files): docs/js/lib/music.js (1.0.0), docs/audio/music/README.md, tools/test/music.test.mjs (1.0.0). Changed: docs/js/main.js (1.5.1→1.6.0), docs/css/styles.css (1.14.7→1.14.8), tools/test/run.mjs, MANIFEST.md, CHANGE_TRACKER_v3.md.

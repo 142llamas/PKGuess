@@ -60,6 +60,17 @@ await run('pokedex', '../../docs/js/modes/pokedex.js', 'createPokedex', (m) => {
   // open first detail
   const row = m.querySelector('.study-row, [class*="study"][role], .study-list > *');
   if (row && row.click) { row.click(); }
+  // the detail view shows the shared info card, which now includes a silhouette
+  const sil = m.querySelector('.poke-silhouette');
+  ok(!!sil, 'pokedex detail: silhouette <img> is present in the info card');
+  if (sil) {
+    ok(/^\.\/img\/silhouettes\/\d+\.png$/.test(sil.getAttribute('src') || ''),
+      'pokedex detail: silhouette src is ./img/silhouettes/<num>.png');
+    // graceful missing-file fallback is wired (wirePokemonInfo) — firing an
+    // error event hides the img rather than leaving a broken-image icon.
+    sil.dispatchEvent(new window.Event('error'));
+    ok(sil.style.display === 'none', 'pokedex detail: a missing silhouette file hides itself (no broken image)');
+  }
 });
 
 // #17 — Seen/Caught combo filter: independent toggles whose union applies
@@ -190,6 +201,15 @@ await run('pokedex', '../../docs/js/modes/pokedex.js', 'createPokedex', (m) => {
   clickEl(mount.querySelector('.guess-btn'));
   await tick();
   ok(!!mount.querySelector('.summary-container'), 'single: correct first guess reaches the summary screen');
+  // The reveal card is the shared info card, so it now carries the silhouette.
+  const revealSil = mount.querySelector('.poke-silhouette');
+  ok(!!revealSil, 'single reveal: silhouette <img> is present on the post-game info card');
+  if (revealSil) {
+    ok(revealSil.getAttribute('src') === './img/silhouettes/1.png',
+      'single reveal: Bulbasaur\u2019s silhouette src is ./img/silhouettes/1.png (dex #1)');
+    revealSil.dispatchEvent(new window.Event('error'));
+    ok(revealSil.style.display === 'none', 'single reveal: a missing silhouette file hides itself');
+  }
   const scoreText = mount.querySelector('.summary-score')?.textContent || '';
   const expectedMult = 1.6 * 1.3 * 1.6 * 1.5; // Extreme-tier settings: Hard \u00d7 Forced \u00d7 Random \u00d7 Cycle-All
   const expectedFinal = Math.round(45 * expectedMult);
