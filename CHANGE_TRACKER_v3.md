@@ -4,6 +4,36 @@ Status: ✅ done · 🔜 planned (phase noted) · ⏳ in progress
 
 ---
 
+## 2026-07-15 (transition SFX turned off + no-overlap logic built for later) — fixes the reported overlap
+
+Scope: docs/js/lib/music.js (2.0.0→2.1.0), tools/test/music.test.mjs (2.0.0→2.1.0), docs/audio/sfx/README.md.
+
+**The report:** the transition sound was playing at the same time as the start of the new track — overlapping instead of one finishing before the other began.
+
+**The fix, per explicit request** — two things, together:
+
+1. **An easy on/off switch.** `TRANSITIONS_ENABLED`, a plain exported `const` near the top of music.js — currently `false`. With it off, `setRoute()` switches tracks the instant you navigate, with NO transition sound attempted at all — this is now the default, live behavior. `playGameStart()` (the separate "a round is starting" cue) is completely unaffected either way, since it was never part of the overlap complaint.
+
+2. **The overlap fix itself, built and ready for whenever `TRANSITIONS_ENABLED` gets flipped back to `true`.** When transitions are on, the new track no longer starts alongside the transition sound — it waits for the transition sound to genuinely finish first. This uses the sound's real `ended` event rather than a hardcoded number, so the wait automatically matches however long that specific sound actually is (a 400ms blip and a 2-second sting both just work correctly, no per-file tuning needed). Two safety nets so this can never make navigation feel broken: a 3-second ceiling (`SFX_TRANSITION_TIMEOUT_MS`) starts the track anyway if the transition sound is missing/broken and never actually ends, and a staleness guard so that if the player navigates a second time before the first transition sound finishes, the stale wait doesn't fire the wrong (older) track.
+
+**Tests:** music.test.mjs (2.1.0) pins `TRANSITIONS_ENABLED`'s current default (`false`) as a plain pure assertion. The deferred-start mechanics needed a DOM, so they were verified with standalone jsdom probes during development: (a) with transitions off, navigating plays only the new track, zero SFX attempts, confirming today's actual behavior; (b) with transitions flipped on for a probe instance, a genuine second navigation plays ONLY the transition sound first — the new track provably has not started — and only starts once the sfx element's `ended` event actually fires; (c) with `ended` deliberately never firing, waited the real ~3.4 seconds and confirmed the safety timeout starts the track anyway; (d) rapid double-navigation (safari, then immediately pokedex, before either transition sound ends) confirmed only the second (correct, current) track ever plays — the stale callback from the first navigation is a no-op. `npm test` 1139→1141, all green; `npm run test:smoke` unaffected.
+
+**Files changed (re-upload):** docs/js/lib/music.js (2.1.0), tools/test/music.test.mjs (2.1.0), docs/audio/sfx/README.md, MANIFEST.md, CHANGE_TRACKER_v3.md.
+
+---
+
+## 2026-07-15 (music button repositioned) — top-left → top-right, tucked below the profile pill
+
+Scope: docs/css/styles.css (1.14.9→1.14.10).
+
+Moved `.music-toggle` from `top:14px; left:14px` to `top:54px; right:14px`. Placed at `top:54px` (not `top:14px`) specifically so it sits just BELOW `.profile-pill-slot` (which occupies `top:14px; right:14px`) rather than directly on top of it — the pill is roughly 27-28px tall (11px font + 12px vertical padding + border), so a 54px offset clears it with a comfortable gap on every screen, regardless of how wide the pill itself renders (it has no fixed width, just `max-width:160px`). No JS changes; the button is still appended to `<body>` as a sibling of `#app` (main.js 1.6.0), so it still persists across every mode's re-render. `npm test` unaffected (pure CSS); `npm run test:smoke` unaffected.
+
+**Also this session — audio troubleshooting (no code/file issue found):** investigated a report of no music playing despite files reportedly being in the correct folders. Compared the user's uploaded zip against the canonical copy: `docs/js/lib/music.js` and `docs/js/main.js` were byte-identical, every mp3 filename matched exactly (case included) between `TRACK_FILES`/`SFX_FILES` in code and the actual files on disk, and every sampled mp3 was verified via magic-byte inspection to be a genuine, valid MPEG audio file (not a corrupted/mislabeled download). Nothing in the uploaded project explains silence — the likely cause is something on the live-deployment side (autoplay requires a real click/keydown gesture before any audio starts, which is by design; GitHub Pages deploy/CDN lag after a push; or something visible only via the browser's Network tab on the actual live URL, which wasn't available to check directly in this session).
+
+**Files changed (re-upload):** docs/css/styles.css (1.14.10), MANIFEST.md, CHANGE_TRACKER_v3.md.
+
+---
+
 ## 2026-07-14 (music v2) — every mode gets its own file + universal default fallback; game-start SFX; Daily Challenge/Online split off
 
 Scope: docs/js/lib/music.js (1.2.0→2.0.0), tools/test/music.test.mjs (1.2.0→2.0.0), docs/audio/music/README.md, docs/audio/sfx/README.md, docs/js/modes/single.js (1.2.4→1.2.5), docs/js/modes/safari.js (1.5.0→1.5.1), docs/js/modes/victoryroad.js (1.5.0→1.5.1), docs/js/modes/draftbattle.js (1.16.0→1.16.1), docs/js/modes/multiplayer.js (1.3.4→1.3.5), docs/js/modes/online.js (1.7.0→1.7.1), docs/js/modes/race.js (2.4.1→2.4.2), MANIFEST.md, CHANGE_TRACKER_v3.md.

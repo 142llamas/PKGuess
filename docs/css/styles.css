@@ -1,8 +1,12 @@
 /*
  * @file        docs/css/styles.css
- * @version     1.14.9
- * @updated     2026-07-14
+ * @version     1.14.10
+ * @updated     2026-07-15
  * @changelog
+*   1.14.10 — Moved .music-toggle from top-left to top-right (top:54px so it
+*           sits just below .profile-pill-slot instead of on top of it — the
+*           pill is top:14px/right:14px and roughly ~28px tall, so 54px clears
+*           it on every screen regardless of the pill's actual width).
 *   1.14.9 — Added .poke-silhouette: the reveal/Pokédex silhouette image (96×96,
 *           object-fit:contain, centred). Deliberately applies NO filter — the
 *           source files are already silhouettes, unlike .draft-silhouette which
@@ -1116,7 +1120,7 @@ h1,h2,h3{font-family:var(--font-pixel);}
    panel. Positioned top-right of the shell header. */
 .profile-pill-slot{ position:absolute; top:14px; right:14px; }
 .music-toggle{
-  position:fixed; top:14px; left:14px; z-index:50;
+  position:fixed; top:54px; right:14px; z-index:50;
   width:32px; height:32px; display:flex; align-items:center; justify-content:center;
   font-size:15px; line-height:1; border-radius:100px; border:1px solid var(--border-card);
   background:var(--bg-elevated); color:var(--text-secondary); cursor:pointer;

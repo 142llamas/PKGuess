@@ -2,27 +2,47 @@
 
 Two kinds of short one-shot sound live here:
 
-1. **Transition sounds** — play *over* the music crossfade when you move
-   between screens, so the music change isn't a jarring cut.
+1. **Transition sounds** — bridge a music change when you move between
+   screens.
 2. **The game-start sound** — plays when a round actually *begins* (clicking
    "Start game" / "Enter the Safari Zone" / etc. inside a mode), layered over
    whatever music is already playing. Opening a mode's menu does **not**
    trigger this — only actually starting play does, so it doesn't double up
    with the transition sound you just heard arriving at the menu.
 
-The app works fine with any or all of these missing — a missing file just
-means no sound for that moment, never an error, and (for the two grouped
+**Transition sounds are currently turned OFF** (see below) — music switches
+tracks instantly with no bridging sound at all, which is how the game plays
+right now regardless of whether these files exist. The game-start sound is
+unaffected by this and always plays normally.
+
+The app works fine with any or all of these files missing — a missing file
+just means no sound for that moment, never an error, and (for the two grouped
 transition sounds below) missing ones fall back sensibly instead of going
 silent. Drop `.mp3` files here.
 
+## Turning transition sounds on/off
+
+Open `docs/js/lib/music.js` and find this line near the top:
+
+```js
+export const TRANSITIONS_ENABLED = false;
+```
+
+Change `false` to `true` to turn transition sounds back on. When they're on,
+the new track waits for the transition sound to actually finish playing
+before it starts — it uses that sound's real length, not a guess, so a 2-
+second sound and a 500ms sound both work correctly with no overlap. If a
+transition sound is missing or broken, the new track still starts after a
+short safety delay rather than navigation hanging.
+
 ## Filenames (exact)
 
-| File               | Plays when…                                                        |
+| File               | Plays when… (once transitions are turned back on)                 |
 |--------------------|--------------------------------------------------------------------|
 | `enter-guess.mp3`  | Entering a guess mode: Single Player, Safari Zone, Victory Road, Hotseat, or Online multiplayer |
 | `to-menu.mp3`      | Returning to the main menu from anywhere                           |
 | `transition.mp3`   | Every OTHER track change: Draft Battle, Daily Challenge, Cycling Road, Pokédex, Leaderboard, and any future mode with no specific sound — **also the fallback if `enter-guess.mp3` or `to-menu.mp3` is missing** |
-| `game-start.mp3`   | A round/battle/draft actually starting (see the mode-by-mode list below) |
+| `game-start.mp3`   | A round/battle/draft actually starting (see the mode-by-mode list below) — **plays regardless of the transitions toggle above** |
 
 **If `enter-guess.mp3` or `to-menu.mp3` isn't there yet**, that navigation
 automatically uses `transition.mp3` instead of playing nothing — so the site

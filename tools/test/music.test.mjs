@@ -1,19 +1,21 @@
 /**
  * @file tools/test/music.test.mjs
- * @version 2.0.0
+ * @version 2.1.0
  * Covers the pure/directly-testable pieces of the background-music system
- * (music.js 2.0.0): trackKeyForRoute(), transitionSfxForRoute(), the
+ * (music.js 2.1.0): trackKeyForRoute(), transitionSfxForRoute(), the
  * TRACK_FILES/SFX_FILES completeness (every registered mode has its OWN file,
- * no more forced sharing), and loadWithFallback() — the runtime fallback
- * mechanism that swaps a failed <audio> src to a default and retries once.
- * The MusicManager itself (gesture-gating, crossfade timing, playGameStart())
- * needs a DOM and isn't exercised here — it was verified via standalone
- * jsdom lifecycle probes during development.
+ * no more forced sharing), loadWithFallback() — the runtime fallback
+ * mechanism that swaps a failed <audio> src to a default and retries once —
+ * and TRANSITIONS_ENABLED, the on/off switch for transition SFX (2.1.0).
+ * The MusicManager itself (gesture-gating, crossfade timing, playGameStart(),
+ * and — new in 2.1.0 — the deferred-track-start behavior when transitions ARE
+ * enabled) needs a DOM and isn't exercised here; it was verified via
+ * standalone jsdom lifecycle probes during development.
  */
 import {
   trackKeyForRoute, TRACK_FILES, DEFAULT_TRACK_FILE,
   transitionSfxForRoute, TRANSITION_SFX_BY_DEST, SFX_FILES,
-  loadWithFallback,
+  loadWithFallback, TRANSITIONS_ENABLED,
 } from '../../docs/js/lib/music.js';
 import { MODES } from '../../docs/js/modes.js';
 
@@ -138,5 +140,18 @@ export default function (t) {
     loadWithFallback(el, 'b.mp3', 'default.mp3');
     loadWithFallback(el, 'c.mp3', 'default.mp3');
     t.eq((el._listeners.error || []).length, 1, 'repeated calls on one element leave exactly ONE error listener, not one per call');
+  }
+
+  t.section('music.js — TRANSITIONS_ENABLED (2.1.0)');
+  {
+    // Pins the current default: transition SFX are OFF, per explicit request
+    // (they were overlapping the track they preceded). Flip this one exported
+    // const back to `true` in music.js to re-enable them — the deferred-start
+    // behavior that makes that safe to do (waiting for the real 'ended' event
+    // before starting the new track, so they never overlap) is already built
+    // and was verified via standalone jsdom probes during development; it just
+    // isn't reachable from this pure suite since it needs a DOM/MusicManager.
+    t.eq(TRANSITIONS_ENABLED, false, 'transition SFX are OFF by default — tracks switch instantly with no bridging sound');
+    t.eq(typeof TRANSITIONS_ENABLED, 'boolean', 'TRANSITIONS_ENABLED is a plain boolean, easy to flip in the file');
   }
 }

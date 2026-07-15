@@ -1,8 +1,23 @@
 /**
  * @file        docs/js/lib/music.js
- * @version     2.0.0
- * @updated     2026-07-14
+ * @version     2.1.0
+ * @updated     2026-07-15
  * @changelog
+ *   2.1.0 — Transition SFX no longer overlap the track they precede.
+ *           `TRANSITIONS_ENABLED` (a plain exported const, edit this file to
+ *           flip it) now gates the transition sound entirely: OFF (the new
+ *           default, per request) skips the transition sound completely and
+ *           switches tracks immediately, exactly like before transition SFX
+ *           ever existed. ON defers the new track until the transition sound
+ *           actually finishes playing — via the real `ended` event on the SFX
+ *           element, so the wait matches that specific sound's real length
+ *           rather than a guessed/hardcoded number — with a safety timeout
+ *           (`SFX_TRANSITION_TIMEOUT_MS`, 3s) so a missing/broken SFX file
+ *           can never hang navigation. A staleness guard skips starting the
+ *           deferred track if the player has already navigated somewhere else
+ *           again while the transition sound was still playing. None of this
+ *           touches `playGameStart()` — the game-start cue is a separate,
+ *           always-on, non-track-changing overlay regardless of this toggle.
  *   2.0.0 — Reworked around a more robust "every slot has a default" model,
  *           per user request:
  *           (a) MUSIC: every registered game mode now gets its OWN dedicated
@@ -104,6 +119,16 @@ export const TRACK_FILES = {
 // default) whenever that key's own file fails to load.
 export const DEFAULT_TRACK_FILE = './audio/music/default.mp3';
 
+// ---- transition-sound on/off switch -----------------------------------------
+// Edit this one line to turn transition SFX back on. OFF (current default):
+// setRoute() switches tracks immediately with no bridging sound at all — same
+// as if transition SFX never existed. ON: the transition sound plays to its
+// own real, variable length BEFORE the new track starts (see
+// _playSfxThen/SFX_TRANSITION_TIMEOUT_MS below) so the two never overlap.
+// playGameStart() is unaffected either way — it's a separate overlay cue, not
+// a track change.
+export const TRANSITIONS_ENABLED = false;
+
 // ---- transition sound effects (unit-tested) --------------------------------
 // A short one-shot SFX played over the music crossfade so a track change is
 // NEVER a jarring cut. Keyed by DESTINATION. Every navigation gets a
@@ -140,6 +165,11 @@ const VOLUME = 0.5;          // base music volume once faded in
 const SFX_VOLUME = 0.6;      // transition/one-shot SFX volume (a touch louder to cut through)
 const FADE_MS = 900;         // crossfade duration
 const FADE_STEPS = 18;
+// Safety ceiling for the deferred-track wait when TRANSITIONS_ENABLED is true:
+// if the transition SFX's 'ended' event never fires (missing/broken file, or
+// something unexpected), the new track starts anyway after this long rather
+// than navigation hanging silently forever.
+const SFX_TRANSITION_TIMEOUT_MS = 3000;
 
 function loadMutePref() {
   try { return localStorage.getItem(MUTE_KEY) === '1'; } catch { return false; }
@@ -200,6 +230,11 @@ class MusicManager {
     this._activeIdx = 0;
     this._fadeTimer = null;
     this._sfx = null;            // dedicated one-shot element for transition/game-start SFX
+    this._pendingSfxCleanup = null; // cleans up a still-waiting _playSfxThen() call, if any
+    // Captured as an instance field (rather than reading the module const
+    // directly everywhere) so a test/probe can flip this one instance's
+    // behavior without fighting `const` export semantics.
+    this._transitionsEnabled = TRANSITIONS_ENABLED;
     this._onToggle = new Set();  // listeners for mute-state changes (UI button)
   }
 
@@ -240,11 +275,20 @@ class MusicManager {
     if (key === this._currentKey) return; // already on the right track — no change, no SFX
     const prevKey = this._currentKey;
     this._currentKey = key;
-    if (this._unlocked && !this._muted) {
-      // Bridge the music change with a transition SFX — but only when a track
-      // was already playing (prevKey non-null), so the very first track after
-      // load starts cleanly with no transition sound.
-      if (prevKey !== null) this._playSfx(transitionSfxForRoute(modeId));
+    if (!this._unlocked || this._muted) return;
+    // Bridge the music change with a transition SFX — but only when a track
+    // was already playing (prevKey non-null), so the very first track after
+    // load starts cleanly with no transition sound, AND only when transitions
+    // are actually turned on.
+    if (prevKey !== null && this._transitionsEnabled) {
+      this._playSfxThen(transitionSfxForRoute(modeId), () => {
+        // If the player has already navigated somewhere else again while the
+        // transition sound was still playing, this callback is stale — the
+        // newer setRoute() call already started (or will start) the right
+        // track, so don't step on it.
+        if (this._currentKey === key) this._playCurrent();
+      });
+    } else {
       this._playCurrent();
     }
   }
@@ -286,6 +330,46 @@ class MusicManager {
       this._sfx.currentTime = 0;
       loadWithFallback(this._sfx, primary, fallback);
     } catch { /* stay silent */ }
+  }
+
+  /**
+   * Play a transition SFX to completion, then invoke `callback` — used only
+   * when TRANSITIONS_ENABLED so the new track never overlaps the sound
+   * announcing it. Waits for the real `ended` event (so the delay matches
+   * that specific sound's actual length, not a guess), with a fixed safety
+   * timeout in case the SFX can't play at all (missing file, autoplay
+   * blocked, etc.) so navigation can never hang silently forever.
+   */
+  _playSfxThen(sfxKey, callback) {
+    if (!this._sfx) { callback(); return; }
+    // If a PRIOR call is still waiting (rapid back-to-back navigation before
+    // the first transition sound finished), clean it up first so listeners
+    // never pile up on the shared element — its own staleness guard in
+    // setRoute() already makes this safe either way, but this keeps the
+    // element's listener count bounded to at most one pending wait at a time.
+    if (this._pendingSfxCleanup) { this._pendingSfxCleanup(); this._pendingSfxCleanup = null; }
+    const primary = SFX_FILES[sfxKey] || SFX_FILES.generic;
+    const fallback = primary === SFX_FILES.generic ? null : SFX_FILES.generic;
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(safetyTimer);
+      this._sfx.removeEventListener('ended', onEnded);
+      if (this._pendingSfxCleanup === cleanup) this._pendingSfxCleanup = null;
+      callback();
+    };
+    const onEnded = () => finish();
+    const cleanup = () => { clearTimeout(safetyTimer); this._sfx.removeEventListener('ended', onEnded); };
+    this._pendingSfxCleanup = cleanup;
+    this._sfx.addEventListener('ended', onEnded, { once: true });
+    const safetyTimer = setTimeout(finish, SFX_TRANSITION_TIMEOUT_MS);
+    try {
+      this._sfx.currentTime = 0;
+      loadWithFallback(this._sfx, primary, fallback);
+    } catch {
+      finish();
+    }
   }
 
   _playCurrent() {
