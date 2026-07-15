@@ -4,6 +4,76 @@ Status: ✅ done · 🔜 planned (phase noted) · ⏳ in progress
 
 ---
 
+## 2026-07-14 (music v2) — every mode gets its own file + universal default fallback; game-start SFX; Daily Challenge/Online split off
+
+Scope: docs/js/lib/music.js (1.2.0→2.0.0), tools/test/music.test.mjs (1.2.0→2.0.0), docs/audio/music/README.md, docs/audio/sfx/README.md, docs/js/modes/single.js (1.2.4→1.2.5), docs/js/modes/safari.js (1.5.0→1.5.1), docs/js/modes/victoryroad.js (1.5.0→1.5.1), docs/js/modes/draftbattle.js (1.16.0→1.16.1), docs/js/modes/multiplayer.js (1.3.4→1.3.5), docs/js/modes/online.js (1.7.0→1.7.1), docs/js/modes/race.js (2.4.1→2.4.2), MANIFEST.md, CHANGE_TRACKER_v3.md.
+
+Per explicit user request, a ground-up rework of the music/SFX system around "every slot has a default" — plus a genuinely new feature (a game-start SFX) and an explicit ask (split Daily Challenge's music from Draft Battle's).
+
+**(1) Every mode gets its own dedicated music file — no more forced sharing.** `trackKeyForRoute(modeId)` is now a plain identity function (`modeId || 'menu'`) instead of a lookup table — Hotseat/Online and Draft-Battle/Daily-Challenge, which used to share a file each, now each have their own (`online.mp3`, `daily-challenge.mp3`). This directly satisfies the separate ask for distinct Daily Challenge vs. Draft Battle music, and generalizes it so nothing shares by accident anymore — two modes only sound the same if you deliberately give them identical audio content.
+
+**(2) A real runtime fallback, not just a lookup default.** New exported `loadWithFallback(el, primarySrc, fallbackSrc)`: sets the primary source and plays it; if the browser fires a real `error` event (404, bad format, whatever), it swaps to the fallback and tries once more; if the fallback ALSO fails, stays silent (no infinite retry). This is used for BOTH music (every mode's file falls back to one new `default.mp3` if missing) and transition SFX (`enterGuess`/`toMenu` fall back to `generic` if their own file is missing — `generic` was already the universal floor). Critically, this covers TWO different "empty" cases identically: a file that's in the code's map but 404s on disk, AND a mode that isn't in the map at all yet (a new mode added to modes.js in the future with zero music.js changes) — both land on `default.mp3` with no crash and no silence.
+
+**(3) New: a game-start sound effect.** `music.playGameStart()` — fully independent of `setRoute()`/the crossfade — plays a one-shot SFX layered over whatever music is already playing, without touching the track at all. Wired into the actual "start" action (not just opening a mode's menu) in all 7 modes that have one:
+- Draft Battle / Daily Challenge / Draft Again — one call site in `startDraft()`, since `startDaily()` and the Draft Again button both call it.
+- Single Player — "Start game".
+- Safari Zone — "Enter the Safari Zone".
+- Victory Road — "Enter Victory Road".
+- Hotseat — "Start Multiplayer".
+- Online — the leader's "Start game" for round 1 (other connected players don't click Start themselves, so they don't get this specific cue, though they do get the transition sound on arriving at Online).
+- Cycling Road — "Start" (both the teams and no-teams lobby branch).
+
+Pokédex and Leaderboard have no "round" concept, so they don't call this. `SFX_FILES.gameStart` → `./audio/sfx/game-start.mp3`, falling back to `transition.mp3` if not yet supplied (same one-hop fallback mechanism as everything else).
+
+**Tests:** music.test.mjs (2.0.0) rewrote the suite around the new API — confirms every mode resolves to its own key (explicitly checking Draft Battle ≠ Daily Challenge and Hotseat ≠ Online), confirms no two modes' file paths collide, confirms `DEFAULT_TRACK_FILE` is distinct from every mode's own path, and adds a dedicated section testing `loadWithFallback()` in total isolation against a hand-written fake `<audio>`-like stub (primary succeeds / primary fails once / both fail with no runaway loop / no fallback offered attaches no listener / repeated calls never stack listeners). Independently re-verified (beyond the existing suite) against a REAL jsdom `<audio>` element for the same fallback mechanism, a full `setRoute()` → simulated-404 → falls back to `default.mp3` lifecycle probe, an unmapped future mode id going straight to `default.mp3`, and a `playGameStart()` probe confirming it plays only the game-start sound and leaves the currently-playing track's key untouched. Revert-checked: disabling the fallback-listener branch fails all 4 `loadWithFallback` assertions; reverting Daily Challenge to share Draft Battle's file fails the "no shared paths" assertion. `npm test` 1140→1139 (net change from a full test-suite rewrite, not a regression — verified via revert-checks above); `npm run test:smoke` unaffected.
+
+**Files changed (re-upload):** docs/js/lib/music.js (2.0.0), tools/test/music.test.mjs (2.0.0), docs/audio/music/README.md, docs/audio/sfx/README.md, docs/js/modes/single.js (1.2.5), docs/js/modes/safari.js (1.5.1), docs/js/modes/victoryroad.js (1.5.1), docs/js/modes/draftbattle.js (1.16.1), docs/js/modes/multiplayer.js (1.3.5), docs/js/modes/online.js (1.7.1), docs/js/modes/race.js (2.4.2), MANIFEST.md, CHANGE_TRACKER_v3.md.
+
+---
+
+## 2026-07-14 (music polish, part 2) — every navigation gets a transition sound; Online added to enterGuess
+
+Scope: docs/js/lib/music.js (1.1.0→1.2.0), tools/test/music.test.mjs (1.1.0→1.2.0), docs/audio/sfx/README.md, MANIFEST.md, CHANGE_TRACKER_v3.md.
+
+Follow-up to the "music polish" batch below, per explicit user clarification: the earlier version left several destinations (Draft Battle, Daily Challenge, Cycling Road, Pokédex, Leaderboard) with NO transition sound at all — silent-by-omission. The user confirmed that was wrong: **every** track change should be bridged by some transition sound, not just the ones with a specific one assigned.
+
+**(1) Generic fallback.** `transitionSfxForRoute()` no longer returns `null`. Every destination not explicitly listed in `TRANSITION_SFX_BY_DEST` (Draft Battle, Daily Challenge, Cycling Road, Pokédex, Leaderboard, and any future mode added later with no entry) now falls back to one shared `'generic'` transition sound (`./audio/sfx/transition.mp3`, `DEFAULT_TRANSITION_SFX` in code) instead of playing nothing.
+
+**(2) Online added to the enterGuess group.** Per the user's explicit go-ahead, `online: 'enterGuess'` was added to `TRANSITION_SFX_BY_DEST` — Online multiplayer now plays the same "start guessing" sound as Single Player / Safari / Victory Road / Hotseat.
+
+**Net effect:** `TRANSITION_SFX_BY_DEST` = `{ single, safari, victoryroad, multiplayer, online } → 'enterGuess'`; `null` (main menu) → `'toMenu'`; everything else → `'generic'`. No destination is ever silent by omission.
+
+**New SFX file:** `docs/audio/sfx/transition.mp3` — documented in the sfx README alongside the two existing sounds.
+
+**Tests:** music.test.mjs (1.2.0) replaces the old "destinations with no transition sound" section with one asserting draftbattle/dailychallenge/race/pokedex/leaderboard/unknown-id all resolve to `'generic'`, adds `online → 'enterGuess'`, and adds a sweep asserting `transitionSfxForRoute(m.id)` is non-null for every real mode in modes.js (so a newly-added mode without an explicit entry is still caught getting a sound, not silence). Revert-checked: removing the generic fallback (reverting to `|| null`) fails 10 assertions across the new section and the completeness sweep. `npm test` 1128→1140, all green; `npm run test:smoke` unaffected (this is pure-logic only, no DOM/audio-manager change beyond calling the same function).
+
+**Files changed (re-upload):** docs/js/lib/music.js (1.2.0), tools/test/music.test.mjs (1.2.0), docs/audio/sfx/README.md, MANIFEST.md, CHANGE_TRACKER_v3.md.
+
+---
+
+## 2026-07-14 (music polish) — Cycling Road its own track + transition sound effects
+
+Scope: docs/js/lib/music.js (1.0.0→1.1.0), tools/test/music.test.mjs (1.0.0→1.1.0), docs/audio/sfx/README.md (NEW), docs/audio/music/README.md, MANIFEST.md, CHANGE_TRACKER_v3.md. No change to main.js — it already calls music.setRoute() on every navigation, and all the new behaviour lives inside the manager.
+
+**(1) Cycling Road gets its own music.** The `race` mode previously shared the multiplayer track; it now has its own key `race` → `./audio/music/cycling-road.mp3`. Hotseat + Online still share `multiplayer`.
+
+**(2) Transition sound effects between tracks.** So a music change isn't a jarring cut, a short one-shot SFX now plays *over* the crossfade when the track changes. Two transitions are wired, keyed by destination via the new pure, unit-tested `transitionSfxForRoute(modeId)`:
+- **Entering a guess mode** — Single Player, Safari Zone, Victory Road, or Hotseat multiplayer — plays `enterGuess` (`./audio/sfx/enter-guess.mp3`).
+- **Returning to the main menu** (from anywhere) plays `toMenu` (`./audio/sfx/to-menu.mp3`).
+- Every other destination (Draft Battle, Daily Challenge, Online, Cycling Road, Pokédex, Leaderboard) just crossfades with no transition sound. Adding one later is a two-line edit in music.js.
+
+**Behaviour details:** the SFX uses a dedicated one-shot `<audio>` element (not looped), plays at a slightly higher volume (0.6) so it cuts through the fading music, and fires *only on an actual track change* — never on the first track after page load, and never when navigating between two screens that share a track. It obeys the same mute toggle and first-gesture autoplay gating as the music, and a missing SFX file is skipped silently (the crossfade still happens).
+
+**Note on Online:** the user's "entering guess mode" list was Single Player, Safari, Victory Road, and Hotseat — Online multiplayer wasn't named, so it currently gets no transition sound. It's functionally a guess mode too, so if that was an oversight it's a one-line add (`online: 'enterGuess'` in TRANSITION_SFX_BY_DEST).
+
+**Licensing note (from the same conversation):** the audio files themselves should be original or royalty-free/Creative-Commons, NOT clips ripped from the official Gen 1/2 games — those are copyrighted (even short SFX), and this is a publicly reachable site. Documented in both audio READMEs.
+
+**Tests:** music.test.mjs (1.1.0) adds the Cycling-Road-own-track assertions and a full `transitionSfxForRoute()` section (enter-guess modes, to-menu, the no-sound destinations, unknown-id → null), plus a completeness sweep that every transition SFX key resolves to a file. Revert-checked: reverting race to share 'multiplayer', or emptying the transition map, each fails the relevant assertions. `npm test` 1111→1128, all green; `npm run test:smoke` still green. The DOM/audio playback path was verified with a standalone jsdom probe (pre-gesture silence → first track has no SFX → enterGuess on entering guess modes → toMenu on returning → Cycling Road plays its own track with no SFX → muted navigation fully silent).
+
+**Files changed (re-upload):** docs/js/lib/music.js (1.1.0), tools/test/music.test.mjs (1.1.0), docs/audio/sfx/README.md (NEW), docs/audio/music/README.md, MANIFEST.md, CHANGE_TRACKER_v3.md.
+
+---
+
 ## 2026-07-14 (silhouettes) — Pokémon silhouette images on the reveal + Pokédex screens
 
 Scope: docs/js/lib/pokeinfo.js (1.0.0→1.1.0), docs/css/styles.css (1.14.8→1.14.9), docs/js/modes/single.js (1.2.3→1.2.4), docs/js/modes/pokedex.js (1.1.0→1.2.0), tools/test/modes.smoke.mjs, docs/img/silhouettes/README.md (NEW), MANIFEST.md, CHANGE_TRACKER_v3.md.
