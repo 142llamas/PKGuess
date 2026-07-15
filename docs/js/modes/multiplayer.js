@@ -1,8 +1,12 @@
 /**
  * @file        js/modes/multiplayer.js
- * @version     1.3.4
- * @updated     2026-07-11
+ * @version     1.3.5
+ * @updated     2026-07-14
  * @changelog
+ *   1.3.5 — Plays the new "game start" SFX (music.js 2.0.0's
+ *           `music.playGameStart()`) when "Start Multiplayer" is actually
+ *           clicked (startGame()) — layered over whatever music is already
+ *           playing, not a track change.
  *   1.3.4 — Fixed a real bug report: doGuess() never validated the guess
  *           against the actual Pokemon name list, unlike single.js/safari.js
  *           (which already had this check). Any text was accepted as a
@@ -47,6 +51,7 @@
  */
 
 import { el, clear, statSpreadEl } from '../lib/dom.js';
+import { music } from '../lib/music.js';
 import { PokeGuessRound, normalizeName, poolFilterForData, matchesPool } from '../lib/engine.js';
 import { markCaught, markSeen } from '../lib/catch-tracker.js';
 import { computeAutoDeducedIds } from '../lib/mp-rules.js';
@@ -222,6 +227,7 @@ export function createMultiplayer({ mount, config, data, params = {}, onExit }) 
 
   // ===== GAME STATE =========================================================
   function startGame() {
+    music.playGameStart(); // "Start Multiplayer" was actually clicked
     const names = setup.playerNames.slice(0, setup.playerCount).map((n, i) => (n && n.trim()) || `Player ${i + 1}`);
     const players = names.map((name, i) => ({
       id: i, name, color: PLAYER_COLORS[i],

@@ -1,8 +1,12 @@
 /**
  * @file        docs/js/modes/race.js
- * @version     2.4.1
- * @updated     2026-07-12
+ * @version     2.4.2
+ * @updated     2026-07-14
  * @changelog
+ *   2.4.2 — Plays the new "game start" SFX (music.js 2.0.0's
+ *           `music.playGameStart()`) when "Start" is actually clicked
+ *           (startGame(), both the teams and no-teams branch) — layered over
+ *           whatever music is already playing, not a track change.
  *   2.4.1 — Grammar: the rematch counter read "1 player want a rematch"; now
  *           "1 player wants a rematch" (plural "N players want" unchanged).
  *           Confirmed via a new smoke test (the GUEST opting in alone) that
@@ -128,6 +132,7 @@
  */
 
 import { el, clear, shareSheetEl } from '../lib/dom.js';
+import { music } from '../lib/music.js';
 import { normalizeName } from '../lib/engine.js';
 import { makeRoomCode, seedFor, buildRevealSequence, makeRng, leaderUid as sharedLeaderUid, makeServerNow } from '../lib/mp-rules.js';
 import { roomJoinLink, buildRoomInviteText, copyToClipboard, shareWhatsApp } from '../lib/share.js';
@@ -505,6 +510,7 @@ export function createRace({ mount, config, data, params = {}, onExit }) {
   }
 
   async function startGame() {
+    music.playGameStart(); // "Start" was actually clicked (either the teams or no-teams branch)
     mySolved = 0; mySplits = []; boardMysteryIdx = -1; order = null; lastKnownSolved = {}; toastSeenOnce = false; waitingScreenShown = false;
     teamRevealSeq = null; teamRevealIdx = 0; teamBoardKey = null; lastKnownTeamSolved = {}; teamToastSeenOnce = false;
     try {

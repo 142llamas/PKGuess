@@ -1,8 +1,12 @@
 /**
  * @file        js/modes/safari.js
- * @version     1.5.0
- * @updated     2026-07-12
+ * @version     1.5.1
+ * @updated     2026-07-14
  * @changelog
+ *   1.5.1 — Plays the new "game start" SFX (music.js 2.0.0's
+ *           `music.playGameStart()`) when "Enter the Safari Zone" is actually
+ *           clicked (begin()) — layered over whatever music is already
+ *           playing, not a track change.
  *   1.5.0 — Leaderboard submission now includes the catch-per-100-points
  *           efficiency as a sortable metric (Safari boards rank by it), and
  *           shows it in the detail text.
@@ -55,6 +59,7 @@
  */
 
 import { el, clear, genBar, statSpreadEl } from '../lib/dom.js';
+import { music } from '../lib/music.js';
 import { PokeGuessRound, normalizeName, poolFilterForData, matchesPool } from '../lib/engine.js';
 import { submitScore } from '../lib/leaderboard-data.js';
 import { markCaught, markSeen } from '../lib/catch-tracker.js';
@@ -105,6 +110,7 @@ export function createSafari({ mount, config, data, params = {}, onExit }) {
   }
 
   function begin() {
+    music.playGameStart(); // "Enter the Safari Zone" was actually clicked
     const startPts = clampInt(root.querySelector('#sf-start-pts')?.value, 1, 999, 200);
     const pool = shuffle(data.pokedex.filter((p) => matchesPool(p.num, poolFilter)));
     sf = { startPts, budget: startPts, pool, idx: 0, caught: 0, caughtNames: [], ranNames: [] };

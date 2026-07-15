@@ -1,8 +1,12 @@
 /**
  * @file        js/modes/single.js
- * @version     1.2.4
+ * @version     1.2.5
  * @updated     2026-07-14
  * @changelog
+ *   1.2.5 — Plays the new "game start" SFX (music.js 2.0.0's
+ *           `music.playGameStart()`) when the "Start game" button is actually
+ *           clicked (beginRound()) — layered over whatever menu/guess music
+ *           is already playing, not a track change.
  *   1.2.4 — Post-game reveal card now shows the mystery Pokémon's silhouette
  *           (via the shared pokemonInfoHTML in pokeinfo.js 1.1.0). Calls the
  *           new wirePokemonInfo(root) after injecting the card so a missing
@@ -39,6 +43,7 @@
  */
 
 import { el, clear, genBar } from '../lib/dom.js';
+import { music } from '../lib/music.js';
 import { statSpreadEl } from '../lib/dom.js';
 import { pokemonInfoHTML, wirePokemonInfo } from '../lib/pokeinfo.js';
 import { markCaught, markSeen } from '../lib/catch-tracker.js';
@@ -141,6 +146,7 @@ export function createSingle({ mount, config, data, params = {}, onExit }) {
   }
 
   function beginRound() {
+    music.playGameStart(); // the "Start game" button was actually clicked
     lastScoreBreakdown = null; // #5 — clear any previous round's breakdown
     if (chosen.difficulty === 'custom') {
       chosen.points = clampInt(root.querySelector('#sp-custom-points')?.value, 1, 999, 50);

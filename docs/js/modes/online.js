@@ -1,8 +1,15 @@
 /**
  * @file        docs/js/modes/online.js
- * @version     1.7.0
- * @updated     2026-07-12
+ * @version     1.7.1
+ * @updated     2026-07-14
  * @changelog
+ *   1.7.1 — Plays the new "game start" SFX (music.js 2.0.0's
+ *           `music.playGameStart()`) when the leader's "Start game" button
+ *           actually kicks off round 1 — layered over whatever music is
+ *           already playing, not a track change. (The lobby-side guest(s)
+ *           don't click Start themselves, so they don't get this particular
+ *           cue — the transition SFX on entering Online still plays for them
+ *           via setRoute().)
  *   1.7.0 — Two cross-device timer fixes:
  *           (a) The round-over "Next round in Xs" countdown was rendered once
  *               and never refreshed (the ticker only updated the turn timer +
@@ -90,6 +97,7 @@
  */
 
 import { el, clear, shareSheetEl, statSpreadEl } from '../lib/dom.js';
+import { music } from '../lib/music.js';
 import {
   seedFor, buildEngine, applyReveals, revealOutcome, guessOutcome,
   nextTurnPos, weightedRandomClue, advanceAfterWin, champion, makeRoomCode, computeAutoDeducedIds,
@@ -415,7 +423,7 @@ export function createOnline({ mount, config, data, params = {}, onExit }) {
         playerList(),
         hostLeftBanner(),
         isLeader()
-          ? el('button', { class: 'btn-primary', style: { marginTop: '16px', width: '100%' }, disabled: n < 2, onClick: () => startRound(1) }, n < 2 ? 'Waiting for 1+ more\u2026' : 'Start game \u25b6')
+          ? el('button', { class: 'btn-primary', style: { marginTop: '16px', width: '100%' }, disabled: n < 2, onClick: () => { music.playGameStart(); startRound(1); } }, n < 2 ? 'Waiting for 1+ more\u2026' : 'Start game \u25b6')
           : el('p', { class: 'mp-phase-hint', style: { marginTop: '16px' } }, 'Waiting for the host to start\u2026')));
   }
 

@@ -1,8 +1,14 @@
 /**
  * @file        js/modes/draftbattle.js
- * @version     1.16.0
+ * @version     1.16.1
  * @updated     2026-07-14
  * @changelog
+ *   1.16.1 — Plays the new "game start" SFX (music.js 2.0.0's
+ *           `music.playGameStart()`) right when startDraft() actually kicks
+ *           off a draft — covers free-play, Daily Challenge (via
+ *           startDaily(), which calls startDraft()), and "Draft Again" all
+ *           from this one call site. Layered over whatever music is already
+ *           playing, not a track change.
  *   1.16.0 — Bug fix: the Gauntlet Results screen's separate "Claim the Xth
  *            spot" button was an unnecessary (and unclear) extra step — a
  *            player who reached a spot but didn't think to click a second
@@ -253,6 +259,7 @@
  */
 
 import { el, clear, statSpreadEl, shareSheetEl } from '../lib/dom.js';
+import { music } from '../lib/music.js';
 import {
   DraftSession, autoDraft, autoDraftScaled, resolveThroneCascade, TIER_RANK, nextProgressRank,
   buildSpeciesList, buildLearnsetMap, runMatch, toRealStats,
@@ -342,6 +349,7 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
     // runs (for BOTH free-play and the daily flow, which already resolved it
     // even earlier) — so this is never racing a background correction
     // against how fast someone drafts.
+    music.playGameStart(); // the actual draft is starting — covers free-play, Daily Challenge (via startDaily()), and "Draft Again"
     const session = new DraftSession({ species: ctx.species, gen: 2, seed, rerolls, playerName: (identity && identity.name) || 'Player' });
     pendingPicks = [];
     renderCard(session);

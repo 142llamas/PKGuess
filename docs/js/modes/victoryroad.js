@@ -1,8 +1,12 @@
 /**
  * @file        js/modes/victoryroad.js
- * @version     1.5.0
- * @updated     2026-07-12
+ * @version     1.5.1
+ * @updated     2026-07-14
  * @changelog
+ *   1.5.1 — Plays the new "game start" SFX (music.js 2.0.0's
+ *           `music.playGameStart()`) when "Enter Victory Road" is actually
+ *           clicked (begin()) — layered over whatever music is already
+ *           playing, not a track change.
  *   1.5.0 — Leaderboard submission now includes a time-per-catch metric
  *           (average ms per successful guess; lower is better), surfaced in
  *           the detail text and as the sortable metric on the leaderboard
@@ -79,6 +83,7 @@
  */
 
 import { el, clear, statSpreadEl, genBar } from '../lib/dom.js';
+import { music } from '../lib/music.js';
 import { PokeGuessRound, normalizeName, poolFilterForData, matchesPool } from '../lib/engine.js';
 import { submitScore } from '../lib/leaderboard-data.js';
 
@@ -254,6 +259,7 @@ export function createVictoryRoad({ mount, config, data, params = {}, onExit }) 
 
   // ---- BEGIN ---------------------------------------------------------------
   function begin() {
+    music.playGameStart(); // "Enter Victory Road" was actually clicked
     const pool = shuffle(data.pokedex.filter((p) => matchesPool(p.num, poolFilter)));
     const now = Date.now();
     vr = { streak: 0, pool, poolIdx: 0, perfectLaps: 0, startTime: now, pokeStartTime: now, bestPokeMs: null, totalMs: 0, round: null };
