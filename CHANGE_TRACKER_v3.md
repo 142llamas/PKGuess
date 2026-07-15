@@ -4,6 +4,28 @@ Status: ✅ done · 🔜 planned (phase noted) · ⏳ in progress
 
 ---
 
+## 2026-07-14 (bug fixes) — Move-mechanics fixes from real battles + weighted ramp AI + Draft Again button
+
+Scope: docs/js/sim.js (2.11.0→2.12.0), docs/js/modes/draftbattle.js (1.15.8→1.15.9), tools/test/sim.test.mjs (1.7.0→1.8.0), tools/test/throne.smoke.mjs. Prompted by two real gauntlet battle logs (Granbull vs Will's Poliwag; Pidgeot vs Poliwag) where weather "popped up" spontaneously, Poliwag "braced itself" for no reason, and Protect blocked Curse. Diagnosed by dumping raw sim event streams — the NPC legitimately had those moves; the log just hid it.
+
+**Root causes + fixes (all revert-checked):**
+1. **Missing "use" event.** The `use` event ("X used Y") fired only after the accuracy check, so every special-cased move (weather/Curse/Endure/Protect/Mist/Substitute/Safeguard/...) hit an early return before it and showed only its effect — making weather/stat changes look spontaneous. Moved the `use` event up so every executed move names itself first; misses now read "used X" + "missed".
+2. **Protect over-blocked self/field moves.** The block-list only exempted rest/bellydrum/reflect/lightscreen/endure, so Protect wrongly blocked Rain Dance/Sandstorm (weather = field), non-Ghost Curse (self-buff), Safeguard/Mist/Substitute (self), and Haze. Now Protect blocks only moves that TARGET the defender; the earlier code even documented the Curse over-block as "harmless" — it wasn't. Full block/allow matrix is asserted in a new test.
+3. **Weather re-cast re-announced.** Re-using the already-active weather refreshed + re-announced it (and both mons casting Rain Dance in one turn produced two "It started to rain!"). Gen 2: re-casting the active weather FAILS and does not extend it; a different weather ends the current one first. Weather still lasts exactly 5 turns. (Side effect: the old "Thunder never misses in rain" test relied on perpetual refresh — corrected to track actual rain state, since a paralyzed rain-setter now lets rain lapse.)
+4. **rampage-start logged before "used X".** Found by the invariant fuzz (below). The rampage lock is still set before any early return (so a missed rampage still burns a turn), but the "became enraged" line is deferred until after the use event.
+
+**Requested enhancement — weighted ramp AI.** chooseMoveForTurn now continues an active Fury Cutter / Rollout ramp with high probability (RAMP_CONTINUE_CHANCE = 0.85) instead of randomly abandoning the charged streak. Rollout already force-locked; this mainly stops the free-to-switch Fury Cutter from being dropped mid-ramp (exactly the Pidgeot→Fury Swipes case in the report).
+
+**Thorough audit (the user can't eyeball moves in random drafts).** Beyond the targeted tests, added a 400-battle invariant fuzz over randomly auto-drafted movesets (the same distribution the game produces) asserting: (a) no move-caused effect (weather/boost/status/sub/etc.) ever appears without its "used X" line in the same turn — the whole reported bug class; (b) weather never starts twice in one turn from the same mon. Result after fixes: 0 orphan effects, 0 illegal weather double-casts (the only remaining double-starts are two DIFFERENT mons casting different weather in one turn, which correctly ends the old and starts the new). The fuzz is what surfaced fix #4.
+
+**Draft Again button (draftbattle.js 1.15.9).** The Elite-4 Gauntlet Results screen now offers four actions: My Build, Elite 4 Status, **Draft Again**, Main Menu. Draft Again starts a fresh free-play draft (same random-seed + 3/3-reroll entry as normal). Renderer needed no new event cases — its existing 'use' case already narrates the new status-move "used X" lines. throne.smoke.mjs asserts the four-button layout and that Draft Again restarts a draft.
+
+**Tests:** `npm test` = 1078/1078 (sim.test.mjs 1.8.0 adds use-event, Protect-matrix, weather-single-active, weighted-ramp, and log-ordering sections). `npm run test:smoke` = all 10 suites green (throne.smoke +5 assertions for Draft Again). Every fix individually revert-checked.
+
+**Files changed (re-upload):** docs/js/sim.js (2.12.0), docs/js/modes/draftbattle.js (1.15.9), tools/test/sim.test.mjs (1.8.0), tools/test/throne.smoke.mjs, MANIFEST.md, CHANGE_TRACKER_v3.md. Unchanged: docs/js/draft.js (0.9.4), draft.test.mjs (1.3.0), movestats-gen2.json.
+
+---
+
 ## 2026-07-14 (integration) — Full-repo integration + self-healing throne seeds + Hidden Power type selection
 
 Scope: this chat folded the prior move-mechanics rewrite (which had only ever seen sim.js/draft.js/draftbattle.js + data + tests) back into the **complete** game repo and verified it all works together, then shipped Hidden Power type selection. Baseline is now docs/js/sim.js 2.11.0.

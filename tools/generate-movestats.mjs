@@ -1,7 +1,7 @@
 /**
  * @file        tools/generate-movestats.mjs
  * @version     1.0.0
- * @updated     2026-06-23 
+ * @updated     2026-06-23
  * @changelog
  *   1.0.0 — Stage-2 data pass (run AFTER generate-data.mjs). [BOOTSTRAP ONLY —
  *           once the review CSVs have been hand-curated, the curated values are

@@ -1,5 +1,5 @@
 /**
- * @file        tools/apply-movestats.mjs 
+ * @file        tools/apply-movestats.mjs
  * @version     1.0.0
  * @updated     2026-06-24
  * @changelog

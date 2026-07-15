@@ -7,8 +7,26 @@
  * UI can replay one battle step-by-step while the real outcome is a win-% taken
  * over many silent simulations.
  *
- * @version 2.11.0
+ * @version 2.12.0
  * @changelog
+ *   2.12.0 — Bug-fix batch from real played battles (all revert-checked):
+ *           (1) USE EVENT: "X used <move>" now fires for EVERY executed move,
+ *           including status/weather/self-buff moves. Previously those returned
+ *           before the use event, so weather/Curse/Endure showed only their
+ *           effect and looked spontaneous in the log. Misses now read
+ *           "used X" + "X missed" (matching the games).
+ *           (2) PROTECT: only blocks moves that TARGET the defender. It no
+ *           longer blocks weather (Rain Dance/Sunny Day/Sandstorm — field),
+ *           non-Ghost Curse (self-buff), Safeguard/Mist/Substitute (self), Haze,
+ *           or self-boosts. Still blocks damage/OHKO/fixed, foe-aimed status &
+ *           stat drops, Leech Seed, Pain Split, Nightmare, Lock-On, Ghost-Curse.
+ *           (3) WEATHER single-active: re-casting the weather already in effect
+ *           now FAILS (gen 2) instead of re-announcing/refreshing it; casting a
+ *           DIFFERENT weather ends the current one (weather-end) before starting
+ *           the new one. Weather still lasts exactly 5 turns.
+ *           (4) AI RAMP: chooseMoveForTurn now continues an active Fury Cutter/
+ *           Rollout ramp with high probability (RAMP_CONTINUE_CHANCE) instead of
+ *           randomly abandoning the charged streak.
  *   2.11.0 — "Simplified moves" pass complete: SUBSTITUTE (requested). Spends
  *           1/4 max HP to create a decoy with 1/4 max HP + 1 (fails if a sub is
  *           already up or HP ≤ cost). While the sub stands, incoming damage is
@@ -325,6 +343,7 @@ const CURSE_CHIP_FRACTION = 1 / 4;
 const NIGHTMARE_FRACTION = 1 / 4;   // Tier-2: Nightmare chips 1/4 max HP each turn while asleep
 const TRAP_FRACTION = 1 / 16;       // Simplified-moves: Wrap/Bind/etc. chip 1/16 max HP each turn while trapped
 const RAMP_MAX_DOUBLINGS = 4;       // Tier-2: Fury Cutter/Rollout cap at ×16 (the gen-2 5-hit cap)
+const RAMP_CONTINUE_CHANCE = 0.85;  // AI: once a ramp (Fury Cutter/Rollout) is building, prefer continuing it
 const CONFUSE_SELF = 0.33;       // chance a confused mon hits itself
 const CONFUSE_BP = 40;           // self-hit power (typeless physical)
 const CRASH_FRACTION = 1 / 8;    // Jump Kick / High Jump Kick miss "crash" damage
@@ -944,13 +963,15 @@ function applyFoeBoosts(target, boosts, gen, log) {
 
 function doMove(attacker, defender, move, rng, gen, chart, log, releasingCharge, field) {
   // ---- Tier-3 rampage start: the first time a rampage move is used, lock the
-  // user in for 2–3 turns. Set BEFORE any early return so a turn always counts
-  // (a missed/blocked/immune rampage move still burns a locked turn). The
-  // actual decrement + fatigue confusion happen in tickRampage() after doMove.
-  if (move.rampage && !attacker.rampageMove) {
+  // user in for 2–3 turns. State is set BEFORE any early return so a turn always
+  // counts (a missed/blocked/immune rampage move still burns a locked turn), but
+  // the "became enraged" LOG line is deferred until after the "used <move>" line
+  // below so the log reads in the right order. The actual decrement + fatigue
+  // confusion happen in tickRampage() after doMove.
+  const startingRampage = move.rampage && !attacker.rampageMove;
+  if (startingRampage) {
     attacker.rampageMove = move;
     attacker.rampageTurns = randint(rng, 2, 3);
-    log.push({ t: 'rampage-start', source: attacker.name, move: move.name });
   }
   // ---- semi-invulnerable target (Fly/Dig charge turn) ----------------------
   // Normally nothing can hit a mon mid-Fly/Dig. Exceptions (Tier-2): the
@@ -988,19 +1009,31 @@ function doMove(attacker, defender, move, rng, gen, chart, log, releasingCharge,
   // if releasingCharge is true (or Solar Beam in sun), fall through — the move
   // executes for real now.
 
-  // ---- Protect / Detect (Tier-1): block any move that would actually affect
-  // the defender. Self-only special cases (Rest/Belly Drum/Reflect/Light
-  // Screen/Endure) and generic self-only boosts (Swords Dance, Agility, ...)
-  // don't target the defender at all, so Protect has nothing to block there —
-  // everything else (damage, guaranteed/secondary status, Curse, Leech Seed,
-  // Pain Split, Haze) is blocked outright. Simplification, disclosed: Curse's
-  // non-Ghost branch is a pure self-buff that doesn't need blocking, but for
-  // simplicity it's blocked like its Ghost branch rather than special-cased
-  // further — a harmless over-block in a rare edge case.
+  // ---- "X used <move>" for EVERY move that actually executes -------------
+  // Emitted here (after the charge/invuln handling that has its own narration,
+  // before Protect and the special-cased self/field moves) so status, weather,
+  // and self-buff moves ("Poliwag used Rain Dance!", "...used Curse!",
+  // "...used Endure!") name themselves in the log instead of appearing as
+  // spontaneous effects. Damaging moves flow through to their damage line as
+  // before; misses now read "used X" + "X missed" (matching the real games).
+  log.push({ t: 'use', source: attacker.name, move: move.name });
+  if (startingRampage) log.push({ t: 'rampage-start', source: attacker.name, move: move.name });
+
+  // ---- Protect / Detect (Tier-1): block only moves that actually TARGET the
+  // defender. Self- and field-targeting moves reach the defender's side not at
+  // all, so Protect has nothing to block: self specials (Rest/Belly Drum/
+  // Reflect/Light Screen/Endure/Protect/Safeguard/Mist/Substitute), field
+  // weather (Rain Dance/Sunny Day/Sandstorm), Haze (clears both sides), the
+  // NON-Ghost branch of Curse (a pure self-buff), and generic self-only boosts
+  // (Swords Dance, Agility, ...). Everything that does target the foe — damage,
+  // OHKO/fixed, foe-aimed status & stat drops, Leech Seed, Pain Split,
+  // Nightmare, Lock-On, and Ghost-Curse — is blocked outright.
   if (defender.protecting) {
-    const selfOnlySpecial = ['rest', 'bellydrum', 'reflect', 'lightscreen', 'endure'].includes(move.special);
+    const SELF_OR_FIELD = ['rest', 'bellydrum', 'reflect', 'lightscreen', 'endure', 'protect', 'safeguard', 'mist', 'substitute', 'weather', 'haze'];
+    const selfOrField = SELF_OR_FIELD.includes(move.special)
+      || (move.special === 'curse' && !attacker.types.includes('Ghost')); // non-Ghost Curse is self-only
     const selfOnlyBoost = move.boostTarget === 'self' && !(move.bp > 0) && !move.ohko && move.fixedDamage == null;
-    if (!selfOnlySpecial && !selfOnlyBoost) {
+    if (!selfOrField && !selfOnlyBoost) {
       log.push({ t: 'protect-block', source: attacker.name, target: defender.name, move: move.name });
       breakRamp(attacker);
       return;
@@ -1049,7 +1082,17 @@ function doMove(attacker, defender, move, rng, gen, chart, log, releasingCharge,
     return;
   }
   if (move.special === 'weather') {
-    // Set the field weather for 5 turns. Re-using the same weather refreshes it.
+    // Only one weather is ever active (a single field.weather). Re-using the
+    // weather that's already up FAILS (gen 2: Rain Dance while raining fails),
+    // rather than silently re-announcing it. Setting a DIFFERENT weather ends
+    // the current one and starts the new one.
+    if (field.weather === move.weatherKind && field.weatherTurns > 0) {
+      log.push({ t: 'fail', target: attacker.name, move: move.name });
+      return;
+    }
+    if (field.weather && field.weather !== move.weatherKind) {
+      log.push({ t: 'weather-end', weather: field.weather });
+    }
     field.weather = move.weatherKind;
     field.weatherTurns = 5;
     log.push({ t: 'weather-start', weather: move.weatherKind });
@@ -1141,7 +1184,6 @@ function doMove(attacker, defender, move, rng, gen, chart, log, releasingCharge,
       return;
     }
   }
-  log.push({ t: 'use', source: attacker.name, move: move.name });
 
   // Substitute (Simplified-moves): capture whether the DEFENDER had a sub up at
   // the moment this move connected. Damage is redirected to the sub in
@@ -1309,6 +1351,15 @@ function chooseMoveForTurn(c, rng) {
   if (c.chargingMove) { const m = c.chargingMove; c.chargingMove = null; return { move: m, releasing: true }; }
   if (c.rolloutMove) { return { move: c.rolloutMove, releasing: false }; } // Tier-2: Rollout forces its own repeat until the lock releases
   if (c.rampageMove) { return { move: c.rampageMove, releasing: false }; } // Tier-3: Outrage/Thrash/Petal Dance forces itself for 2–3 turns
+  // Weighted AI: once a Fury Cutter / Rollout-style ramp is building (rampStreak
+  // > 0), strongly prefer continuing it — its power doubles per consecutive hit,
+  // so randomly switching away throws the streak (and the charged power) away.
+  // Rollout already force-locks above; this mainly keeps the free-to-switch
+  // Fury Cutter from being abandoned mid-ramp.
+  if (c.rampStreak > 0 && c.rampMoveId) {
+    const rampMove = c.moves.find((m) => m.id === c.rampMoveId);
+    if (rampMove && chance(rng, RAMP_CONTINUE_CHANCE)) return { move: rampMove, releasing: false };
+  }
   return { move: pick(rng, c.moves), releasing: false };
 }
 

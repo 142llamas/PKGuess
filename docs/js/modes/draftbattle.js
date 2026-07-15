@@ -1,8 +1,16 @@
 /**
  * @file        js/modes/draftbattle.js
- * @version     1.15.8
+ * @version     1.15.9
  * @updated     2026-07-14
  * @changelog
+ *   1.15.9 — Elite-4 Gauntlet Results page now has a "Draft Again" button
+ *            (between "Elite 4 Status" and "Main Menu"), starting a fresh
+ *            free-play draft with the same random seed + 3/3 rerolls as the
+ *            normal entry — so the results screen offers all four actions:
+ *            My Build, Elite 4 Status, Draft Again, Main Menu. (The renderer
+ *            also already narrates the sim 2.12.0 "use" events for status/
+ *            weather/self-buff moves via the existing 'use' case, so no new
+ *            event handling was needed for that fix.)
  *   1.15.8 — Simplified-moves (sim.js 2.11.0): narrates Substitute — 'sub'
  *            ("put up a substitute!"), 'sub-damage' ("the substitute took the
  *            hit"), 'sub-break' ("substitute broke!"). Note the sim still logs
@@ -819,6 +827,7 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
             reachedAny ? el('button', { class: 'btn-secondary', onClick: shareGauntletResult(placementLabel) }, '\uD83D\uDCE4 Share') : null,
             el('button', { class: 'btn-secondary', onClick: () => renderBuild(lastResult) }, '\u2190 My Build'),
             el('button', { class: 'btn-secondary', onClick: showThrones }, 'Elite 4 Status'),
+            el('button', { class: 'btn-secondary', onClick: () => startDraft(((Math.random() * 2 ** 31) | 0), { pokemon: 3, moves: 3 }) }, '\uD83D\uDD01 Draft Again'),
             el('button', { class: 'btn-secondary', onClick: () => onExit && onExit() }, 'Main Menu')))));
   }
 

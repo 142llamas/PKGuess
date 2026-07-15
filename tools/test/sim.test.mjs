@@ -1,7 +1,14 @@
 /**
  * @file tools/test/sim.test.mjs
- * @version 1.7.0
+ * @version 1.8.0
  * @changelog
+ *   1.8.0 — Integration bug-fix batch (from real played battles): (1) every
+ *           executed move now emits a "use" event, incl. status/weather/self-
+ *           buff moves; (2) Protect only blocks foe-targeting moves — NOT
+ *           weather, non-Ghost Curse, Safeguard, Mist, Substitute, or self-
+ *           boosts; (3) re-casting the already-active weather fails and
+ *           switching weather ends the old one; (4) weighted AI continues an
+ *           active Fury Cutter/Rollout ramp. All revert-checked.
  *   1.7.0 — Simplified-moves: Substitute (damage soak via HP accounting, sub
  *           blocks status + stat drops). Both mechanisms revert-checked.
  *   1.6.0 — Simplified-moves: Mist (blocks foe stat drops) and Weather
@@ -984,8 +991,16 @@ export default function (t) {
     let thunderUses = 0, thunderMisses = 0;
     for (let seed = 1; seed <= 30; seed++) {
       const r = simulateBattle(thunderer, rainFast, { ...simOpts, seed, turnCap: 8 });
-      // only count Thunders AFTER rain is up (turn 1 sets it; Thunderer is slower so all its Thunders are in rain)
+      // Track whether rain is actually up at each moment. Gen-2 weather lasts
+      // exactly 5 turns and re-casting it FAILS (doesn't refresh), so if the
+      // rain-setter gets paralyzed by Thunder and can't recast, rain lapses —
+      // and a Thunder in *clear* weather is allowed to miss. Only count Thunders
+      // that actually fired while it was raining.
+      let raining = false;
       for (const e of r.log) {
+        if (e.t === 'weather-start') raining = (e.weather === 'rain');
+        else if (e.t === 'weather-end' && e.weather === 'rain') raining = false;
+        if (!raining) continue;
         if (e.t === 'use' && e.source === 'Thunderer' && e.move === 'Thunder') thunderUses++;
         if (e.t === 'miss' && e.source === 'Thunderer' && e.move === 'Thunder') thunderMisses++;
       }
@@ -1027,6 +1042,121 @@ export default function (t) {
     const grw = spec('Growler2', toRealStats({ hp: 300, atk: 40, def: 60, spa: 40, spd: 60, spe: 10 }, 2), ['Normal'], ['Growl', 'Growl', 'Growl', 'Growl']);
     const rDrop = simulateBattle(subFirst, grw, { ...simOpts, seed: 1, turnCap: 3 });
     t.ok(!rDrop.log.some((e) => e.t === 'boost' && e.target === 'SubFirst' && e.stat === 'atk' && e.delta < 0), 'stat drops are blocked while a substitute stands');
+  }
+
+  t.section('sim.js — every executed move emits a "use" event (1.8.0)');
+  {
+    // Status / weather / self-buff moves used to return before the "use" event,
+    // so they showed only their effect (e.g. "It started to rain!") with no
+    // "X used <move>" line — which made them look spontaneous in the battle log.
+    const caster = spec('Caster', toRealStats({ hp: 400, atk: 60, def: 200, spa: 60, spd: 200, spe: 250 }, 2), ['Water'], ['Rain Dance', 'Curse', 'Substitute', 'Protect']);
+    const dummy = spec('Dummy', toRealStats({ hp: 400, atk: 30, def: 200, spa: 30, spd: 200, spe: 10 }, 2), ['Normal'], ['Splash', 'Splash', 'Splash', 'Splash']);
+    let hasWeatherStart = false, hasUseBeforeIt = false, seenUse = false;
+    for (let seed = 1; seed <= 20 && !hasWeatherStart; seed++) {
+      const r = simulateBattle(caster, dummy, { ...simOpts, seed, turnCap: 8 });
+      seenUse = false;
+      for (const e of r.log) {
+        if (e.t === 'use' && e.source === 'Caster' && e.move === 'Rain Dance') seenUse = true;
+        if (e.t === 'weather-start' && e.weather === 'rain') { hasWeatherStart = true; hasUseBeforeIt = seenUse; break; }
+      }
+    }
+    t.ok(hasWeatherStart, 'a weather move eventually fires');
+    t.ok(hasUseBeforeIt, 'a "used Rain Dance" event precedes the "It started to rain" effect');
+  }
+
+  t.section('sim.js — Protect only blocks moves that target the defender (1.8.0)');
+  {
+    const protector = spec('Guard', toRealStats({ hp: 500, atk: 100, def: 200, spa: 100, spd: 200, spe: 250 }, 2), ['Rock'], ['Protect', 'Protect', 'Protect', 'Protect']);
+    // Helper: does an opponent's move X get blocked by Protect? Give the
+    // opponent only move X so we can read the outcome directly.
+    const runVs = (oppName, oppTypes, move, oppStats) => {
+      const opp = spec(oppName, toRealStats(oppStats || { hp: 300, atk: 120, def: 60, spa: 120, spd: 60, spe: 10 }, 2), oppTypes, [move, move, move, move]);
+      return simulateBattle(protector, opp, { ...simOpts, seed: 3, turnCap: 6 });
+    };
+    const blocked = (log, mv) => log.some((e) => e.t === 'protect-block' && e.move === mv);
+    // NOT blocked (self / field):
+    const rain = runVs('Rainer', ['Water'], 'Rain Dance');
+    t.ok(!blocked(rain.log, 'Rain Dance'), 'Protect does NOT block Rain Dance (weather is field-wide, not aimed at the protector)');
+    t.ok(rain.log.some((e) => e.t === 'weather-start' && e.weather === 'rain'), 'the weather still sets while the foe is protecting');
+    const sand = runVs('Sander', ['Ground'], 'Sandstorm');
+    t.ok(!blocked(sand.log, 'Sandstorm'), 'Protect does NOT block Sandstorm');
+    const curse = runVs('Curser', ['Water'], 'Curse'); // non-Ghost Curse = pure self-buff
+    t.ok(!blocked(curse.log, 'Curse'), 'Protect does NOT block non-Ghost Curse (self-buff)');
+    t.ok(curse.log.some((e) => e.t === 'boost' && e.target === 'Curser' && e.stat === 'atk' && e.delta > 0), 'the Curse user still gets its Attack boost through the foe\u2019s Protect');
+    const safe = runVs('Safer', ['Normal'], 'Safeguard');
+    t.ok(!blocked(safe.log, 'Safeguard'), 'Protect does NOT block Safeguard (self)');
+    const mist = runVs('Mister', ['Water'], 'Mist');
+    t.ok(!blocked(mist.log, 'Mist'), 'Protect does NOT block Mist (self)');
+    const sub = runVs('Subber3', ['Normal'], 'Substitute', { hp: 400, atk: 60, def: 200, spa: 60, spd: 200, spe: 10 });
+    t.ok(!blocked(sub.log, 'Substitute'), 'Protect does NOT block Substitute (self)');
+    // Blocked (foe-targeting):
+    const psy = runVs('Psyer', ['Psychic'], 'Psychic');
+    t.ok(blocked(psy.log, 'Psychic'), 'Protect DOES block a damaging move (Psychic)');
+    const seed = runVs('Seeder', ['Grass'], 'Leech Seed');
+    t.ok(blocked(seed.log, 'Leech Seed'), 'Protect DOES block Leech Seed (targets the foe)');
+    const twave = runVs('Paralyzer', ['Electric'], 'Thunder Wave');
+    t.ok(blocked(twave.log, 'Thunder Wave'), 'Protect DOES block a foe-aimed status move (Thunder Wave)');
+    const ghostCurse = runVs('Gengar', ['Ghost'], 'Curse'); // Ghost-Curse targets the foe
+    t.ok(blocked(ghostCurse.log, 'Curse'), 'Protect DOES block Ghost-type Curse (it targets the foe)');
+  }
+
+  t.section('sim.js — weather is single-active: re-cast fails, switch ends the old (1.8.0)');
+  {
+    const rainer = spec('Rainy', toRealStats({ hp: 5000, atk: 10, def: 300, spa: 10, spd: 300, spe: 250 }, 2), ['Water'], ['Rain Dance', 'Rain Dance', 'Rain Dance', 'Rain Dance']);
+    const idle = spec('Idle', toRealStats({ hp: 5000, atk: 10, def: 300, spa: 10, spd: 300, spe: 5 }, 2), ['Normal'], ['Splash', 'Splash', 'Splash', 'Splash']);
+    const r = simulateBattle(rainer, idle, { ...simOpts, seed: 1, turnCap: 5 });
+    const rainStarts = r.log.filter((e) => e.t === 'weather-start' && e.weather === 'rain').length;
+    const rainFails = r.log.filter((e) => e.t === 'fail' && e.move === 'Rain Dance').length;
+    t.ok(rainStarts === 1, `within the 5-turn window rain is announced once, not every turn (got ${rainStarts})`);
+    t.ok(rainFails >= 3, `re-casting Rain Dance while it is already raining fails each time (got ${rainFails} fails)`);
+
+    // Switching weather: rain up, then a Sandstorm should end the rain first.
+    const switcher = spec('Switch', toRealStats({ hp: 5000, atk: 10, def: 300, spa: 10, spd: 300, spe: 250 }, 2), ['Water'], ['Rain Dance', 'Sandstorm', 'Rain Dance', 'Sandstorm']);
+    for (let seed = 1; seed <= 20; seed++) {
+      const rs = simulateBattle(switcher, idle, { ...simOpts, seed, turnCap: 6 });
+      const idxRain = rs.log.findIndex((e) => e.t === 'weather-start' && e.weather === 'rain');
+      const idxSandStart = rs.log.findIndex((e, i) => i > idxRain && e.t === 'weather-start' && e.weather === 'sand');
+      if (idxRain >= 0 && idxSandStart >= 0) {
+        const idxRainEnd = rs.log.findIndex((e, i) => i > idxRain && i < idxSandStart && e.t === 'weather-end' && e.weather === 'rain');
+        t.ok(idxRainEnd >= 0, 'switching from rain to sandstorm ends the rain before the sandstorm starts');
+        break;
+      }
+      if (seed === 20) t.ok(false, 'could not produce a rain\u2192sand switch to test');
+    }
+  }
+
+  t.section('sim.js — AI continues a Fury Cutter ramp instead of abandoning it (1.8.0)');
+  {
+    // A mon with Fury Cutter + three filler attacks. With the weighted AI it
+    // should chain Fury Cutter far more than random 1-in-4 would, so ramp
+    // events (bp doubling) should be common.
+    const ramper = spec('Ramper', toRealStats({ hp: 400, atk: 150, def: 120, spa: 60, spd: 120, spe: 250 }, 2), ['Bug'], ['Fury Cutter', 'Tackle', 'Scratch', 'Pound']);
+    const wall = spec('Wall', toRealStats({ hp: 6000, atk: 10, def: 400, spa: 10, spd: 400, spe: 5 }, 2), ['Normal'], ['Splash', 'Splash', 'Splash', 'Splash']);
+    let rampEvents = 0, trials = 0;
+    for (let seed = 1; seed <= 40; seed++) {
+      const r = simulateBattle(ramper, wall, { ...simOpts, seed, turnCap: 8 });
+      rampEvents += r.log.filter((e) => e.t === 'ramp' && e.source === 'Ramper').length;
+      trials++;
+    }
+    // Random 1-in-4 continuation would give very few consecutive-hit ramps;
+    // the 0.85 continue-chance should produce many. Expect a healthy average.
+    t.ok(rampEvents / trials >= 1.5, `Fury Cutter ramps are common with the weighted AI (avg ${(rampEvents / trials).toFixed(2)} ramp events/battle)`);
+  }
+
+  t.section('sim.js — no move-effect appears before its "used <move>" line (1.8.0 ordering)');
+  {
+    // Regression guard for the whole "spontaneous effect" bug class found by the
+    // invariant fuzz: rampage-start used to be logged before the use event, so
+    // "became enraged with Outrage!" printed before "used Outrage". Verify the
+    // use event now comes first, and (belt-and-suspenders) that the effect is
+    // attributed to the same source.
+    const rager = spec('Rager', toRealStats({ hp: 400, atk: 200, def: 120, spa: 60, spd: 120, spe: 250 }, 2), ['Dragon'], ['Outrage', 'Outrage', 'Outrage', 'Outrage']);
+    const punching = spec('Bag', toRealStats({ hp: 6000, atk: 10, def: 400, spa: 10, spd: 400, spe: 5 }, 2), ['Normal'], ['Splash', 'Splash', 'Splash', 'Splash']);
+    const r = simulateBattle(rager, punching, { ...simOpts, seed: 1, turnCap: 4 });
+    const useIdx = r.log.findIndex((e) => e.t === 'use' && e.source === 'Rager' && e.move === 'Outrage');
+    const rampIdx = r.log.findIndex((e) => e.t === 'rampage-start' && e.source === 'Rager');
+    t.ok(useIdx >= 0 && rampIdx >= 0, 'both the use and rampage-start events are present');
+    t.ok(useIdx < rampIdx, '"used Outrage" is logged BEFORE "became enraged" (not after)');
   }
 
 }

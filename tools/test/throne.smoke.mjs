@@ -251,6 +251,8 @@ console.log('\n— #14/#15: the Elite-4 gauntlet runs Will→Koga→Bruno→Lanc
   ok(summary.includes('Champion'), 'the placement message names the top spot (Champion) after clearing All-Time');
   ok(!!claimBtn, 'a single Claim button is offered for the highest spot reached');
   ok(!!btn('📤 Share'), '#15: a single consolidated Share button is offered on the results screen (not one per victory)');
+  ok(!!btn('My Build') && !!btn('Elite 4 Status') && !!btn('Draft Again') && !!btn('Main Menu'),
+    'the Gauntlet Results screen offers all four actions: My Build, Elite 4 Status, Draft Again, Main Menu');
   let threwOnGauntletShare = false;
   try { click(btn('📤 Share')); await wait(30); } catch { threwOnGauntletShare = true; }
   ok(!threwOnGauntletShare, '#15: clicking the gauntlet results Share button does not throw');
@@ -510,6 +512,23 @@ console.log('\n— Requested: throne History screen has an Inspect button for ea
   click(backBtn);
   await wait(30);
   ok(document.body.textContent.includes('Champions'), 'Back returns to the champion History screen (not somewhere else)');
+  ctrl.destroy();
+}
+
+console.log('\n— "Draft Again" on the results screen starts a brand-new free-play draft —');
+{
+  const fb = makeFakeFB();
+  const identity = { uid: 'player1', name: 'Ash' };
+  const ctrl = await draftFresh(fb, identity);
+  await runGauntletFromDraftComplete();
+  ok(document.body.textContent.includes('Gauntlet Results'), 'reached the Gauntlet Results screen');
+  const again = btn('Draft Again');
+  ok(!!again, 'the Draft Again button is present on the results screen');
+  click(again);
+  await wait(80);
+  ok(!document.body.textContent.includes('Gauntlet Results'), 'clicking Draft Again leaves the results screen');
+  ok(!!document.querySelector('.draft-advance-btns') || !!document.querySelector('.draft-card'),
+    'a fresh draft has started (the draft card / advance controls are shown again)');
   ctrl.destroy();
 }
 
