@@ -148,7 +148,10 @@ async function draftFresh(fb, identity) {
 }
 
 /** Runs the gauntlet from the Draft Complete screen and returns the parsed
- *  results-table rows + whether a claim button is present. */
+ *  results-table rows. Claiming the highest spot reached is now automatic —
+ *  it happens before the results screen ever renders, so by the time this
+ *  resolves (results table visible) the throne write has already completed;
+ *  no button click is needed or offered any more. */
 async function runGauntletFromDraftComplete() {
   click(btn('Challenge the Elite 4'));
   // Poll rather than a fixed wait: the gauntlet runs up to 5 sequential
@@ -163,8 +166,7 @@ async function runGauntletFromDraftComplete() {
     return { tier: cells[0]?.textContent.trim(), opponent: cells[1]?.textContent.trim(), result: cells[2]?.textContent.trim() };
   });
   const summary = document.querySelector('.summary-score')?.textContent || '';
-  const claimBtn = [...q('button')].find((b) => b.textContent.includes('Claim'));
-  return { rows, summary, claimBtn };
+  return { rows, summary };
 }
 
 function statusBadge() {
@@ -179,9 +181,8 @@ async function captureMon(seed, identity) {
   document.getElementById('app').innerHTML = '';
   const fb = makeFakeFB();
   const ctrl = await draftFreshWithSeed(seed, fb, identity);
-  const { claimBtn } = await runGauntletFromDraftComplete();
-  if (claimBtn) click(claimBtn);
-  await wait(60);
+  await runGauntletFromDraftComplete(); // claim already happened automatically by the time this resolves
+  await wait(30);
   const all = await fb.get('/draft/throne/all');
   ctrl.destroy();
   document.getElementById('app').innerHTML = '';
@@ -245,11 +246,12 @@ console.log('\n— #14/#15: the Elite-4 gauntlet runs Will→Koga→Bruno→Lanc
   const closeBtn = [...document.querySelectorAll('.draft-toast button')].find((b) => b.textContent.includes('Close'));
   if (closeBtn) click(closeBtn);
 
-  const { rows, summary, claimBtn } = await runGauntletFromDraftComplete();
+  const { rows, summary } = await runGauntletFromDraftComplete();
   eq(rows.length, 5, 'the gauntlet attempts all five tiers when the challenger wins every matchup');
   ok(rows.every((r) => r.result.includes('Won')), 'every matchup is won with this deterministic build');
   ok(summary.includes('Champion'), 'the placement message names the top spot (Champion) after clearing All-Time');
-  ok(!!claimBtn, 'a single Claim button is offered for the highest spot reached');
+  ok(summary.includes('claimed'), 'the summary itself reports the spot as already claimed \u2014 no separate Claim button is needed');
+  ok(!btn('Claim'), 'the old separate "Claim the Xth spot" button is gone \u2014 claiming is automatic now');
   ok(!!btn('📤 Share'), '#15: a single consolidated Share button is offered on the results screen (not one per victory)');
   ok(!!btn('My Build') && !!btn('Elite 4 Status') && !!btn('Draft Again') && !!btn('Main Menu'),
     'the Gauntlet Results screen offers all four actions: My Build, Elite 4 Status, Draft Again, Main Menu');
@@ -270,11 +272,10 @@ console.log('\n— #14/#15: the Elite-4 gauntlet runs Will→Koga→Bruno→Lanc
   click(btn('Back to Results'));
   await wait(20);
   ok(document.body.textContent.includes('Gauntlet Results'), 'returns to the SAME results screen after watching a battle');
+  ok(document.querySelector('.summary-score')?.textContent.includes('claimed'), 'returning from a Watch replay still shows the already-claimed result (does not re-claim or lose it)');
 
-  click(claimBtn);
-  await wait(60);
   const dump = await fb.get('/draft/throne/all');
-  ok(!!dump && dump.holderUid === 'player1', 'claiming from the results screen actually persists the highest throne reached (All-Time)');
+  ok(!!dump && dump.holderUid === 'player1', 'the automatic claim actually persisted the highest throne reached (All-Time), with no button click required');
   eq(await fb.get('/draft/progress/player1'), 5, 'persisted progress rank reaches the max (5) after the full climb');
 
   console.log('\n— Bug report: a player who already holds a HIGHER throne with a DIFFERENT mon must still be able to claim a lower one with a NEW mon —');
@@ -305,12 +306,10 @@ console.log('\n— #14/#15: the Elite-4 gauntlet runs Will→Koga→Bruno→Lanc
     await greedyDraftThroughUI();
     const newMonName = document.querySelector('.summary-mon')?.textContent;
     ok(!!newMonName && newMonName !== dump.mon.name, `drafted a genuinely different mon this time (got: ${newMonName}, previous: ${dump.mon.name})`);
-    const { rows: rows2, claimBtn: claimBtn2 } = await runGauntletFromDraftComplete();
+    const { rows: rows2, summary: summary2 } = await runGauntletFromDraftComplete();
     ok(rows2.some((r) => r.opponent === 'Will' && r.result.includes('Won')), 'this build beats Will');
     ok(rows2.some((r) => r.opponent === 'Koga' && r.result.includes('Lost')), 'and loses to Koga, matching the exact bug report shape (won the lowest spot, lost the next one)');
-    ok(!!claimBtn2, 'a Claim button is offered for the highest spot actually reached (Will)');
-    click(claimBtn2);
-    await wait(60);
+    ok(summary2.includes('claimed'), 'the highest spot actually reached (Will) is auto-claimed, with no button click');
     ok(!document.body.textContent.includes('already own') && !document.body.textContent.includes('keptHigherTier'), 'claiming does NOT get blocked with an "already own the highest spot" style message');
     const dayDump = await fb.get('/draft/throne/day');
     ok(!!dayDump && dayDump.holderUid === 'player1' && dayDump.mon.name === newMonName, 'Will\u2019s spot is genuinely claimed by the NEW mon');
@@ -352,9 +351,8 @@ console.log('\n— The one-Pok\u00e9mon-one-throne cascade still applies when it
   await greedyDraftThroughUI();
   const monName = document.querySelector('.summary-mon')?.textContent;
   eq(monName, falknerMon.name, 'sanity check: this seed+identity combination produces the exact mon the throne was pre-seeded with');
-  const { claimBtn } = await runGauntletFromDraftComplete();
-  click(claimBtn);
-  await wait(60);
+  const { summary: falknerSummary } = await runGauntletFromDraftComplete();
+  ok(falknerSummary.includes('claimed'), 'Falkner\u2019s highest spot reached is auto-claimed, no button click needed');
   const allDump = await fb.get('/draft/throne/all');
   ok(!!allDump && allDump.holderUid === 'player10', 'All-Time is claimed by this mon');
   const dayDumpAfter = await fb.get('/draft/throne/day');
@@ -414,11 +412,9 @@ console.log('\n— #12: claimThrone verifies the write and reports failure inste
   const fb = makeFakeFB({ throneWriteSilentlyFails: true });
   const identity = { uid: 'player3', name: 'Brock' };
   const ctrl = await draftFresh(fb, identity);
-  const { claimBtn } = await runGauntletFromDraftComplete();
-  ok(!!claimBtn, 'still reaches a claimable result (the write failure is unrelated to combat)');
-  click(claimBtn);
-  await wait(60);
-  ok(document.body.textContent.includes('Could not verify'), '#12: a throne write that silently fails to persist surfaces a clear error, not a false "you took the spot" toast');
+  const { summary } = await runGauntletFromDraftComplete();
+  ok(summary.includes('Could not verify') || document.body.textContent.includes('Could not verify'),
+    '#12: a throne write that silently fails to persist surfaces a clear error in the auto-claim summary, not a false "you took the spot" message, and with no button click required to discover it');
   ctrl.destroy();
 }
 
@@ -484,9 +480,7 @@ console.log('\n— Requested: throne History screen has an Inspect button for ea
   });
   await greedyDraftThroughUI();
   const monName = document.querySelector('.summary-mon')?.textContent;
-  const { claimBtn } = await runGauntletFromDraftComplete();
-  click(claimBtn);
-  await wait(60);
+  await runGauntletFromDraftComplete(); // claim already happened automatically
 
   // Navigate to the Elite 4 status screen, then that tier's History.
   click([...q('button')].find((b) => b.textContent.includes('Elite 4 Status')));

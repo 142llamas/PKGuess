@@ -4,6 +4,44 @@ Status: ✅ done · 🔜 planned (phase noted) · ⏳ in progress
 
 ---
 
+## 2026-07-14 (background music) — per-screen music system + persistent mute toggle
+
+Scope (NEW files): docs/js/lib/music.js (1.0.0), docs/audio/music/README.md, tools/test/music.test.mjs (1.0.0). Changed: docs/js/main.js (1.5.1→1.6.0), docs/css/styles.css (1.14.7→1.14.8), tools/test/run.mjs, MANIFEST.md, CHANGE_TRACKER_v3.md.
+
+**What it does:** each game mode, plus the main menu / Pokédex / leaderboard, gets its own looping background track that follows the current screen, with a persistent 🔊/🔇 mute button in the top-left corner. The whole system is inert until the user supplies audio files — nothing plays and nothing breaks with an empty audio folder.
+
+**Design:**
+- `lib/music.js` splits into a pure, unit-tested part and a DOM part. `trackKeyForRoute(modeId)` maps a route (a mode id, or null for the menu) to a track key. Several modes deliberately SHARE a track: Draft Battle + Daily Challenge both use 'draft' (same core gameplay, different entry point), and Hotseat + Online + Cycling Road all use 'multiplayer'. single/safari/victoryroad/pokedex/leaderboard each get their own. Any unknown/future mode id falls back to 'menu' rather than throwing, so adding a mode without a music entry degrades gracefully.
+- The `MusicManager` singleton (`music`) drives two alternating `<audio>` elements for click-free crossfades, and persists a mute preference in localStorage (`pkguess:musicMuted`).
+- **Autoplay handling:** browsers block audio that starts without a user gesture. Rather than ever calling a bare `.play()` on load (which just warns to the console and does nothing), the manager waits for the first real pointerdown/keydown anywhere on the page, then starts whatever track is current. So there are no autoplay-warning console messages, and music starts the instant the player first interacts.
+- **Failure is silent:** a missing/not-yet-added mp3, or a browser whose `play()` throws synchronously, is swallowed — same "degrades gracefully without the asset" convention as the silhouette sprites. `_playCurrent()` is try/catch-wrapped for the throwing-`play()` case (investigated: DOM `dispatchEvent` already swallows exceptions thrown inside listeners, so the gesture path was safe either way, but `setRoute()`/`toggleMute()` call `_playCurrent()` directly, off the listener path, so the guard is real belt-and-suspenders there).
+
+**Wiring (main.js 1.6.0):** `music.init()` + `mountMusicToggle()` in init(); the toggle button is appended to `<body>` (a sibling of #app), not inside any screen, so it persists across every mode-swap re-render instead of being torn down on each navigation. `route()` calls `music.setRoute(modeId)` on every navigation.
+
+**CSS (styles.css 1.14.8):** `.music-toggle` — a 32×32 fixed-position speaker button, top-left, mirroring `.profile-pill-slot`'s top-right placement, with an `.is-muted` dimmed state.
+
+**Adding music (documented in docs/audio/music/README.md):** drop mp3s named menu.mp3, draft-battle.mp3, guess.mp3, safari.mp3, victory-road.mp3, multiplayer.mp3, pokedex.mp3, leaderboard.mp3 into docs/audio/music/. Nothing else needs to change.
+
+**Tests:** music.test.mjs pins the pure mapping (menu/fallback, per-mode, the deliberate sharing, and a completeness sweep that fails if a registered mode lacks a mapping or a mapped key lacks an .mp3 path). `npm test` 1111/1111 (+33 from this suite). The MusicManager's DOM/audio lifecycle was verified with a standalone jsdom probe during development — init → route changes before any gesture → a gesture that triggers a throwing `play()` → mute toggle → more route changes, with no exception escaping. `npm run test:smoke` stays green (no smoke suite imports main.js, so `music.init()` isn't exercised there; the direct jsdom probe covers that path instead).
+
+**Files changed (re-upload):** docs/js/lib/music.js (NEW), docs/audio/music/README.md (NEW), tools/test/music.test.mjs (NEW), docs/js/main.js (1.6.0), docs/css/styles.css (1.14.8), tools/test/run.mjs, MANIFEST.md, CHANGE_TRACKER_v3.md.
+
+---
+
+## 2026-07-14 (auto-claim) — Elite-4 "Claim" button removed; claiming is now automatic
+
+Scope: docs/js/modes/draftbattle.js (1.15.9→1.16.0), tools/test/throne.smoke.mjs.
+
+**The bug:** the Gauntlet Results screen showed a separate "👑 Claim the Xth spot" button after a successful run. It looked like it should follow automatically from winning, but it didn't — a player who reached a new spot and didn't think to click that second button simply never got credit for the run, with nothing on screen to signal that anything more was needed.
+
+**The fix:** there's no real choice being offered by that button — reaching the spot IS the claim — so claiming the highest tier actually reached now happens automatically, once, at the moment the gauntlet results are computed (before the results screen ever renders). Its outcome (claimed outright / claimed-and-bumped-someone / already held a higher spot so this one stays vacant / save failed) is folded directly into the one summary line instead of a separate post-claim toast. The old primary "Claim" button slot on the results screen is now the "📤 Share" button; My Build / Elite 4 Status / Draft Again / Main Menu remain as before. Returning to the results screen after watching a replay reuses the same claim result rather than claiming a second time.
+
+**Tests:** every throne.smoke.mjs scenario that used to `click(claimBtn)` now instead reads the summary line and the persisted throne/progress values directly (no click needed), and a new assertion confirms the old "Claim" button no longer exists. Revert-checked: disabling the auto-claim call fails 4 assertions outright and then crashes the very next scenario (which assumes a throne was actually claimed) — there's no quiet path back to the old silent-failure behavior. `npm test` unaffected (1078/1078, this is UI-only); `npm run test:smoke` all 10 suites green.
+
+**Files changed (re-upload):** docs/js/modes/draftbattle.js (1.16.0), tools/test/throne.smoke.mjs, MANIFEST.md, CHANGE_TRACKER_v3.md.
+
+---
+
 ## 2026-07-14 (bug fixes) — Move-mechanics fixes from real battles + weighted ramp AI + Draft Again button
 
 Scope: docs/js/sim.js (2.11.0→2.12.0), docs/js/modes/draftbattle.js (1.15.8→1.15.9), tools/test/sim.test.mjs (1.7.0→1.8.0), tools/test/throne.smoke.mjs. Prompted by two real gauntlet battle logs (Granbull vs Will's Poliwag; Pidgeot vs Poliwag) where weather "popped up" spontaneously, Poliwag "braced itself" for no reason, and Protect blocked Curse. Diagnosed by dumping raw sim event streams — the NPC legitimately had those moves; the log just hid it.

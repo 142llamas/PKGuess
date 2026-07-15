@@ -18,8 +18,9 @@ import identity from './identity.test.mjs';
 import catchTracker from './catch-tracker.test.mjs';
 import share from './share.test.mjs';
 import leaderboardData from './leaderboard-data.test.mjs';
+import music from './music.test.mjs';
 
-const SUITES = [['sim', sim], ['sim-status', simStatus], ['draft', draft], ['engine', engine], ['mp-rules', mprules], ['identity', identity], ['catch-tracker', catchTracker], ['share', share], ['leaderboard-data', leaderboardData]];
+const SUITES = [['sim', sim], ['sim-status', simStatus], ['draft', draft], ['engine', engine], ['mp-rules', mprules], ['identity', identity], ['catch-tracker', catchTracker], ['share', share], ['leaderboard-data', leaderboardData], ['music', music]];
 
 const t = makeHarness();
 for (const [name, fn] of SUITES) {
