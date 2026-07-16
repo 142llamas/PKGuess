@@ -4,6 +4,22 @@ Status: ✅ done · 🔜 planned (phase noted) · ⏳ in progress
 
 ---
 
+## 2026-07-15 (bug fix) — same Pokémon holding two Elite-4 spots (stale-throne resurrection)
+
+**Report:** the exact same player mon (Tom's Poliwag — same species, same moves, same stats) was holding BOTH Karen and Bruno at once. Not the "same player holds multiple spots" case (that's fine and expected) — literally the same drafted mon on two rungs. Feared to recur at the yearly full-E4 reset.
+
+**Root cause:** `claimThrone()` read the RAW `/draft/throne` Firebase data to decide the same-mon guard and to feed the down-cascade. But a record whose stored `period` has rolled over (e.g. last year's `year` holder after Jan 1) still physically sits in the database until something overwrites it — even though the game correctly DISPLAYS that spot as an NPC (that's what `resolveThrone` does when the periods don't match). Reading raw, those stale rolled-over records were treated as live player holders. So when a new champion took a spot that had a stale record sitting on it, the down-cascade "displaced" that stale mon and pushed it onto the next rung down — rewriting it with the CURRENT period, which resurrected it as a genuinely-current holder on a second spot. That's how one Poliwag ended up current on two rungs.
+
+**Fix (draftbattle.js 1.17.1):** `claimThrone()` now period-resolves the throne map before using it — the same rule `resolveThrone` already uses for display. Any record whose stored period ≠ the current period for its tier is excluded (treated as the NPC it already is). Both the same-mon guard and the down-cascade now see only genuinely-current player holders, so a rolled-over record can never be matched or resurrected. This means the same drafted mon can no longer occupy two spots — while a player continuing to hold multiple spots with DIFFERENT mons remains perfectly fine.
+
+**Tests (throne.smoke.mjs):** a new scenario pre-seeds a stale-period record at the top spot, sweeps to claim it, and asserts the stale mon holds ZERO current spots afterward (isn't cascaded onto a lower rung with a fresh period). Revert-checked: on the raw-read pre-fix code it fails with the stale mon resurrected onto `year` ("found: [year]"), reproducing the exact same-mon-two-spots symptom; on the fixed code it passes. Also fixed a latent test-harness flake exposed today: `discoverSeeds()` scanned under player name "Scan" while the consuming scenarios run as "Ash", and the gauntlet battle seed bakes in the challenger's "<name>'s <species>" — so a discovered win/lose seed could flip its Koga result under the real name. Discovery now scans as "Ash" to match. `npm test` 1165/1165; `npm run test:smoke` all green.
+
+**Note:** like the earlier cascade fix, this corrects future writes but cannot retroactively clean up any duplicate already sitting in the live database from the old bug — an existing duplicate will need to be cleared manually (or will resolve on its own at the next reset for that spot).
+
+**Files changed (re-upload):** docs/js/modes/draftbattle.js (1.17.1), tools/test/throne.smoke.mjs, MANIFEST.md, CHANGE_TRACKER_v3.md.
+
+---
+
 ## 2026-07-15 (two bug fixes + E4 rename) — Elite-4 down-cascade restored; multi-use clue exhaustion no longer erases earlier reveals; Karen/Lance rename
 
 ### Bug 1 — Elite-4 down-cascade was erasing the defeated holder instead of pushing them down

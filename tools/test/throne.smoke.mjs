@@ -193,7 +193,16 @@ async function captureMon(seed, identity) {
 // Scan seeds for (a) one that sweeps all five tiers and (b) a DIFFERENT one
 // that wins Will / loses Koga. Deterministic per date; see the big note above.
 async function discoverSeeds({ maxSeed = 80 } = {}) {
-  const SCAN_ID = { uid: 'seedscan', name: 'Scan' };
+  // The gauntlet battle seed bakes in the challenger mon's display name, which
+  // is "<playerName>'s <species>" (draft.js line ~358). So a seed's win/lose
+  // verdict is only reproducible under the SAME player name it was discovered
+  // with. The scenarios that consume WINNING_SEED / WIN_THEN_LOSE_SEED all run
+  // as "Ash", so discovery must scan as "Ash" too — scanning under a different
+  // name (previously "Scan") produced a different battle seed, so a seed found
+  // to lose-to-Koga during discovery could actually win under "Ash", flaking
+  // the "matches the exact bug report shape" scenario on dates where seed 4's
+  // Koga matchup happens to differ between the two names.
+  const SCAN_ID = { uid: 'seedscan', name: 'Ash' };
   let sweepSeed = null, sweepMon = null, wl = null;
   for (let s = 1; s <= maxSeed; s++) {
     document.getElementById('app').innerHTML = '';
@@ -335,9 +344,14 @@ console.log('\n— The one-Pok\u00e9mon-one-throne cascade still applies when it
   // working automatically whenever discoverSeeds() picks a new WINNING_SEED.
   const falknerMon = await captureMon(WINNING_SEED, identity);
   ok(!!falknerMon && !!falknerMon.name && !!falknerMon.baseStats, 'captured the deterministic winning mon for pre-seeding');
+  // Pre-seed Will as if this same mon CURRENTLY holds it — the period must be
+  // the current 'day' key, otherwise the record has rolled over and the game
+  // (correctly) treats it as an NPC, not a live hold (see draftbattle.js
+  // 1.17.1: claimThrone now period-resolves the throne map, so a stale-period
+  // record no longer counts as the mon still holding that spot).
   await fb._forceSet('/draft/throne/day', {
     mon: falknerMon,
-    holderUid: 'player10', holderName: 'Falkner', takenAt: Date.now(), period: 'day-preexisting',
+    holderUid: 'player10', holderName: 'Falkner', takenAt: Date.now(), period: centralPeriodKey('day'),
   });
 
   const ctrl = await withDraftSeed(WINNING_SEED, async () => {
@@ -563,6 +577,54 @@ console.log('\n— Down-cascade: beating human holders pushes them DOWN one rung
   const survivingUids = [all, year, month, day].filter(Boolean).map((r) => r.holderUid);
   ok(survivingUids.includes('pLance') && survivingUids.includes('pKaren') && survivingUids.includes('pWill'),
     'all three pre-existing human holders still exist somewhere on the ladder — none were erased');
+  ctrl.destroy();
+}
+
+console.log('\n— A stale (rolled-over) throne record must NOT be resurrected onto a second spot by the cascade —');
+{
+  // The reported bug: the SAME mon holding two spots (e.g. one player's Poliwag
+  // on both Karen and Bruno), which "could happen again every year at reset."
+  // Root cause: claimThrone read the RAW throne data, so a record whose period
+  // had ROLLED OVER (displays as an NPC now, but the old player record still
+  // physically sits in the DB) was treated as a live player holder. When a new
+  // champ then TAKES that very spot, the stale holder was "displaced" and the
+  // down-cascade pushed it onto the next spot down — rewritten with the CURRENT
+  // period — resurrecting the same mon onto a second rung.
+  //
+  // Trigger precisely: a stale record sits at 'all' (Lance, the TOP spot). A mon
+  // that sweeps to the top (WINNING_SEED) claims 'all'. Pre-fix, the stale holder
+  // at 'all' is read as live and "displaced" by the sweeper, so the down-cascade
+  // pushes it to 'year' with a fresh period — resurrecting it onto a second rung.
+  const fb = makeFakeFB();
+  const identity = { uid: 'newDrafter', name: 'Tom' };
+  const stalePoliwag = { name: 'Poliwag', types: ['Water'], baseStats: { hp: 40, atk: 50, def: 40, spa: 40, spd: 40, spe: 90 }, moves: [] };
+  await fb._forceSet('/draft/throne/all', {
+    mon: stalePoliwag, holderUid: 'tomOld', holderName: 'Tom', takenAt: 1, period: 'STALE-not-all',
+  });
+
+  document.getElementById('app').innerHTML = '';
+  const ctrl = await withDraftSeed(WINNING_SEED, async () => {
+    const c = createDraftBattle({
+      mount: document.getElementById('app'), config: {}, data: gen2,
+      params: { variant: 'freeplay', _getFirebase: async () => fb, _getIdentity: async () => identity },
+      onExit: () => {},
+    });
+    await wait(50);
+    return c;
+  });
+  await greedyDraftThroughUI();
+  await runGauntletFromDraftComplete(); // sweeps, claims 'all'
+
+  const all = await fb.get('/draft/throne/all');
+  const year = await fb.get('/draft/throne/year');
+  const isCurrentPoliwag = (rec, key) => !!(rec && rec.holderUid && rec.mon && rec.mon.name === 'Poliwag' && rec.period === centralPeriodKey(key));
+  ok(!!all && all.holderUid === 'newDrafter', 'the sweeping mon genuinely claims the top (all) spot');
+  ok(!isCurrentPoliwag(year, 'year'), 'the stale Poliwag from the taken top spot is NOT resurrected onto the next rung down (year) with a fresh period — the exact two-spots-one-mon bug');
+  // And it is nowhere current on the ladder at all:
+  const allTiers = {};
+  for (const k of ['all', 'year', 'month', 'week', 'day']) allTiers[k] = await fb.get(`/draft/throne/${k}`);
+  const currentPoliwagSpots = Object.keys(allTiers).filter((k) => isCurrentPoliwag(allTiers[k], k));
+  ok(currentPoliwagSpots.length === 0, `the stale Poliwag holds ZERO current spots (found: ${JSON.stringify(currentPoliwagSpots)}) — rolled-over records stay rolled-over`);
   ctrl.destroy();
 }
 

@@ -1,8 +1,21 @@
 /**
  * @file        js/modes/draftbattle.js
- * @version     1.17.0
+ * @version     1.17.1
  * @updated     2026-07-15
  * @changelog
+ *   1.17.1 — FIXED a bug where the SAME Pokémon could end up holding two Elite-4
+ *           spots at once (e.g. one player's Poliwag on both Karen and Bruno),
+ *           surfacing especially around a period reset. claimThrone() read the
+ *           RAW /draft/throne data to decide the same-mon guard and to feed the
+ *           down-cascade, but a record whose stored `period` has rolled over
+ *           displays as an NPC while its old player record physically lingers
+ *           in the DB. Those stale records were being treated as live player
+ *           holders — so a rolled-over mon could be cascaded down onto a lower
+ *           NPC rung and rewritten with the CURRENT period, resurrecting it onto
+ *           a second spot. claimThrone() now period-resolves the throne map
+ *           first (same rule resolveThrone uses for display), so only genuinely
+ *           current holders count as player-held; rolled-over records are
+ *           treated as the NPCs they already are.
  *   1.17.0 — Two changes. (1) FIXED the Elite-4 down-cascade: beating the
  *           standing holder of a spot now pushes that DEFEATED player down one
  *           rung (chaining through further player-held rungs, stopping at the
@@ -982,11 +995,27 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
       // The DECISION (who ends up where) is a pure function so it's fully
       // unit-testable; this just performs the resulting reads/writes.
       const sameMon = (a, b) => !!a && !!b && a.name === b.name && JSON.stringify(a.baseStats) === JSON.stringify(b.baseStats);
-      let existingThrones = null;
-      try { existingThrones = await fb.get('/draft/throne'); } catch { existingThrones = null; }
-      const otherKey = existingThrones
-        ? Object.keys(existingThrones).find((k) => k !== tier.key && existingThrones[k] && sameMon(existingThrones[k].mon, rec.mon))
-        : null;
+      let rawThrones = null;
+      try { rawThrones = await fb.get('/draft/throne'); } catch { rawThrones = null; }
+      // CRITICAL: use a PERIOD-RESOLVED view, not the raw Firebase data. A stored
+      // record whose `period` no longer matches the current period for its tier
+      // has ROLLED OVER — it displays as (and is) an NPC now, even though the old
+      // player record physically lingers in the DB until overwritten. Treating
+      // those stale records as live player holders is what let a rolled-over mon
+      // get matched by sameMon OR cascaded down onto a lower NPC rung (writing it
+      // back with a fresh current period) — resurrecting it so the SAME mon
+      // appeared on two spots at once. Resolve first so only genuinely-current
+      // holders count as player-held here.
+      const existingThrones = {};
+      if (rawThrones) {
+        for (const k of Object.keys(rawThrones)) {
+          const v = rawThrones[k];
+          if (v && v.holderUid && v.period === centralPeriodKey(k)) existingThrones[k] = v;
+          // else: vacant / NPC / rolled-over → intentionally omitted (counts as NPC-held)
+        }
+      }
+      const otherKey = Object.keys(existingThrones)
+        .find((k) => k !== tier.key && existingThrones[k] && sameMon(existingThrones[k].mon, rec.mon)) || null;
 
       if (otherKey) {
         const decision = resolveThroneCascade({
@@ -1023,7 +1052,7 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
       const cascadeWrites = resolveDefeatedCascade({
         takenTierKey: tier.key,
         playerRecord: { holderUid: rec.holderUid, holderName: rec.holderName, mon: rec.mon },
-        thrones: existingThrones || {},
+        thrones: existingThrones,
         tierKeysHighToLow,
       });
       // Verify the player's own spot landed (mirrors the prior verifiedSetThrone
