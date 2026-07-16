@@ -1,8 +1,14 @@
 /**
  * @file        js/modes/single.js
- * @version     1.2.5
- * @updated     2026-07-14
+ * @version     1.2.6
+ * @updated     2026-07-15
  * @changelog
+ *    1.2.6 — Clue-exhaustion display fix: an exhausted multi-use clue (weakness/
+ *            resistance/moveset/etc.) now still shows every real value it
+ *            revealed, instead of collapsing to only the "No more X to reveal"
+ *            note — which had been visually erasing the values the player already
+ *            paid to see. Filters the sentinel out of the history and re-renders
+ *            the real values with the note as a small footer.
  *   1.2.5 — Plays the new "game start" SFX (music.js 2.0.0's
  *           `music.playGameStart()`) when the "Start game" button is actually
  *           clicked (beginRound()) — layered over whatever menu/guess music
@@ -351,7 +357,24 @@ export function createSingle({ mount, config, data, params = {}, onExit }) {
     }
     if (round.clueExhausted(clue)) {
       card.classList.add('unavailable');
-      card.append(top(clue.name), note('clue-unavail-note', '\u2717 ' + (hist[hist.length - 1] || 'Exhausted')));
+      // A multi-use clue that's now exhausted must STILL show every real value
+      // it revealed — previously this collapsed to just hist[last], which for a
+      // multi-use clue is the "No more X to reveal" sentinel, visually erasing
+      // the weaknesses/resistances/moves the player already paid to see. Filter
+      // the sentinel out and render the real history, then add a small note.
+      const realVals = hist.filter((v) => !String(v).startsWith('No more'));
+      if (isMultiUse && realVals.length) {
+        card.classList.add('revealed');
+        Object.assign(card.style, { background: cat.bg, borderColor: cat.color });
+        card.append(top(clue.name, null, cat.color));
+        for (let i = 0; i < realVals.length; i++) {
+          card.append(el('div', { class: 'clue-revealed-value', style: { fontSize: i ? '11px' : '12px', opacity: i ? '0.8' : '1' } },
+            (i ? `#${i + 1} ` : '') + realVals[i]));
+        }
+        card.append(note('clue-limit-note', '\u2717 ' + (hist[hist.length - 1] || 'Exhausted')));
+      } else {
+        card.append(top(clue.name), note('clue-unavail-note', '\u2717 ' + (hist[hist.length - 1] || 'Exhausted')));
+      }
       return card;
     }
     if (!round.clueAvailable(clue)) {

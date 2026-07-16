@@ -18,7 +18,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { DraftSession, autoDraft, autoDraftScaled, resolveThroneCascade, TIER_RANK, isTierUnlocked, nextProgressRank, buildSpeciesList, buildLearnsetMap } from '../../docs/js/draft.js';
+import { DraftSession, autoDraft, autoDraftScaled, resolveThroneCascade, resolveDefeatedCascade, TIER_RANK, isTierUnlocked, nextProgressRank, buildSpeciesList, buildLearnsetMap } from '../../docs/js/draft.js';
 
 const load = (rel) => JSON.parse(readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8'));
 const gen2 = load('../../docs/data/gen2.json');
@@ -257,6 +257,64 @@ export default function (t) {
     t.eq(d.action, 'claimNewVacateOld', 'winning All-Time while holding Lance (year) claims All-Time and vacates Lance \u2014 All-Time outranks every numbered stage');
     t.eq(d.vacatedTier, 'year', 'Lance (year) is correctly identified as the vacated (lower) tier');
   }
+
+  t.section('draft.js — resolveDefeatedCascade: beating the standing holder pushes them DOWN one rung');
+  {
+    const HL = ['all', 'year', 'month', 'week', 'day']; // Lance, Karen, Bruno, Koga, Will
+    const P = (u, n) => ({ holderUid: u, holderName: n, mon: { name: n, baseStats: { hp: 1 } } });
+    const me = P('me', 'Me');
+
+    // The canonical example: Lance(all), Karen(year), Will(day) held by PLAYERS;
+    // Bruno(month), Koga(week) held by AI. A new draft takes the top (all). The
+    // all-holder drops to year; the year-holder drops to month (overwriting the
+    // AI there); the cascade STOPS at the (now formerly) AI-held month, so the
+    // week AI and the day PLAYER are both untouched.
+    {
+      const thrones = {
+        all: P('uLance', 'LanceP'), year: P('uKaren', 'KarenP'), month: null, week: null, day: P('uWill', 'WillP'),
+      };
+      const w = resolveDefeatedCascade({ takenTierKey: 'all', playerRecord: me, thrones, tierKeysHighToLow: HL });
+      t.eq(w.all.holderUid, 'me', 'the drafter takes the top (all) spot');
+      t.eq(w.year.holderName, 'LanceP', 'the displaced top-holder drops one rung to year');
+      t.eq(w.month.holderName, 'KarenP', 'the displaced year-holder drops one rung to month, overwriting the AI there');
+      t.ok(!('week' in w), 'the AI-held week spot is untouched -- the cascade already stopped at the AI-held month');
+      t.ok(!('day' in w), 'the day PLAYER stays put -- below where the cascade stopped, even though the drafter beat them climbing');
+    }
+
+    // Full player chain: all five held by players, take the top -> everyone
+    // shifts down one and the bottom player falls off the ladder entirely.
+    {
+      const thrones = { all: P('u5', 'P5'), year: P('u4', 'P4'), month: P('u3', 'P3'), week: P('u2', 'P2'), day: P('u1', 'P1') };
+      const w = resolveDefeatedCascade({ takenTierKey: 'all', playerRecord: me, thrones, tierKeysHighToLow: HL });
+      t.eq(w.all.holderUid, 'me', 'drafter takes top');
+      t.eq(w.year.holderName, 'P5', 'P5 -> year');
+      t.eq(w.month.holderName, 'P4', 'P4 -> month');
+      t.eq(w.week.holderName, 'P3', 'P3 -> week');
+      t.eq(w.day.holderName, 'P2', 'P2 -> day');
+      const survivors = Object.values(w).filter(Boolean).map((r) => r.holderName);
+      t.ok(!survivors.includes('P1'), 'P1, pushed off the bottom rung, falls off the ladder entirely (appears nowhere)');
+    }
+
+    // Taking a MIDDLE spot only cascades at/below it; higher spots untouched.
+    {
+      const thrones = { all: P('u5', 'P5'), year: P('u4', 'P4'), month: P('u3', 'P3'), week: null, day: P('u1', 'P1') };
+      const w = resolveDefeatedCascade({ takenTierKey: 'year', playerRecord: me, thrones, tierKeysHighToLow: HL });
+      t.ok(!('all' in w), 'a spot ABOVE the taken one is never touched');
+      t.eq(w.year.holderUid, 'me', 'drafter takes the middle (year) spot');
+      t.eq(w.month.holderName, 'P4', 'displaced year-holder drops to month');
+      t.eq(w.week.holderName, 'P3', 'the month-holder P3 (a player) cascades further down onto the AI-held week, and the chain stops there');
+      t.ok(!('day' in w), 'below where the cascade stopped is untouched');
+    }
+
+    // Taking an AI-held spot: nobody to displace, so it is a plain claim.
+    {
+      const thrones = { all: null, year: P('u4', 'P4'), month: null, week: null, day: null };
+      const w = resolveDefeatedCascade({ takenTierKey: 'all', playerRecord: me, thrones, tierKeysHighToLow: HL });
+      t.eq(w.all.holderUid, 'me', 'drafter takes the (previously AI-held) top spot');
+      t.eq(Object.keys(w).length, 1, 'no cascade -- only the taken spot is written, everything else untouched');
+    }
+  }
+
 
   t.section('draft.js — nextProgressRank (#12/#13): monotonic, never decreases');
   {

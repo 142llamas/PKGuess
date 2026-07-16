@@ -1,8 +1,11 @@
 /**
  * @file        js/modes/multiplayer.js
- * @version     1.3.5
- * @updated     2026-07-14
+ * @version     1.3.6
+ * @updated     2026-07-15
  * @changelog
+ *    1.3.6 — Clue-exhaustion display fix (see single.js 1.2.6): an exhausted
+ *            multi-use clue keeps showing its real revealed values instead of
+ *            collapsing to only the "No more..." note.
  *   1.3.5 — Plays the new "game start" SFX (music.js 2.0.0's
  *           `music.playGameStart()`) when "Start Multiplayer" is actually
  *           clicked (startGame()) — layered over whatever music is already
@@ -379,9 +382,24 @@ export function createMultiplayer({ mount, config, data, params = {}, onExit }) 
     // into a bare "unavailable" card — mirrors single.js's exhaustion display.
     if (isMultiUse && r.clueExhausted(clue)) {
       card.classList.add('unavailable');
-      card.append(el('div', { class: 'clue-top' }, el('span', { class: 'clue-btn-name' }, clue.name),
-        el('span', { class: 'clue-cost-badge', style: { background: '#555' } }, `${clue.cost}pt`)),
-        el('div', { class: 'clue-unavail-note' }, '\u2717 ' + (hist[hist.length - 1] || 'Exhausted')));
+      // Keep showing every real value revealed — filtering the "No more X"
+      // sentinel — rather than collapsing to just hist[last] (which IS that
+      // sentinel), which visually erased the moves/weaknesses already paid for.
+      const realVals = hist.filter((v) => !String(v).startsWith('No more'));
+      if (realVals.length) {
+        card.classList.add('revealed');
+        Object.assign(card.style, { background: cat.bg, borderColor: cat.color });
+        card.append(el('div', { class: 'clue-top' }, el('span', { class: 'clue-btn-name', style: { color: cat.color } }, clue.name)));
+        for (let i = 0; i < realVals.length; i++) {
+          card.append(el('div', { class: 'clue-revealed-value', style: { fontSize: i ? '11px' : '12px', opacity: i ? '0.8' : '1' } },
+            (i ? `#${i + 1} ` : '') + realVals[i]));
+        }
+        card.append(el('div', { class: 'clue-limit-note' }, '\u2717 ' + (hist[hist.length - 1] || 'Exhausted')));
+      } else {
+        card.append(el('div', { class: 'clue-top' }, el('span', { class: 'clue-btn-name' }, clue.name),
+          el('span', { class: 'clue-cost-badge', style: { background: '#555' } }, `${clue.cost}pt`)),
+          el('div', { class: 'clue-unavail-note' }, '\u2717 ' + (hist[hist.length - 1] || 'Exhausted')));
+      }
       return card;
     }
     if (isExcluded || !r.clueAvailable(clue)) {

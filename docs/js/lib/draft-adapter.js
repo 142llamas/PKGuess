@@ -1,8 +1,9 @@
 /**
  * @file        js/lib/draft-adapter.js
- * @version     1.3.0
- * @updated     2026-07-05
+ * @version     1.4.0
+ * @updated     2026-07-15
  * @changelog
+ *   1.4.0 — re-export resolveDefeatedCascade (down-the-ladder bump).
  *   1.3.0 — re-export isTierUnlocked + nextProgressRank (#12/#13).
  *   1.2.0 — re-export resolveThroneCascade + TIER_RANK (#14a).
  *   1.1.0 — re-export autoDraftScaled (#7).
@@ -17,6 +18,7 @@ export {
   autoDraft,
   autoDraftScaled,
   resolveThroneCascade,
+  resolveDefeatedCascade,
   TIER_RANK,
   isTierUnlocked,
   nextProgressRank,

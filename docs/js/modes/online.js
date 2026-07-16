@@ -1,8 +1,11 @@
 /**
  * @file        docs/js/modes/online.js
- * @version     1.7.1
- * @updated     2026-07-14
+ * @version     1.7.2
+ * @updated     2026-07-15
  * @changelog
+ *    1.7.2 — Clue-exhaustion display fix (see single.js 1.2.6): an exhausted
+ *            multi-use clue keeps showing its real revealed values instead of
+ *            collapsing to only the "No more..." note.
  *   1.7.1 — Plays the new "game start" SFX (music.js 2.0.0's
  *           `music.playGameStart()`) when the leader's "Start game" button
  *           actually kicks off round 1 — layered over whatever music is
@@ -533,6 +536,17 @@ export function createOnline({ mount, config, data, params = {}, onExit }) {
         revealedValueEl);
     }
     if (isMultiUse && eng.round.clueExhausted(clue)) {
+      // Keep every real revealed value visible — filter the "No more X" sentinel
+      // rather than collapsing to just h[last] (which IS the sentinel), which
+      // erased the moves/weaknesses the player already paid to see.
+      const realVals = h.filter((v) => !String(v).startsWith('No more'));
+      if (realVals.length) {
+        const card = el('div', { class: 'online-clue revealed' },
+          el('div', { class: 'online-clue-top' }, el('span', { class: 'online-clue-name' }, clue.name), el('span', { class: 'clue-cost-badge' }, `${clue.cost}pt`)));
+        for (let i = 0; i < realVals.length; i++) card.append(el('div', { class: 'clue-revealed-value', style: { fontSize: i ? '11px' : '12px', opacity: i ? '0.8' : '1' } }, (i ? `#${i + 1} ` : '') + realVals[i]));
+        card.append(el('div', { class: 'clue-limit-note' }, '\u2717 ' + (h[h.length - 1] || 'Exhausted')));
+        return card;
+      }
       return el('div', { class: 'online-clue disabled' },
         el('div', { class: 'online-clue-top' }, el('span', { class: 'online-clue-name' }, clue.name), el('span', { class: 'clue-cost-badge' }, `${clue.cost}pt`)),
         el('div', { class: 'clue-unavail-note' }, '\u2717 ' + (h[h.length - 1] || 'Exhausted')));

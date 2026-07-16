@@ -1,8 +1,17 @@
 /**
  * @file        docs/js/draft.js   (PokeGuess — Draft Battle engine)
- * @version     0.9.4
- * @updated     2026-07-14
+ * @version     0.10.0
+ * @updated     2026-07-15
  * @changelog
+ *   0.10.0 — Added resolveDefeatedCascade(): the down-the-ladder bump for a
+ *           normal gauntlet claim. When a player takes a spot, the DEFEATED
+ *           standing holder is pushed down one rung, chaining through any
+ *           further player-held rungs below (each shifts down one), while
+ *           NPC-held rungs absorb the cascade and a human pushed off the
+ *           bottom falls off the ladder. This is the "cascade the previous
+ *           champion down" behavior that the claim path never actually
+ *           performed — resolveThroneCascade only ever handled the separate
+ *           one-mon-two-spots case. Pure / unit-tested.
  *   0.9.4 — Hidden Power type selection: Hidden Power is no longer stripped
  *           from learnsets; when it is offered on a draft card it is assigned a
  *           random Gen-2-legal elemental type (any type except Normal) and
@@ -431,6 +440,60 @@ export function resolveThroneCascade({ newTierKey, oldTierKey, tierRank, defeate
 }
 
 export const TIER_RANK = { day: 1, week: 2, month: 3, year: 4, all: 5 };
+
+/**
+ * Down-the-ladder cascade for a normal gauntlet claim: the player takes
+ * `takenTierKey`, and whoever was HOLDING that spot (if a real player, not an
+ * NPC) is pushed DOWN exactly one rung. If that lower rung was itself held by a
+ * real player, that player is pushed down too, and so on — a chain of human
+ * holders each shifting down one spot. An NPC-held rung (no persisted holder)
+ * ABSORBS the cascade: a displaced player landing there simply overwrites the
+ * NPC, and the chain stops (there was no human there to displace further). A
+ * human pushed off the bottom rung falls off the ladder entirely.
+ *
+ * This is deliberately SEPARATE from resolveThroneCascade (#14a), which handles
+ * the different case of one Pokémon trying to hold two spots at once. This one
+ * is about the DEFEATED standing holder(s), and only ever moves players DOWN.
+ *
+ * Pure: no Firebase, no DOM. Takes the current throne map as plain data and
+ * returns the set of writes to apply.
+ *
+ * @param {object} args
+ * @param {string} args.takenTierKey        the tier the player is claiming
+ * @param {object} args.playerRecord        {holderUid, holderName, mon} to install at takenTierKey
+ * @param {Record<string, object|null>} args.thrones  current holders by tier key; a value is a real
+ *        player only if it has a truthy holderUid (NPC/vacant spots are null/absent or lack holderUid)
+ * @param {string[]} args.tierKeysHighToLow tier keys ordered HIGHEST first (e.g. ['all','year',...,'day'])
+ * @returns {Record<string, object|null>} writes to apply: tierKey -> record to set, or null to clear
+ *          (clearing lets that tier fall back to a fresh NPC). Only changed tiers are included.
+ */
+export function resolveDefeatedCascade({ takenTierKey, playerRecord, thrones, tierKeysHighToLow }) {
+  const writes = {};
+  const isPlayerHeld = (rec) => !!(rec && rec.holderUid);
+  const asHolder = (rec) => ({ holderUid: rec.holderUid, holderName: rec.holderName || 'A challenger', mon: rec.mon });
+
+  // The chain starts with whoever the player just displaced from the taken spot.
+  let displaced = isPlayerHeld(thrones[takenTierKey]) ? asHolder(thrones[takenTierKey]) : null;
+  // Install the player at the taken spot.
+  writes[takenTierKey] = asHolder(playerRecord);
+
+  // Walk strictly downward from the taken tier, carrying the displaced holder.
+  const startIdx = tierKeysHighToLow.indexOf(takenTierKey);
+  for (let i = startIdx + 1; i < tierKeysHighToLow.length; i++) {
+    if (!displaced) break; // nothing left to place — the rest of the ladder is untouched
+    const key = tierKeysHighToLow[i];
+    const occupant = writes[key] !== undefined ? writes[key] : thrones[key];
+    const occupantIsPlayer = isPlayerHeld(occupant);
+    // Place the carried player here…
+    writes[key] = displaced;
+    // …and carry whoever WAS here only if they were a real player (NPCs absorb
+    // the cascade and just get overwritten — no further push).
+    displaced = occupantIsPlayer ? asHolder(occupant) : null;
+  }
+  // If `displaced` is still set here, a human was pushed off the bottom rung —
+  // they simply fall off the ladder (no write needed; they're gone).
+  return writes;
+}
 
 /**
  * #12/#13 — throne unlock gate, corrected.

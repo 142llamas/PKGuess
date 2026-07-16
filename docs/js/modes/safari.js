@@ -1,8 +1,11 @@
 /**
  * @file        js/modes/safari.js
- * @version     1.5.1
- * @updated     2026-07-14
+ * @version     1.5.2
+ * @updated     2026-07-15
  * @changelog
+ *    1.5.2 — Clue-exhaustion display fix (see single.js 1.2.6): an exhausted
+ *            multi-use clue keeps showing its real revealed values instead of
+ *            collapsing to only the "No more..." note.
  *   1.5.1 — Plays the new "game start" SFX (music.js 2.0.0's
  *           `music.playGameStart()`) when "Enter the Safari Zone" is actually
  *           clicked (begin()) — layered over whatever music is already
@@ -254,8 +257,19 @@ export function createSafari({ mount, config, data, params = {}, onExit }) {
     }
     if (round.clueExhausted(clue)) {
       card.classList.add('unavailable');
-      card.append(el('div', { class: 'clue-top' }, el('span', { class: 'clue-btn-name' }, clue.name)),
-        el('div', { class: 'clue-unavail-note' }, '\u2717 ' + (hist[hist.length - 1] || 'Exhausted')));
+      // Keep every real revealed value visible — filter the "No more X" sentinel
+      // rather than collapsing to just hist[last] (which IS the sentinel).
+      const realVals = hist.filter((v) => !String(v).startsWith('No more'));
+      if (isMulti && realVals.length) {
+        card.classList.add('revealed');
+        Object.assign(card.style, { background: cat.bg, borderColor: cat.color });
+        card.append(el('div', { class: 'clue-top' }, el('span', { class: 'clue-btn-name', style: { color: cat.color } }, clue.name)));
+        for (let i = 0; i < realVals.length; i++) card.append(el('div', { class: 'clue-revealed-value', style: { fontSize: i ? '11px' : '12px', opacity: i ? '0.8' : '1' } }, (i ? `#${i + 1} ` : '') + realVals[i]));
+        card.append(el('div', { class: 'clue-limit-note' }, '\u2717 ' + (hist[hist.length - 1] || 'Exhausted')));
+      } else {
+        card.append(el('div', { class: 'clue-top' }, el('span', { class: 'clue-btn-name' }, clue.name)),
+          el('div', { class: 'clue-unavail-note' }, '\u2717 ' + (hist[hist.length - 1] || 'Exhausted')));
+      }
       return card;
     }
     if (!round.clueAvailable(clue) || (clue.requiresClueId != null && !(clue.requiresClueId in s.revealedClues))) {

@@ -176,10 +176,57 @@ await run('pokedex', '../../docs/js/modes/pokedex.js', 'createPokedex', (m) => {
   localStorage.removeItem('pokeGuess_catchTracker');
 }
 
-// #5 — leaderboard score multiplier: a deterministic win (rng:()=>0 always
-// picks gen2.json's pokedex[0] = Bulbasaur as the mystery, so it can be
-// guessed correctly on the very first action) on the HARDEST settings
-// combination must show "raw \u00d7 multiplier = final" on the summary screen,
+// Bug: revealing a multi-use clue (weakness/resistance/moveset/etc.) to the
+// point where it shows "No more of this type to reveal" was ERASING the earlier
+// values of that same clue that had already been revealed. Drive single.js:
+// reveal the "Reveal One Weakness" clue over and over until it's exhausted,
+// then confirm the card still shows the real weaknesses it revealed (more than
+// just the single "No more..." note).
+{
+  const mod = await import('../../docs/js/modes/single.js');
+  const mount = mk();
+  const clickEl = (n) => n && n.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  // rng:()=>0 makes Bulbasaur the mystery deterministically — Grass/Poison, so
+  // it has several weaknesses (Fire, Ice, Flying, Psychic), a comfortable pool
+  // to reveal more than one before exhausting.
+  const ctrl = mod.createSingle({ mount, config: {}, data: gen2, params: { gen: 2, modeId: 'single', rng: () => 0 } , onExit: () => {} });
+  await tick();
+  // Custom high-budget game so points never run out before the clue exhausts.
+  // Fall back to just starting the default game if the custom UI isn't present.
+  clickEl([...mount.querySelectorAll('button')].find((b) => /Start game/i.test(b.textContent)));
+  await tick();
+
+  const weaknessCard = () => [...mount.querySelectorAll('#clue-panel .clue-btn')]
+    .find((b) => /Weakness/i.test(b.textContent));
+  let guard = 0, everSawTwoRealValues = false;
+  while (guard++ < 30) {
+    const card = weaknessCard();
+    if (!card) break;
+    // Count the real revealed-value rows currently shown on the weakness card
+    // (excluding the "No more..." exhaustion note, which uses a different class).
+    const realRows = [...card.querySelectorAll('.clue-revealed-value')]
+      .filter((n) => !/No more/i.test(n.textContent));
+    if (realRows.length >= 2) everSawTwoRealValues = true;
+    // Stop once the card is exhausted (shows the "No more" note).
+    const exhausted = [...card.querySelectorAll('.clue-limit-note, .clue-unavail-note')]
+      .some((n) => /No more/i.test(n.textContent));
+    if (exhausted) {
+      // THE ASSERTION: even now that it's exhausted, the real weaknesses are
+      // still on the card — the bug collapsed this to only the "No more" note.
+      const realRowsNow = [...card.querySelectorAll('.clue-revealed-value')]
+        .filter((n) => !/No more/i.test(n.textContent));
+      ok(realRowsNow.length >= 1, `single: an exhausted multi-use clue still shows its real revealed values (found ${realRowsNow.length}), not just the "No more" note`);
+      ok(everSawTwoRealValues, 'single: multiple weaknesses were revealed before exhaustion (so there was real history that could have been erased)');
+      break;
+    }
+    if (card.className.includes('unavailable') && !realRows.length) break; // safety
+    clickEl(card);
+    await tick();
+  }
+  ctrl.destroy && ctrl.destroy();
+  localStorage.removeItem('pokeGuess_catchTracker');
+}
+
 // with the exact expected numbers — not just "some multiplier was applied".
 {
   const mod = await import('../../docs/js/modes/single.js');

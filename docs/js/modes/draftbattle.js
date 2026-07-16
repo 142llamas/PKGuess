@@ -1,8 +1,22 @@
 /**
  * @file        js/modes/draftbattle.js
- * @version     1.16.1
- * @updated     2026-07-14
+ * @version     1.17.0
+ * @updated     2026-07-15
  * @changelog
+ *   1.17.0 — Two changes. (1) FIXED the Elite-4 down-cascade: beating the
+ *           standing holder of a spot now pushes that DEFEATED player down one
+ *           rung (chaining through further player-held rungs, stopping at the
+ *           first AI-held rung, a human off the bottom falling off) instead of
+ *           simply erasing them. The normal claim path only ever overwrote the
+ *           taken spot — resolveThroneCascade handled the separate
+ *           one-mon-two-spots case, never the defeated standing holder — so the
+ *           previous champion was silently deleted. claimThrone() now applies
+ *           draft.js 0.10.0's pure resolveDefeatedCascade over the current
+ *           throne map. (2) RENAMED the top two tiers to match Gen 2's real
+ *           Elite 4: the All-Time top spot is now "Lance" (was "Champion") and
+ *           stage 4 is now "Karen" (was "Lance"). Display-name only — the tier
+ *           KEYS (day/week/month/year/all) are unchanged so existing saved
+ *           thrones/progress keep working.
  *   1.16.1 — Plays the new "game start" SFX (music.js 2.0.0's
  *           `music.playGameStart()`) right when startDraft() actually kicks
  *           off a draft — covers free-play, Daily Challenge (via
@@ -261,7 +275,7 @@
 import { el, clear, statSpreadEl, shareSheetEl } from '../lib/dom.js';
 import { music } from '../lib/music.js';
 import {
-  DraftSession, autoDraft, autoDraftScaled, resolveThroneCascade, TIER_RANK, nextProgressRank,
+  DraftSession, autoDraft, autoDraftScaled, resolveThroneCascade, resolveDefeatedCascade, TIER_RANK, nextProgressRank,
   buildSpeciesList, buildLearnsetMap, runMatch, toRealStats,
 } from '../lib/draft-adapter.js';
 import {
@@ -275,12 +289,12 @@ const TIERS = [
   { key: 'day',   cadence: 'Day',      npc: 'Will',     icon: '\u2460', stage: 1, statBand: [425, 450] }, // ①
   { key: 'week',  cadence: 'Week',     npc: 'Koga',     icon: '\u2461', stage: 2, statBand: [455, 480] }, // ②
   { key: 'month', cadence: 'Month',    npc: 'Bruno',    icon: '\u2462', stage: 3, statBand: [485, 510] }, // ③
-  { key: 'year',  cadence: 'Year',     npc: 'Lance',    icon: '\u2463', stage: 4, statBand: [515, 540] }, // ④
-  { key: 'all',   cadence: 'All Time', npc: 'Champion', icon: '\uD83D\uDC51', stage: null, statBand: null }, // 👑 — no band defined; NPC fallback stays a natural, unscaled auto-draft
+  { key: 'year',  cadence: 'Year',     npc: 'Karen',    icon: '\u2463', stage: 4, statBand: [515, 540] }, // ④
+  { key: 'all',   cadence: 'All Time', npc: 'Lance',    icon: '\uD83D\uDC51', stage: null, statBand: null }, // 👑 — no band defined; NPC fallback stays a natural, unscaled auto-draft
 ].map((t) => ({
   ...t,
-  // card on the Elite-4 grid: "1 – Will" … "4 – Lance", "All Time – Champion"
-  cardLabel: t.stage ? `${t.stage} \u2013 ${t.npc}` : 'All Time \u2013 Champion',
+  // card on the Elite-4 grid: "1 – Will" … "4 – Karen", "All Time – Lance"
+  cardLabel: t.stage ? `${t.stage} \u2013 ${t.npc}` : `All Time \u2013 ${t.npc}`,
   // battle / history screen: "Elite 4 – Stage 1" … or "Greatest Pokémon of All Time"
   challengeLabel: t.stage ? `Elite 4 \u2013 Stage ${t.stage}` : 'Greatest Pok\u00e9mon of All Time',
   label: `${t.cadence} \u2013 ${t.npc}`,   // legacy fallback
@@ -724,7 +738,7 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
         el('div', { class: 'summary-card' },
           el('div', { class: 'summary-result', style: { textAlign: 'center', marginBottom: '6px' } }, '\u2694\uFE0F The Elite 4'),
           el('p', { class: 'sf-intro', style: { textAlign: 'center' } },
-            '\u201CChallenge the Elite 4\u201D battles Will, Koga, Bruno, Lance, and the All-Time Champion in order, '
+            '\u201CChallenge the Elite 4\u201D battles Will, Koga, Bruno, Karen, and Champion Lance in order, '
             + 'stopping at your first loss \u2014 every run starts fresh at Will, so a new Pok\u00e9mon can dethrone even your own past champions. '
             + 'Each spot empties to a fresh champion at its own reset \u2014 Day at midnight Central, Week end of Sunday, Month on the 1st, Year on Jan 1; All-Time never resets.'),
           offline ? el('div', { class: 'battle-offline' }, '\u26A0\uFE0F Offline \u2014 showing practice champions; claims won\u2019t be saved.') : null,
@@ -828,6 +842,13 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
       const vacatedLabel = TIERS.find((t) => t.key === claimResult.vacatedTier)?.cardLabel || claimResult.vacatedTier;
       const vacateMsg = claimResult.bumpedName ? `${claimResult.bumpedName} was bumped down to the ${vacatedLabel} spot.` : `The ${vacatedLabel} spot is now open for a fresh challenger.`;
       return `\uD83D\uDC51 You claimed the ${placementLabel} spot! (${vacateMsg})`;
+    }
+    if (claimResult.cascadedDown && claimResult.bumpedNames && claimResult.bumpedNames.length) {
+      const names = claimResult.bumpedNames;
+      const who = names.length === 1
+        ? `${names[0]} was knocked down a rung`
+        : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]} were each knocked down a rung`;
+      return `\uD83D\uDC51 You claimed the ${placementLabel} spot! (${who}.)`;
     }
     return `\uD83D\uDC51 You claimed the ${placementLabel} spot!`;
   }
@@ -992,10 +1013,45 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
         return { ok: true, keptHigherTier: decision.keptTier };
       }
 
-      if (!(await verifiedSetThrone())) return { ok: false, msg: 'Could not verify the throne was saved. Please try again.' };
+      // Normal claim (this mon doesn't already hold another spot). The player
+      // takes `tier.key`; the DEFEATED standing holder of that spot cascades
+      // DOWN one rung, chaining through any further player-held rungs below
+      // (each shifts down one), with NPC-held rungs absorbing the cascade and a
+      // human pushed off the bottom falling off the ladder. resolveDefeatedCascade
+      // is pure; we just apply the writes it returns.
+      const tierKeysHighToLow = [...TIER_KEYS_IN_ORDER].reverse();
+      const cascadeWrites = resolveDefeatedCascade({
+        takenTierKey: tier.key,
+        playerRecord: { holderUid: rec.holderUid, holderName: rec.holderName, mon: rec.mon },
+        thrones: existingThrones || {},
+        tierKeysHighToLow,
+      });
+      // Verify the player's own spot landed (mirrors the prior verifiedSetThrone
+      // contract), then persist progress, then apply the cascaded bumps for the
+      // lower tiers. The player's spot is written as the full `rec` (with period
+      // + takenAt); cascaded holders get their own period/takenAt per tier.
+      await fb.set(`/draft/throne/${tier.key}`, rec);
+      const meCheck = await fb.get(`/draft/throne/${tier.key}`);
+      if (!(meCheck && meCheck.holderUid === id.uid && meCheck.period === rec.period)) {
+        return { ok: false, msg: 'Could not verify the throne was saved. Please try again.' };
+      }
       if (!(await verifiedSaveProgress())) return { ok: false, msg: 'Could not verify your progress was saved. Please try again.' };
+      const bumpedNames = [];
+      for (const key of Object.keys(cascadeWrites)) {
+        if (key === tier.key) continue; // already written above
+        const w = cascadeWrites[key];
+        if (w == null) {
+          await fb.set(`/draft/throne/${key}`, null);
+        } else {
+          await fb.set(`/draft/throne/${key}`, {
+            mon: w.mon, holderUid: w.holderUid, holderName: (w.holderName || 'A challenger').slice(0, 16),
+            takenAt: Date.now(), period: centralPeriodKey(key),
+          });
+          bumpedNames.push(w.holderName);
+        }
+      }
       try { await fb.push(`/draft/thronehistory/${tier.key}`, { name: rec.holderName, mon: { name: lastResult ? lastResult.name : (rec.mon && rec.mon.name) || '', types: (rec.mon && rec.mon.types) || [], baseStats: (rec.mon && rec.mon.baseStats) || [], moves: (rec.mon && rec.mon.moves) || [] }, at: rec.takenAt, period: rec.period }); } catch { /* history is best-effort */ }
-      return { ok: true };
+      return { ok: true, cascadedDown: bumpedNames.length > 0, bumpedNames };
     } catch (e) { return { ok: false, msg: 'Save failed: ' + (e.message || e) }; }
   }
 

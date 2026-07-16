@@ -82,6 +82,7 @@ function makeFakeFB({ throneWriteSilentlyFails = false } = {}) {
 }
 
 const { createDraftBattle } = await import('../../docs/js/modes/draftbattle.js');
+const { centralPeriodKey } = await import('../../docs/js/lib/share.js');
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const q = (s) => document.querySelectorAll(s);
 const click = (n) => n && n.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
@@ -523,6 +524,45 @@ console.log('\n— "Draft Again" on the results screen starts a brand-new free-p
   ok(!document.body.textContent.includes('Gauntlet Results'), 'clicking Draft Again leaves the results screen');
   ok(!!document.querySelector('.draft-advance-btns') || !!document.querySelector('.draft-card'),
     'a fresh draft has started (the draft card / advance controls are shown again)');
+  ctrl.destroy();
+}
+
+console.log('\n— Down-cascade: beating human holders pushes them DOWN one rung (not erasing them) —');
+{
+  // Pre-seed the ladder to mirror the canonical example, using DIFFERENT mons
+  // than WINNING_SEED produces so none of the one-mon-one-throne (#14a) logic
+  // interferes: Lance(all), Karen(year), Will(day) held by OTHER players;
+  // Bruno(month) + Koga(week) held by AI (absent from the map). Then a fresh
+  // player sweeps and takes the top spot.
+  const fb = makeFakeFB();
+  const lanceHolder = { mon: { name: 'AaaHolder', types: ['Normal'], baseStats: { hp: 11, atk: 11, def: 11, spa: 11, spd: 11, spe: 11 }, moves: [] }, holderUid: 'pLance', holderName: 'LanceHolder', takenAt: Date.now(), period: centralPeriodKey('all') };
+  const karenHolder = { mon: { name: 'BbbHolder', types: ['Normal'], baseStats: { hp: 12, atk: 12, def: 12, spa: 12, spd: 12, spe: 12 }, moves: [] }, holderUid: 'pKaren', holderName: 'KarenHolder', takenAt: Date.now(), period: centralPeriodKey('year') };
+  const willHolder  = { mon: { name: 'CccHolder', types: ['Normal'], baseStats: { hp: 13, atk: 13, def: 13, spa: 13, spd: 13, spe: 13 }, moves: [] }, holderUid: 'pWill', holderName: 'WillHolder', takenAt: Date.now(), period: centralPeriodKey('day') };
+  await fb._forceSet('/draft/throne/all', lanceHolder);
+  await fb._forceSet('/draft/throne/year', karenHolder);
+  await fb._forceSet('/draft/throne/day', willHolder);
+  // month + week deliberately left unset → AI-held.
+
+  const identity = { uid: 'newDrafter', name: 'Newbie' };
+  const ctrl = await draftFresh(fb, identity); // WINNING_SEED sweeps all five
+  const { summary } = await runGauntletFromDraftComplete();
+  ok(summary.includes('claimed'), 'the sweeping drafter claims the top spot');
+
+  const all = await fb.get('/draft/throne/all');
+  const year = await fb.get('/draft/throne/year');
+  const month = await fb.get('/draft/throne/month');
+  const week = await fb.get('/draft/throne/week');
+  const day = await fb.get('/draft/throne/day');
+
+  ok(!!all && all.holderUid === 'newDrafter', 'the drafter now holds the top (all) spot');
+  ok(!!year && year.holderUid === 'pLance', 'the displaced top-holder (LanceHolder) was pushed DOWN to year — NOT erased');
+  ok(!!month && month.holderUid === 'pKaren', 'the displaced year-holder (KarenHolder) cascaded DOWN to month, overwriting the AI that was there');
+  ok(!week || week.holderUid !== 'pKaren', 'the cascade stopped at the AI-held month — week was not disturbed by the chain');
+  ok(!!day && day.holderUid === 'pWill', 'the day PLAYER (WillHolder) stays put — below where the cascade stopped, even though the drafter beat them climbing');
+  // Nobody who was a real player got silently deleted (the actual reported bug):
+  const survivingUids = [all, year, month, day].filter(Boolean).map((r) => r.holderUid);
+  ok(survivingUids.includes('pLance') && survivingUids.includes('pKaren') && survivingUids.includes('pWill'),
+    'all three pre-existing human holders still exist somewhere on the ladder — none were erased');
   ctrl.destroy();
 }
 

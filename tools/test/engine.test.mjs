@@ -156,6 +156,49 @@ export default function (t) {
     t.ok(after > before, 'forced+random still auto-reveals a clue after a wrong guess (internal bypass intact)');
   }
 
+  t.section('engine.js — exhausting a multi-use clue keeps every real revealed value in history (bug: they were being visually erased)');
+  {
+    // Reveal weaknesses one at a time until the pool is spent and one more buy
+    // returns the "No more weaknesses to reveal" sentinel. The bug that the
+    // renderers hit was that, once exhausted, the card showed ONLY the last
+    // history entry (the sentinel), hiding every real weakness already paid for.
+    // The engine must keep the real values in clueHistory so the (fixed) card
+    // can still render them — this guards the data the fix depends on.
+    const WEAK_ID = 13; // Reveal One Weakness (weaknessMulti)
+    // A mystery with a known non-empty weakness list. Pikachu (Electric) is weak
+    // to Ground — small, deterministic pool.
+    const pika = gen2.pokedex.find((p) => p.name === 'Pikachu');
+    const r = new PokeGuessRound({ genData: gen2, rng: () => 0 });
+    r.start({ difficultyId: 'custom', mystery: pika, guessMode: 'free', clueMode: 'choose', custom: { points: 99, guessCost: 0, startClueMode: 'none' } });
+
+    const realValues = [];
+    let sawSentinel = false;
+    // Buy the weakness clue repeatedly until it's exhausted (or a generous cap).
+    for (let i = 0; i < 20; i++) {
+      const clue = r.clue(WEAK_ID);
+      if (r.clueExhausted(clue)) break;
+      const res = r.buyClue(WEAK_ID);
+      if (!res.ok) break;
+      if (String(res.value).startsWith('No more')) sawSentinel = true;
+      else realValues.push(res.value);
+    }
+
+    t.ok(realValues.length >= 1, `at least one real weakness was revealed (got ${realValues.length}: ${JSON.stringify(realValues)})`);
+    t.ok(sawSentinel, 'buying past the pool eventually yields the "No more..." sentinel (the exhaustion state that triggered the bug)');
+    t.ok(r.clueExhausted(r.clue(WEAK_ID)), 'the clue is now exhausted');
+
+    // The crux: the FULL history still contains every real value — nothing was
+    // overwritten/erased by the sentinel.
+    const hist = r.state.clueHistory[WEAK_ID] || [];
+    const realInHist = hist.filter((v) => !String(v).startsWith('No more'));
+    t.eq(realInHist.length, realValues.length, 'clueHistory still holds every real revealed weakness (none clobbered by the sentinel)');
+    t.ok(realValues.every((v) => realInHist.includes(v)), 'each specific revealed weakness is still present in history — this is what the fixed card re-renders instead of collapsing to just the sentinel');
+    // And the sentinel, if present, is only the LAST entry — never in place of a real value.
+    if (hist.some((v) => String(v).startsWith('No more'))) {
+      t.ok(String(hist[hist.length - 1]).startsWith('No more'), 'the sentinel is only ever the final history entry, appended after the real values (not replacing them)');
+    }
+  }
+
   t.section('engine.js — Gen 1 gym/E4 clues are Yes/No only (#10)');
   {
     const gen1 = load('../../docs/data/gen1.json');

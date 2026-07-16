@@ -4,6 +4,36 @@ Status: ✅ done · 🔜 planned (phase noted) · ⏳ in progress
 
 ---
 
+## 2026-07-15 (two bug fixes + E4 rename) — Elite-4 down-cascade restored; multi-use clue exhaustion no longer erases earlier reveals; Karen/Lance rename
+
+### Bug 1 — Elite-4 down-cascade was erasing the defeated holder instead of pushing them down
+
+**Report:** previously, if a player held a spot and a different Pokémon beat them, the beaten player cascaded DOWN the ladder; now it just erased them.
+
+**Root cause:** the normal gauntlet claim path (`claimThrone` in draftbattle.js) only ever *overwrote* the taken spot with the winner. The existing `resolveThroneCascade` handles a completely different case — one Pokémon trying to hold two spots at once — and never touched the *defeated standing holder*. So beating the top-spot holder simply replaced them; nobody cascaded. The `throne.smoke.mjs` suite never caught it because it only ever swept AI-held ladders (no human holders to displace).
+
+**Fix:** new pure function `resolveDefeatedCascade()` in draft.js 0.10.0. When a player takes a spot, the defeated standing holder is pushed DOWN exactly one rung; if that rung was itself player-held, that player is pushed down too, chaining downward; an AI-held rung ABSORBS the cascade (the displaced player overwrites it and the chain stops); a human pushed off the bottom rung falls off the ladder. `claimThrone` now applies this over the current throne map on every normal claim. Confirmed against the user's canonical example: with Lance(all)/Karen(year)/Will(day) player-held and Bruno(month)/Koga(week) AI-held, a new draft taking the top pushes the Lance-holder → Karen, the Karen-holder → Bruno (overwriting the AI), the chain stops there, and the Will player is untouched.
+
+**Tests:** `resolveDefeatedCascade` unit-tested in draft.test.mjs (canonical example, full-player-chain with the bottom falling off, middle-spot claim, AI-held-target no-op). A new throne.smoke.mjs scenario drives the REAL claim path end-to-end through the fake Firebase with pre-seeded human holders and asserts none are erased. Both revert-checked (disabling the cascade fails the "pushed down / not erased" assertions, reproducing the reported bug exactly).
+
+### Bug 2 — revealing a multi-use clue to exhaustion erased the earlier revealed values
+
+**Report:** in the guessing games, when a clue reached "no more of this type to reveal" (weakness, resistance, moveset, comp moveset, etc.), it erased the earlier revealed values of that same clue.
+
+**Root cause:** each guess mode's clue card, once the clue was `clueExhausted`, rendered ONLY `hist[hist.length - 1]` — and for a multi-use clue the last history entry is the engine's "No more X to reveal" sentinel. So the moment the clue tipped into exhausted, the card collapsed to just that note and every real value already revealed (and paid for) vanished from view. (The engine itself was fine — it appends the sentinel after the real values; the bug was purely in the render.)
+
+**Fix:** the exhausted-multi-use branch in single.js, safari.js, multiplayer.js, and online.js now filters out the "No more…" sentinel and re-renders the full list of real revealed values, with the exhaustion note shown as a small footer beneath them — matching how the same card looks the instant before it exhausts, and matching victoryroad.js, which already filtered the sentinel correctly and was unaffected.
+
+**Tests:** engine.test.mjs gains a test that reveals a weakness clue to exhaustion and confirms `clueHistory` keeps every real value (sentinel only ever the final entry) — revert-checked by simulating a history clobber. modes.smoke.mjs drives single.js to actually reveal a weakness clue to exhaustion and asserts the card still shows its real values — revert-checked against the old erasing render (fails with 0 real rows).
+
+### Rename — Elite 4 top two tiers now match Gen 2
+
+The All-Time top spot is now **Lance** (was "Champion") and stage 4 is now **Karen** (was "Lance"), matching Gen 2's real Elite 4 (Will → Koga → Bruno → Karen → Champion Lance). Display-name only — the underlying tier KEYS (day/week/month/year/all) are unchanged, so all existing saved thrones and progress keep working untouched.
+
+**Files changed (re-upload):** docs/js/draft.js (0.10.0), docs/js/lib/draft-adapter.js (1.4.0), docs/js/modes/draftbattle.js (1.17.0), docs/js/modes/single.js (1.2.6), docs/js/modes/safari.js (1.5.2), docs/js/modes/multiplayer.js (1.3.6), docs/js/modes/online.js (1.7.2), tools/test/draft.test.mjs, tools/test/engine.test.mjs, tools/test/throne.smoke.mjs, tools/test/modes.smoke.mjs, MANIFEST.md, CHANGE_TRACKER_v3.md.
+
+---
+
 ## 2026-07-15 (transition SFX turned off + no-overlap logic built for later) — fixes the reported overlap
 
 Scope: docs/js/lib/music.js (2.0.0→2.1.0), tools/test/music.test.mjs (2.0.0→2.1.0), docs/audio/sfx/README.md.
