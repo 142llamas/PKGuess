@@ -267,6 +267,20 @@ class MusicManager {
     };
     window.addEventListener('pointerdown', unlock, { once: true });
     window.addEventListener('keydown', unlock, { once: true });
+    // Stop the music when the game is backgrounded — tab switched away, window
+    // minimized, or the page being closed — and pick it back up on return.
+    // A looped track otherwise keeps playing out of sight. Guarded so it
+    // simply no-ops in a non-DOM/test environment.
+    if (typeof document !== 'undefined' && document.addEventListener) {
+      this._onVisibility = () => {
+        if (document.hidden) {
+          this._pauseAll();
+        } else if (this._unlocked && !this._muted && this._currentKey) {
+          this._resumeCurrent();
+        }
+      };
+      document.addEventListener('visibilitychange', this._onVisibility);
+    }
   }
 
   /** Call on every route change (mode id, or null for the main menu). */
@@ -311,7 +325,7 @@ class MusicManager {
     this._muted = !this._muted;
     saveMutePref(this._muted);
     if (this._muted) {
-      this._players.forEach((a) => a && a.pause());
+      this._pauseAll();
     } else if (this._unlocked) {
       this._playCurrent();
     }
@@ -321,6 +335,24 @@ class MusicManager {
 
   /** Subscribe to mute-state changes (used by the toggle button's icon). */
   onToggle(fn) { this._onToggle.add(fn); return () => this._onToggle.delete(fn); }
+
+  /** Pause both music players without touching mute state or _currentKey, so
+   *  playback can later resume exactly where it left off (used on mute and
+   *  when the game is hidden/minimized). */
+  _pauseAll() {
+    (this._players || []).forEach((a) => a && a.pause());
+  }
+
+  /** Resume the currently-active track from where it was paused — no restart,
+   *  no crossfade. Used when returning to a backgrounded/minimized game. */
+  _resumeCurrent() {
+    const active = this._players[this._activeIdx];
+    if (!active) return;
+    try {
+      const p = active.play();
+      if (p && typeof p.catch === 'function') p.catch(() => { /* autoplay-blocked — swallow */ });
+    } catch { /* stay silent */ }
+  }
 
   _playSfx(sfxKey) {
     if (!this._sfx) return;

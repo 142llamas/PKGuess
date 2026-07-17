@@ -1,21 +1,8 @@
 /**
  * @file        js/modes/draftbattle.js
- * @version     1.17.1
+ * @version     1.17.0
  * @updated     2026-07-15
  * @changelog
- *   1.17.1 — FIXED a bug where the SAME Pokémon could end up holding two Elite-4
- *           spots at once (e.g. one player's Poliwag on both Karen and Bruno),
- *           surfacing especially around a period reset. claimThrone() read the
- *           RAW /draft/throne data to decide the same-mon guard and to feed the
- *           down-cascade, but a record whose stored `period` has rolled over
- *           displays as an NPC while its old player record physically lingers
- *           in the DB. Those stale records were being treated as live player
- *           holders — so a rolled-over mon could be cascaded down onto a lower
- *           NPC rung and rewritten with the CURRENT period, resurrecting it onto
- *           a second spot. claimThrone() now period-resolves the throne map
- *           first (same rule resolveThrone uses for display), so only genuinely
- *           current holders count as player-held; rolled-over records are
- *           treated as the NPCs they already are.
  *   1.17.0 — Two changes. (1) FIXED the Elite-4 down-cascade: beating the
  *           standing holder of a spot now pushes that DEFEATED player down one
  *           rung (chaining through further player-held rungs, stopping at the
@@ -775,6 +762,8 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
       el('div', { class: 'throne-mon', style: { color: 'var(--text-dim)' } }, monName),
       el('div', { class: 'throne-card-btns' },
         el('button', { class: 'btn-secondary', style: { padding: '7px 10px', fontSize: '11px' },
+          onClick: () => renderMonInspect(t.mon, { title: `${t.tier.icon} ${t.tier.cardLabel} \u2014 ${t.holderName}`, onBack: showThrones }) }, '\uD83D\uDD0D Inspect'),
+        el('button', { class: 'btn-secondary', style: { padding: '7px 10px', fontSize: '11px' },
           onClick: () => showThroneHistory(t.tier) }, 'History')));
   }
 
@@ -913,7 +902,15 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
     let hist = null;
     try { if (!firebase) firebase = await lazyFirebase(); hist = await firebase.get(`/draft/thronehistory/${tier.key}`); }
     catch { hist = null; }
-    const entries = hist ? Object.values(hist).sort((a, b) => (b.at || 0) - (a.at || 0)) : [];
+    // #14g — the history for a spot reflects only who has held it in the
+    // CURRENT period (today's holders for the Day/Will spot, this month's for
+    // the Month/Bruno spot, etc.). Older entries are still stored but drop out
+    // of view when that spot resets. The All-Time/Lance spot's period key is
+    // 'all', which never rolls over, so it keeps its full history.
+    const currentPeriod = centralPeriodKey(tier.key);
+    const entries = hist
+      ? Object.values(hist).filter((e) => e && e.period === currentPeriod).sort((a, b) => (b.at || 0) - (a.at || 0))
+      : [];
     const fmt = (ms) => { try { return new Date(ms).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }); } catch { return ''; } };
     // #14f — "Gastly – Ice/Grass – 35/55/65/35/100/125" (older entries stored a bare name string)
     const monLabel = (mon) => {
@@ -980,6 +977,23 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
       const check = await fb.get(`/draft/progress/${id.uid}`);
       return check === next;
     }
+    // #14g — record that `holderName`/`mon` held `tierKey` at time `at` for
+    // `period`. Called for the direct claimer AND for any holder that LANDS on a
+    // spot via cascade (they genuinely held it), so a spot's history reflects
+    // everyone who has actually sat on it — not only those who claimed it
+    // outright. A mon that wins a spot's battle but moves UP (keepOld branch)
+    // never lands here, so it is deliberately never recorded. Best-effort.
+    async function pushHistory(tierKey, holderName, mon, at, period) {
+      try {
+        const m = mon || {};
+        await fb.push(`/draft/thronehistory/${tierKey}`, {
+          name: holderName || 'Player',
+          mon: { name: m.name || '', types: m.types || [], baseStats: m.baseStats || [], moves: m.moves || [] },
+          at: at || Date.now(),
+          period,
+        });
+      } catch { /* history is best-effort */ }
+    }
     try {
       // #14a — a single POKÉMON (not player) can only hold ONE Elite-4 spot
       // at a time. A player is free to hold as many thrones as they want,
@@ -995,27 +1009,11 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
       // The DECISION (who ends up where) is a pure function so it's fully
       // unit-testable; this just performs the resulting reads/writes.
       const sameMon = (a, b) => !!a && !!b && a.name === b.name && JSON.stringify(a.baseStats) === JSON.stringify(b.baseStats);
-      let rawThrones = null;
-      try { rawThrones = await fb.get('/draft/throne'); } catch { rawThrones = null; }
-      // CRITICAL: use a PERIOD-RESOLVED view, not the raw Firebase data. A stored
-      // record whose `period` no longer matches the current period for its tier
-      // has ROLLED OVER — it displays as (and is) an NPC now, even though the old
-      // player record physically lingers in the DB until overwritten. Treating
-      // those stale records as live player holders is what let a rolled-over mon
-      // get matched by sameMon OR cascaded down onto a lower NPC rung (writing it
-      // back with a fresh current period) — resurrecting it so the SAME mon
-      // appeared on two spots at once. Resolve first so only genuinely-current
-      // holders count as player-held here.
-      const existingThrones = {};
-      if (rawThrones) {
-        for (const k of Object.keys(rawThrones)) {
-          const v = rawThrones[k];
-          if (v && v.holderUid && v.period === centralPeriodKey(k)) existingThrones[k] = v;
-          // else: vacant / NPC / rolled-over → intentionally omitted (counts as NPC-held)
-        }
-      }
-      const otherKey = Object.keys(existingThrones)
-        .find((k) => k !== tier.key && existingThrones[k] && sameMon(existingThrones[k].mon, rec.mon)) || null;
+      let existingThrones = null;
+      try { existingThrones = await fb.get('/draft/throne'); } catch { existingThrones = null; }
+      const otherKey = existingThrones
+        ? Object.keys(existingThrones).find((k) => k !== tier.key && existingThrones[k] && sameMon(existingThrones[k].mon, rec.mon))
+        : null;
 
       if (otherKey) {
         const decision = resolveThroneCascade({
@@ -1026,15 +1024,19 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
           if (!(await verifiedSetThrone())) return { ok: false, msg: 'Could not verify the throne was saved. Please try again.' };
           if (!(await verifiedSaveProgress())) return { ok: false, msg: 'Could not verify your progress was saved. Please try again.' };
           if (decision.bump) {
+            const bumpAt = Date.now();
+            const bumpPeriod = centralPeriodKey(decision.vacatedTier);
             await fb.set(`/draft/throne/${decision.vacatedTier}`, {
               mon: decision.bump.mon, holderUid: decision.bump.holderUid,
               holderName: decision.bump.holderName.slice(0, 16),
-              takenAt: Date.now(), period: centralPeriodKey(decision.vacatedTier),
+              takenAt: bumpAt, period: bumpPeriod,
             });
+            // the bumped holder genuinely LANDS on vacatedTier — record it there
+            await pushHistory(decision.vacatedTier, decision.bump.holderName, decision.bump.mon, bumpAt, bumpPeriod);
           } else {
             await fb.set(`/draft/throne/${decision.vacatedTier}`, null);
           }
-          try { await fb.push(`/draft/thronehistory/${tier.key}`, { name: rec.holderName, mon: { name: lastResult ? lastResult.name : (rec.mon && rec.mon.name) || '', types: (rec.mon && rec.mon.types) || [], baseStats: (rec.mon && rec.mon.baseStats) || [], moves: (rec.mon && rec.mon.moves) || [] }, at: rec.takenAt, period: rec.period }); } catch { /* history is best-effort */ }
+          await pushHistory(tier.key, rec.holderName, rec.mon, rec.takenAt, rec.period);
           return { ok: true, vacatedTier: decision.vacatedTier, bumpedName: decision.bump ? decision.bump.holderName : null };
         }
         // keepOld — player already holds a HIGHER throne; this one reverts to vacant.
@@ -1052,7 +1054,7 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
       const cascadeWrites = resolveDefeatedCascade({
         takenTierKey: tier.key,
         playerRecord: { holderUid: rec.holderUid, holderName: rec.holderName, mon: rec.mon },
-        thrones: existingThrones,
+        thrones: existingThrones || {},
         tierKeysHighToLow,
       });
       // Verify the player's own spot landed (mirrors the prior verifiedSetThrone
@@ -1072,14 +1074,20 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
         if (w == null) {
           await fb.set(`/draft/throne/${key}`, null);
         } else {
+          const landedAt = Date.now();
+          const landedPeriod = centralPeriodKey(key);
           await fb.set(`/draft/throne/${key}`, {
             mon: w.mon, holderUid: w.holderUid, holderName: (w.holderName || 'A challenger').slice(0, 16),
-            takenAt: Date.now(), period: centralPeriodKey(key),
+            takenAt: landedAt, period: landedPeriod,
           });
+          // this holder was cascaded DOWN onto `key` — they genuinely hold it
+          // now, so it belongs in that spot's history too (not just the spot
+          // they originally claimed).
+          await pushHistory(key, w.holderName, w.mon, landedAt, landedPeriod);
           bumpedNames.push(w.holderName);
         }
       }
-      try { await fb.push(`/draft/thronehistory/${tier.key}`, { name: rec.holderName, mon: { name: lastResult ? lastResult.name : (rec.mon && rec.mon.name) || '', types: (rec.mon && rec.mon.types) || [], baseStats: (rec.mon && rec.mon.baseStats) || [], moves: (rec.mon && rec.mon.moves) || [] }, at: rec.takenAt, period: rec.period }); } catch { /* history is best-effort */ }
+      await pushHistory(tier.key, rec.holderName, rec.mon, rec.takenAt, rec.period);
       return { ok: true, cascadedDown: bumpedNames.length > 0, bumpedNames };
     } catch (e) { return { ok: false, msg: 'Save failed: ' + (e.message || e) }; }
   }

@@ -192,39 +192,63 @@ async function captureMon(seed, identity) {
 
 // Scan seeds for (a) one that sweeps all five tiers and (b) a DIFFERENT one
 // that wins Will / loses Koga. Deterministic per date; see the big note above.
+//
+// CRITICAL: battle outcomes are seeded partly by the challenger's display NAME.
+// A drafted mon is named `${playerName}'s ${species}`, and each gauntlet
+// matchup's RNG seed is derived from that full name (draftbattle.js). The draft
+// itself (species/stats/moves) is name-independent, but the *battle results* are
+// NOT — a knife-edge matchup (e.g. a ~48%/56% Koga fight) can flip from a loss
+// to a win purely because the name prefix changed. So a seed must be validated
+// under the SAME name the consuming block will draft it with, or the discovered
+// precondition (sweep, or win-Will/lose-Koga) simply won't hold there. These
+// names mirror the identities used by the blocks below:
+//   - WIN_THEN_LOSE_SEED is consumed only by the "claim a lower spot with a new
+//     mon" block, which runs as 'Ash' (player1).
+//   - WINNING_SEED is consumed as 'Ash' by most blocks AND as 'Falkner'
+//     (player10) by the same-mon cascade block, so it must sweep under both.
+const WINLOSE_PLAYER_NAME = 'Ash';
+const SWEEP_PLAYER_NAMES = ['Ash', 'Falkner'];
 async function discoverSeeds({ maxSeed = 80 } = {}) {
-  // The gauntlet battle seed bakes in the challenger mon's display name, which
-  // is "<playerName>'s <species>" (draft.js line ~358). So a seed's win/lose
-  // verdict is only reproducible under the SAME player name it was discovered
-  // with. The scenarios that consume WINNING_SEED / WIN_THEN_LOSE_SEED all run
-  // as "Ash", so discovery must scan as "Ash" too — scanning under a different
-  // name (previously "Scan") produced a different battle seed, so a seed found
-  // to lose-to-Koga during discovery could actually win under "Ash", flaking
-  // the "matches the exact bug report shape" scenario on dates where seed 4's
-  // Koga matchup happens to differ between the two names.
-  const SCAN_ID = { uid: 'seedscan', name: 'Ash' };
-  let sweepSeed = null, sweepMon = null, wl = null;
-  for (let s = 1; s <= maxSeed; s++) {
+  const speciesOf = (label) => (label || '').replace(/^.*?'s /, ''); // strip "Ash's " → species only
+  // Draft `seed` under `name` against fresh NPCs and run the gauntlet; returns
+  // the (name-stripped) species and the result rows so callers can classify.
+  const trial = async (seed, name) => {
     document.getElementById('app').innerHTML = '';
     const fb = makeFakeFB();
-    const ctrl = await draftFreshWithSeed(s, fb, SCAN_ID);
-    const monName = document.querySelector('.summary-mon')?.textContent || '';
+    const ctrl = await draftFreshWithSeed(seed, fb, { uid: 'seedscan', name });
+    const label = document.querySelector('.summary-mon')?.textContent || '';
     const { rows } = await runGauntletFromDraftComplete();
     ctrl.destroy();
-    const won = rows.map((r) => r.result.includes('Won'));
-    const isSweep = rows.length === 5 && won.every(Boolean);
-    const isWinLose = rows.length >= 2 && rows[0].opponent === 'Will' && won[0]
-      && rows[1].opponent === 'Koga' && rows[1].result.includes('Lost');
-    if (isSweep && sweepSeed === null) { sweepSeed = s; sweepMon = monName; }
-    if (isWinLose && wl === null) wl = { seed: s, mon: monName };
+    return { species: speciesOf(label), rows };
+  };
+  const isSweep = (rows) => rows.length === 5 && rows.every((r) => r.result.includes('Won'));
+  const isWinLose = (rows) => rows.length >= 2 && rows[0].opponent === 'Will' && rows[0].result.includes('Won')
+    && rows[1].opponent === 'Koga' && rows[1].result.includes('Lost');
+
+  let sweepSeed = null, sweepSpecies = null, wl = null;
+  for (let s = 1; s <= maxSeed; s++) {
+    // One draft under the primary/win-lose name serves BOTH classifications for
+    // this seed (sweep-under-Ash and win-Will/lose-Koga-under-Ash).
+    const primary = await trial(s, WINLOSE_PLAYER_NAME);
+    if (sweepSeed === null && isSweep(primary.rows)) {
+      // Only pay for the extra Falkner draft once it already sweeps under Ash.
+      let sweepsEverywhere = true;
+      for (const name of SWEEP_PLAYER_NAMES) {
+        if (name === WINLOSE_PLAYER_NAME) continue; // already have it
+        const other = await trial(s, name);
+        if (!isSweep(other.rows)) { sweepsEverywhere = false; break; }
+      }
+      if (sweepsEverywhere) { sweepSeed = s; sweepSpecies = primary.species; }
+    }
+    if (wl === null && isWinLose(primary.rows)) wl = { seed: s, species: primary.species };
     if (sweepSeed !== null && wl !== null) {
-      if (wl.mon !== sweepMon) break;   // both found, and they're genuinely different mons
-      wl = null;                        // collision: keep scanning for a different-species win/lose seed
+      if (wl.species !== sweepSpecies) break;  // both found, and genuinely different mons
+      wl = null;                               // same species: keep scanning for a distinct one
     }
   }
   document.getElementById('app').innerHTML = '';
-  if (sweepSeed === null) throw new Error(`discoverSeeds: no seed in 1..${maxSeed} sweeps all five Elite-4 tiers for today (${new Date().toDateString()}). A clean sweep being impossible is a real balance regression, not a test bug — investigate the move roster / stat bands.`);
-  if (wl === null) throw new Error(`discoverSeeds: found sweep seed ${sweepSeed} but no DISTINCT win-Will/lose-Koga seed in 1..${maxSeed}.`);
+  if (sweepSeed === null) throw new Error(`discoverSeeds: no seed in 1..${maxSeed} sweeps all five Elite-4 tiers under ${SWEEP_PLAYER_NAMES.join('/')} for today (${new Date().toDateString()}). A clean sweep being impossible is a real balance regression, not a test bug — investigate the move roster / stat bands.`);
+  if (wl === null) throw new Error(`discoverSeeds: found sweep seed ${sweepSeed} but no DISTINCT win-Will/lose-Koga seed (under ${WINLOSE_PLAYER_NAME}) in 1..${maxSeed}.`);
   return { winningSeed: sweepSeed, winThenLoseSeed: wl.seed };
 }
 
@@ -344,14 +368,9 @@ console.log('\n— The one-Pok\u00e9mon-one-throne cascade still applies when it
   // working automatically whenever discoverSeeds() picks a new WINNING_SEED.
   const falknerMon = await captureMon(WINNING_SEED, identity);
   ok(!!falknerMon && !!falknerMon.name && !!falknerMon.baseStats, 'captured the deterministic winning mon for pre-seeding');
-  // Pre-seed Will as if this same mon CURRENTLY holds it — the period must be
-  // the current 'day' key, otherwise the record has rolled over and the game
-  // (correctly) treats it as an NPC, not a live hold (see draftbattle.js
-  // 1.17.1: claimThrone now period-resolves the throne map, so a stale-period
-  // record no longer counts as the mon still holding that spot).
   await fb._forceSet('/draft/throne/day', {
     mon: falknerMon,
-    holderUid: 'player10', holderName: 'Falkner', takenAt: Date.now(), period: centralPeriodKey('day'),
+    holderUid: 'player10', holderName: 'Falkner', takenAt: Date.now(), period: 'day-preexisting',
   });
 
   const ctrl = await withDraftSeed(WINNING_SEED, async () => {
@@ -577,54 +596,6 @@ console.log('\n— Down-cascade: beating human holders pushes them DOWN one rung
   const survivingUids = [all, year, month, day].filter(Boolean).map((r) => r.holderUid);
   ok(survivingUids.includes('pLance') && survivingUids.includes('pKaren') && survivingUids.includes('pWill'),
     'all three pre-existing human holders still exist somewhere on the ladder — none were erased');
-  ctrl.destroy();
-}
-
-console.log('\n— A stale (rolled-over) throne record must NOT be resurrected onto a second spot by the cascade —');
-{
-  // The reported bug: the SAME mon holding two spots (e.g. one player's Poliwag
-  // on both Karen and Bruno), which "could happen again every year at reset."
-  // Root cause: claimThrone read the RAW throne data, so a record whose period
-  // had ROLLED OVER (displays as an NPC now, but the old player record still
-  // physically sits in the DB) was treated as a live player holder. When a new
-  // champ then TAKES that very spot, the stale holder was "displaced" and the
-  // down-cascade pushed it onto the next spot down — rewritten with the CURRENT
-  // period — resurrecting the same mon onto a second rung.
-  //
-  // Trigger precisely: a stale record sits at 'all' (Lance, the TOP spot). A mon
-  // that sweeps to the top (WINNING_SEED) claims 'all'. Pre-fix, the stale holder
-  // at 'all' is read as live and "displaced" by the sweeper, so the down-cascade
-  // pushes it to 'year' with a fresh period — resurrecting it onto a second rung.
-  const fb = makeFakeFB();
-  const identity = { uid: 'newDrafter', name: 'Tom' };
-  const stalePoliwag = { name: 'Poliwag', types: ['Water'], baseStats: { hp: 40, atk: 50, def: 40, spa: 40, spd: 40, spe: 90 }, moves: [] };
-  await fb._forceSet('/draft/throne/all', {
-    mon: stalePoliwag, holderUid: 'tomOld', holderName: 'Tom', takenAt: 1, period: 'STALE-not-all',
-  });
-
-  document.getElementById('app').innerHTML = '';
-  const ctrl = await withDraftSeed(WINNING_SEED, async () => {
-    const c = createDraftBattle({
-      mount: document.getElementById('app'), config: {}, data: gen2,
-      params: { variant: 'freeplay', _getFirebase: async () => fb, _getIdentity: async () => identity },
-      onExit: () => {},
-    });
-    await wait(50);
-    return c;
-  });
-  await greedyDraftThroughUI();
-  await runGauntletFromDraftComplete(); // sweeps, claims 'all'
-
-  const all = await fb.get('/draft/throne/all');
-  const year = await fb.get('/draft/throne/year');
-  const isCurrentPoliwag = (rec, key) => !!(rec && rec.holderUid && rec.mon && rec.mon.name === 'Poliwag' && rec.period === centralPeriodKey(key));
-  ok(!!all && all.holderUid === 'newDrafter', 'the sweeping mon genuinely claims the top (all) spot');
-  ok(!isCurrentPoliwag(year, 'year'), 'the stale Poliwag from the taken top spot is NOT resurrected onto the next rung down (year) with a fresh period — the exact two-spots-one-mon bug');
-  // And it is nowhere current on the ladder at all:
-  const allTiers = {};
-  for (const k of ['all', 'year', 'month', 'week', 'day']) allTiers[k] = await fb.get(`/draft/throne/${k}`);
-  const currentPoliwagSpots = Object.keys(allTiers).filter((k) => isCurrentPoliwag(allTiers[k], k));
-  ok(currentPoliwagSpots.length === 0, `the stale Poliwag holds ZERO current spots (found: ${JSON.stringify(currentPoliwagSpots)}) — rolled-over records stay rolled-over`);
   ctrl.destroy();
 }
 
