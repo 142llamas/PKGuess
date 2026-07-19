@@ -744,8 +744,20 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
           offline ? el('div', { class: 'battle-offline' }, '\u26A0\uFE0F Offline \u2014 showing practice champions; claims won\u2019t be saved.') : null,
           bestTier ? el('div', { class: 'sf-intro', style: { textAlign: 'center' } }, `\uD83C\uDFC5 Your best: ${bestTier.cardLabel}`) : null,
           !haveBuild ? el('div', { class: 'sf-intro', style: { textAlign: 'center', color: 'var(--text-dim)' } }, 'Draft a team first to challenge them.') : null,
+          // This screen's own history (see project notes) is exactly how a
+          // player could end up holding two spots at once: this button used
+          // to say "Challenge the Elite 4" and call runGauntlet() again with
+          // whatever mon was already claimed by the automatic post-draft
+          // gauntlet — so revisiting this screen let someone re-run the SAME
+          // already-claimed build against the (possibly since-changed)
+          // thrones and claim a second spot with it. There is no legitimate
+          // "re-challenge with your old build" action any more: the gauntlet
+          // already runs automatically the moment a draft completes. The only
+          // sensible action from here is starting an entirely new draft (a
+          // fresh random seed, same as the results screen's own "Draft
+          // Again"), which produces a NEW mon rather than reusing the old one.
           haveBuild ? el('div', { class: 'summary-actions', style: { marginBottom: '10px' } },
-            el('button', { class: 'btn-primary', onClick: runGauntlet }, '\u2694\uFE0F Challenge the Elite 4')) : null,
+            el('button', { class: 'btn-primary', onClick: () => startDraft(((Math.random() * 2 ** 31) | 0), { pokemon: 3, moves: 3 }) }, '\uD83D\uDD01 Draft Again')) : null,
           el('div', { class: 'draft-throne-grid' },
             ...thrones.map((t) => throneCard(t))),
           el('div', { class: 'summary-actions' },

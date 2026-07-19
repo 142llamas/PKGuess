@@ -67,6 +67,19 @@ function shuffleArr(a, rng) {
 
 const _genLabel = (poke) => (parseInt(poke && poke.num, 10) <= 151 ? '1st' : '2nd');
 
+// The Abra/Kadabra/Alakazam family's competitive-moveset text uses "elemental
+// punch" as a placeholder standing in for whichever of Fire/Ice/Thunder Punch
+// (all three are legal TM moves for this line in Gen 2). Rather than pick one
+// permanently in the data, resolve it to a random real move each time a
+// moveset containing it is actually revealed to a player, using the round's
+// own seeded rng so a shared/replayed round stays reproducible.
+const ELEMENTAL_PUNCHES = ['Fire Punch', 'Ice Punch', 'Thunder Punch'];
+function resolveElementalPunch(text, rng) {
+  if (!text || !/elemental punch/i.test(text)) return text;
+  const pick = ELEMENTAL_PUNCHES[Math.floor(rng() * ELEMENTAL_PUNCHES.length)];
+  return text.replace(/elemental punch/i, pick);
+}
+
 function animeFirstText(poke) {
   const v = (poke && poke.firstAnime == null ? '' : String(poke.firstAnime)).trim();
   if (_isDashOrEmpty(v)) return 'Does not appear in the anime (Seasons 1\u20135 / first four films)';
@@ -469,11 +482,11 @@ export class PokeGuessRound {
       case 'compMovesetMulti': {
         const pool = this.state.compMovesetsPool || [];
         const comps = [poke.compMoveset1, poke.compMoveset2, poke.compMoveset3, poke.compMoveset4];
-        return uses < pool.length ? (comps[pool[uses]] || 'No more competitive movesets to reveal') : 'No more competitive movesets to reveal';
+        return uses < pool.length ? resolveElementalPunch(comps[pool[uses]], this.rng) || 'No more competitive movesets to reveal' : 'No more competitive movesets to reveal';
       }
       case 'compMoveset': {
         const opts = [poke.compMoveset1, poke.compMoveset2, poke.compMoveset3, poke.compMoveset4].filter((m) => m && m.trim());
-        return opts.length ? opts[Math.floor(this.rng() * opts.length)] : null;
+        return opts.length ? resolveElementalPunch(opts[Math.floor(this.rng() * opts.length)], this.rng) : null;
       }
       case 'generation': return _genLabel(poke);
       case 'firstAnime': return animeFirstText(poke);

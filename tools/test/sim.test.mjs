@@ -251,7 +251,7 @@ export default function (t) {
   {
     const sonic = mkMono('Sonic', 'Sonicboom');
     const r1 = simulateBattle(sonic, target(), { ...simOpts, seed: 1, turnCap: 1 });
-    const d1 = r1.log.find((e) => e.t === 'damage' && e.move === 'Sonicboom');
+    const d1 = r1.log.find((e) => e.t === 'damage' && e.move === 'Sonic Boom');
     if (d1) t.eq(d1.amount, 20, 'Sonicboom always deals exactly 20');
 
     const dragon = mkMono('DragonRager', 'Dragon Rage', dummyAtkStats, ['Dragon']);
@@ -978,7 +978,7 @@ export default function (t) {
     // After sun is set (turn 1 by SunFast), Beamer's Solar Beam should deal
     // damage on a turn WITHOUT a preceding charge event for it.
     const beamerCharges = res.log.filter((e) => e.t === 'charge' && e.source === 'Beamer');
-    const beamerDmg = res.log.filter((e) => e.t === 'damage' && e.source === 'Beamer' && e.move === 'Solarbeam');
+    const beamerDmg = res.log.filter((e) => e.t === 'damage' && e.source === 'Beamer' && e.move === 'Solar Beam');
     t.ok(beamerDmg.length >= 1, 'Solar Beam deals damage');
     t.eq(beamerCharges.length, 0, 'Solar Beam never charges while sun is up (fires instantly)');
   }

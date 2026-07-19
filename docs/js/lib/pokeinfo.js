@@ -48,9 +48,18 @@ export function pokemonInfoHTML(poke, movelist = {}) {
   const immuneT = poke.immunities && poke.immunities !== '\u2014'
     ? tag('immune-tag', poke.immunities) : '<span style="color:var(--text-dim);font-size:11px">None</span>';
 
+  // The Abra/Kadabra/Alakazam family's competitive-moveset text uses
+  // "elemental punch" as a placeholder for whichever of Fire/Ice/Thunder Punch
+  // (all three are legal Gen 2 TM moves for this line). This card isn't part
+  // of a scored guessing round, so a plain Math.random pick is fine here.
+  const resolveElementalPunch = (text) => {
+    if (!text || !/elemental punch/i.test(text)) return text;
+    const picks = ['Fire Punch', 'Ice Punch', 'Thunder Punch'];
+    return text.replace(/elemental punch/i, picks[Math.floor(Math.random() * picks.length)]);
+  };
   const comps = [poke.compMoveset1, poke.compMoveset2, poke.compMoveset3, poke.compMoveset4].filter((m) => m && m.trim());
   const compH = comps.length
-    ? comps.map((m, i) => `<div class="comp-moveset-item"><strong>Moveset ${i + 1}</strong>${escHtml(m)}</div>`).join('')
+    ? comps.map((m, i) => `<div class="comp-moveset-item"><strong>Moveset ${i + 1}</strong>${escHtml(resolveElementalPunch(m))}</div>`).join('')
     : '<div style="color:var(--text-dim);font-size:12px">No competitive movesets listed.</div>';
 
   const moves = movelist[poke.name.toLowerCase()] || [];
