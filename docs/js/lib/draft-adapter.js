@@ -3,6 +3,7 @@
  * @version     1.4.0
  * @updated     2026-07-15
  * @changelog
+ *   1.5.0 — re-export freshenThroneSnapshot (stale-period throne cascade fix).
  *   1.4.0 — re-export resolveDefeatedCascade (down-the-ladder bump).
  *   1.3.0 — re-export isTierUnlocked + nextProgressRank (#12/#13).
  *   1.2.0 — re-export resolveThroneCascade + TIER_RANK (#14a).
@@ -19,6 +20,7 @@ export {
   autoDraftScaled,
   resolveThroneCascade,
   resolveDefeatedCascade,
+  freshenThroneSnapshot,
   TIER_RANK,
   isTierUnlocked,
   nextProgressRank,

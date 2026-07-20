@@ -105,6 +105,7 @@
  */
 
 import { toRealStats, moveId } from './sim.js';
+import { centralPeriodKey } from './lib/share.js';
 
 export const STAT_KEYS = { 1: ['hp', 'atk', 'def', 'spc', 'spe'], 2: ['hp', 'atk', 'def', 'spa', 'spd', 'spe'] };
 const MOVE_SLOTS = 4;             // moves on the finished mon
@@ -493,6 +494,52 @@ export function resolveDefeatedCascade({ takenTierKey, playerRecord, thrones, ti
   // If `displaced` is still set here, a human was pushed off the bottom rung —
   // they simply fall off the ladder (no write needed; they're gone).
   return writes;
+}
+
+/**
+ * #16 (bug fix) — a throne's stored record only reflects who ACTUALLY holds
+ * it in the CURRENT period. Once a tier's cadence rolls over (Day at
+ * midnight CT, Week at end of Sunday, Month on the 1st, Year on Jan 1) its
+ * old record is stale — the spot has effectively reverted to vacant (a fresh
+ * NPC champion), exactly as resolveThrone() already treats it for display.
+ * But claimThrone's cascade logic previously read the raw Firebase snapshot
+ * straight through with no such check, so a stale holder left over from a
+ * PAST period could be read as if they still legitimately held that spot
+ * TODAY — and get pushed down onto a LOWER tier as part of a normal cascade.
+ *
+ * Concretely, this is exactly how a player who beat Will (day) and Koga
+ * (week) right after both reset could see last week's WEEKLY holder show up
+ * freshly "knocked down" into the DAY spot: resolveDefeatedCascade reads
+ * `thrones[takenTierKey]` (here, week) to decide who's displaced — and that
+ * stale record still had a real holderUid, so it looked exactly like a
+ * legitimate holder who needed to cascade down, resurrecting last period's
+ * data into an unrelated, ALSO-just-reset tier.
+ *
+ * This filters a raw {tierKey: record} throne snapshot down to only the
+ * entries that are still current for the period each key computes right now,
+ * treating anything else as if that spot were vacant. Pure (date is
+ * injectable for tests); no Firebase, no DOM.
+ *
+ * @param {Record<string, object|null>} rawThrones raw snapshot from `/draft/throne`
+ * @param {string[]} tierKeys all tier keys to check (order doesn't matter)
+ * @param {Date} [date] defaults to now; injectable for tests
+ * @returns {{ fresh: Record<string, object>, staleKeys: string[] }}
+ *   fresh      — only entries whose stored period matches today's period for that tier
+ *   staleKeys  — tier keys that HAD data, but for an expired period (safe to clear)
+ */
+export function freshenThroneSnapshot(rawThrones, tierKeys, date = new Date()) {
+  const fresh = {};
+  const staleKeys = [];
+  for (const key of tierKeys) {
+    const rec = rawThrones ? rawThrones[key] : null;
+    if (!rec) continue;
+    if (rec.period === centralPeriodKey(key, date)) {
+      fresh[key] = rec;
+    } else {
+      staleKeys.push(key);
+    }
+  }
+  return { fresh, staleKeys };
 }
 
 /**

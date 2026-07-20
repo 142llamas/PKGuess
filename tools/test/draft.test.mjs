@@ -18,7 +18,8 @@
  */
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { DraftSession, autoDraft, autoDraftScaled, resolveThroneCascade, resolveDefeatedCascade, TIER_RANK, isTierUnlocked, nextProgressRank, buildSpeciesList, buildLearnsetMap } from '../../docs/js/draft.js';
+import { DraftSession, autoDraft, autoDraftScaled, resolveThroneCascade, resolveDefeatedCascade, freshenThroneSnapshot, TIER_RANK, isTierUnlocked, nextProgressRank, buildSpeciesList, buildLearnsetMap } from '../../docs/js/draft.js';
+import { centralPeriodKey } from '../../docs/js/lib/share.js';
 
 const load = (rel) => JSON.parse(readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8'));
 const gen2 = load('../../docs/data/gen2.json');
@@ -312,6 +313,61 @@ export default function (t) {
       const w = resolveDefeatedCascade({ takenTierKey: 'all', playerRecord: me, thrones, tierKeysHighToLow: HL });
       t.eq(w.all.holderUid, 'me', 'drafter takes the (previously AI-held) top spot');
       t.eq(Object.keys(w).length, 1, 'no cascade -- only the taken spot is written, everything else untouched');
+    }
+  }
+
+
+  t.section('draft.js — freshenThroneSnapshot (#16 bug fix): a spot whose stored period has rolled over is treated as vacant');
+  {
+    const HL = ['all', 'year', 'month', 'week', 'day'];
+    const KEYS = ['day', 'week', 'month', 'year', 'all'];
+    const NOW = new Date('2026-07-20T12:00:00-05:00'); // a fixed "today" for determinism
+    const P = (u, n) => ({ holderUid: u, holderName: n, mon: { name: n, baseStats: { hp: 1 } } });
+
+    {
+      const raw = {
+        day: { ...P('u1', 'StaleDay'), period: centralPeriodKey('day', new Date('2020-01-01')) }, // long-expired
+        week: { ...P('u2', 'FreshWeek'), period: centralPeriodKey('week', NOW) },                  // current
+      };
+      const { fresh, staleKeys } = freshenThroneSnapshot(raw, KEYS, NOW);
+      t.ok(!('day' in fresh), 'a stale-period entry is excluded from `fresh`');
+      t.eq(fresh.week.holderName, 'FreshWeek', 'a current-period entry is kept as-is in `fresh`');
+      t.ok(staleKeys.includes('day'), '`staleKeys` lists the tier that had stale data');
+      t.ok(!staleKeys.includes('week'), '`staleKeys` does NOT list a tier that is still current');
+      t.ok(!staleKeys.includes('month'), 'a tier with no data at all is not reported as stale (nothing to clean up)');
+      t.eq(Object.keys(fresh).length, 1, 'only the current-period entry survives into `fresh`');
+    }
+
+    // The exact regression: a stale WEEKLY holder must not read as a real
+    // current holder when the player just claimed week — combining
+    // freshenThroneSnapshot with resolveDefeatedCascade end-to-end (matching
+    // exactly how claimThrone chains them) must NOT cascade a resurrected
+    // stale holder down onto the day spot.
+    {
+      const rawThrones = {
+        day: null, // day already reset too — genuinely vacant, an NPC holds it now
+        week: { ...P('uOldWeekly', 'LastWeeksChamp'), period: centralPeriodKey('week', new Date('2026-07-06')) }, // stale — from a past week
+      };
+      const { fresh } = freshenThroneSnapshot(rawThrones, KEYS, NOW);
+      const me = P('me', 'Me');
+      const w = resolveDefeatedCascade({ takenTierKey: 'week', playerRecord: me, thrones: fresh, tierKeysHighToLow: HL });
+      t.eq(w.week.holderUid, 'me', 'the player takes the week spot');
+      t.ok(!('day' in w), 'THE BUG: a stale weekly holder must NOT get cascaded down onto the day spot just because it rolled over');
+      const survivors = Object.values(w).filter(Boolean).map((r) => r.holderName);
+      t.ok(!survivors.includes('LastWeeksChamp'), 'the stale holder does not resurface anywhere in the writes at all');
+    }
+
+    // Sanity check the OLD (buggy) behavior really would have failed this,
+    // so the regression test is actually discriminating and not vacuous.
+    {
+      const rawThrones = {
+        day: null,
+        week: { ...P('uOldWeekly', 'LastWeeksChamp'), period: centralPeriodKey('week', new Date('2026-07-06')) },
+      };
+      const me = P('me', 'Me');
+      // Using the RAW (unfreshened) snapshot directly, as claimThrone used to:
+      const wBuggy = resolveDefeatedCascade({ takenTierKey: 'week', playerRecord: me, thrones: rawThrones, tierKeysHighToLow: HL });
+      t.eq(wBuggy.day.holderName, 'LastWeeksChamp', 'discriminator: without freshenThroneSnapshot, the stale holder WOULD wrongly cascade onto day (proves the fix matters)');
     }
   }
 

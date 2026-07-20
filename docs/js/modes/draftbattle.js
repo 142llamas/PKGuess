@@ -275,7 +275,7 @@
 import { el, clear, statSpreadEl, shareSheetEl } from '../lib/dom.js';
 import { music } from '../lib/music.js';
 import {
-  DraftSession, autoDraft, autoDraftScaled, resolveThroneCascade, resolveDefeatedCascade, TIER_RANK, nextProgressRank,
+  DraftSession, autoDraft, autoDraftScaled, resolveThroneCascade, resolveDefeatedCascade, freshenThroneSnapshot, TIER_RANK, nextProgressRank,
   buildSpeciesList, buildLearnsetMap, runMatch, toRealStats,
 } from '../lib/draft-adapter.js';
 import {
@@ -1046,9 +1046,24 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
       const sameMon = (a, b) => !!a && !!b && a.name === b.name && JSON.stringify(a.baseStats) === JSON.stringify(b.baseStats);
       let existingThrones = null;
       try { existingThrones = await fb.get('/draft/throne'); } catch { existingThrones = null; }
-      const otherKey = existingThrones
-        ? Object.keys(existingThrones).find((k) => k !== tier.key && existingThrones[k] && sameMon(existingThrones[k].mon, rec.mon))
-        : null;
+      // #16 (bug fix) — a raw Firebase snapshot can still contain a PAST
+      // period's holder for a tier that has since reset (Day at midnight CT,
+      // Week/Month/Year on their own cadences). Left unfiltered, that stale
+      // record reads as a legitimate CURRENT holder to every check below —
+      // which is exactly how a stale weekly holder ended up freshly
+      // "cascaded down" onto the daily spot the moment both reset and a
+      // fresh claim ran. freshenThroneSnapshot applies the SAME period check
+      // resolveThrone() already uses for display, so a reset tier is treated
+      // as vacant here too, everywhere existingThrones is used below.
+      const { fresh: freshThrones, staleKeys } = freshenThroneSnapshot(existingThrones, TIER_KEYS_IN_ORDER);
+      // Best-effort cleanup: the decision logic below is already correct even
+      // if this write fails or races (freshThrones excludes it either way),
+      // so this never blocks or affects the claim — it just tidies up data
+      // that no longer means anything now that its period has rolled over.
+      for (const staleKey of staleKeys) {
+        try { await fb.set(`/draft/throne/${staleKey}`, null); } catch { /* best-effort cleanup only */ }
+      }
+      const otherKey = Object.keys(freshThrones).find((k) => k !== tier.key && sameMon(freshThrones[k].mon, rec.mon));
 
       if (otherKey) {
         const decision = resolveThroneCascade({
@@ -1084,12 +1099,14 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
       // DOWN one rung, chaining through any further player-held rungs below
       // (each shifts down one), with NPC-held rungs absorbing the cascade and a
       // human pushed off the bottom falling off the ladder. resolveDefeatedCascade
-      // is pure; we just apply the writes it returns.
+      // is pure; we just apply the writes it returns. Uses freshThrones (not the
+      // raw snapshot) so a stale/reset tier is never mistaken for a real holder
+      // to be displaced — see the #16 comment above.
       const tierKeysHighToLow = [...TIER_KEYS_IN_ORDER].reverse();
       const cascadeWrites = resolveDefeatedCascade({
         takenTierKey: tier.key,
         playerRecord: { holderUid: rec.holderUid, holderName: rec.holderName, mon: rec.mon },
-        thrones: existingThrones || {},
+        thrones: freshThrones,
         tierKeysHighToLow,
       });
       // Verify the player's own spot landed (mirrors the prior verifiedSetThrone
