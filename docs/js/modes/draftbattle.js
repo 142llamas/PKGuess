@@ -322,6 +322,15 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
   let playTimer = null;    // battle auto-play interval
   let ctx = null;          // { species, movestats, chart }
   let lastResult = null;   // completed draft result()
+  // Guards against the same drafted mon running the auto-claiming gauntlet
+  // more than once. reaching a spot claims it automatically (see runGauntlet),
+  // so re-running the SAME build after it already ran — e.g. by navigating
+  // back to "My Build" from the results screen or Elite 4 Status, both of
+  // which re-render this exact build with its old "Challenge the Elite 4"
+  // button still live — let a player claim a second spot with a mon that
+  // should only ever get one shot. Reset only when a genuinely NEW draft
+  // starts (startDraft), never by simply re-rendering an existing one.
+  let gauntletDoneForBuild = false;
   let identity = null;     // resolved lazily for daily / throne
   let firebase = null;
 
@@ -364,6 +373,7 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
     // even earlier) — so this is never racing a background correction
     // against how fast someone drafts.
     music.playGameStart(); // the actual draft is starting — covers free-play, Daily Challenge (via startDaily()), and "Draft Again"
+    gauntletDoneForBuild = false; // a brand-new build gets its own single shot at the gauntlet
     const session = new DraftSession({ species: ctx.species, gen: 2, seed, rerolls, playerName: (identity && identity.name) || 'Player' });
     pendingPicks = [];
     renderCard(session);
@@ -647,10 +657,17 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
     stopPlay();
     const statKeys = ['hp', 'atk', 'def', 'spa', 'spd', 'spe'];
     const statVals = statKeys.map((k) => result.baseStats[k] || 0);
+    // Once this exact build has already run the gauntlet (win or lose — it
+    // auto-claims on reaching a spot), "Challenge the Elite 4" has nothing
+    // legitimate left to do: running it again would re-claim with a mon
+    // that's already had its shot. Swap it for "Draft Again" instead of
+    // leaving a stale button that reproduces the double-claim bug.
     const actions = isDaily
       ? [el('button', { class: 'btn-primary', onClick: submitDaily }, '\uD83D\uDCE4 Submit & See Results'),
          el('button', { class: 'btn-secondary', onClick: () => onExit && onExit() }, '\u2190 Main Menu')]
-      : [el('button', { class: 'btn-primary', onClick: runGauntlet }, '\u2694\uFE0F Challenge the Elite 4'),
+      : [gauntletDoneForBuild
+           ? el('button', { class: 'btn-primary', onClick: () => startDraft(((Math.random() * 2 ** 31) | 0), { pokemon: 3, moves: 3 }) }, '\uD83D\uDD01 Draft Again')
+           : el('button', { class: 'btn-primary', onClick: runGauntlet }, '\u2694\uFE0F Challenge the Elite 4'),
          // #14 — share a card image of this exact build (name → types → stats → moves).
          el('button', { class: 'btn-secondary', onClick: () => shareDraftedMon(result) }, '\uD83D\uDCE4 Share My Pok\u00e9mon'),
          el('button', { class: 'btn-secondary', onClick: () => onExit && onExit() }, '\u2190 Main Menu')];
@@ -790,6 +807,12 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
 
   async function runGauntlet() {
     if (!lastResult) { flash('Draft a team first.'); return; }
+    // The real safeguard (not just hiding the button): reaching a spot in the
+    // gauntlet auto-claims it, so this build gets exactly one run. Any stale
+    // "Challenge the Elite 4" button left over from an old screen render, or
+    // any other path that might call this, is refused here regardless.
+    if (gauntletDoneForBuild) { flash('This Pok\u00e9mon has already challenged the Elite 4. Draft a new team to challenge again.'); return; }
+    gauntletDoneForBuild = true;
     stopPlay();
     clear(root).append(spinner('Challenging the Elite 4\u2026'));
     let raw = null;
