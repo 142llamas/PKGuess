@@ -467,7 +467,7 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
       mutate(stats);
       stats.name = (identity.name || 'Anonymous').slice(0, 16); // carried for the leaderboard (stats are uid-keyed)
       await firebase.set(`/draft/stats/${identity.uid}`, stats);
-    } catch { /* stats are best-effort — never block the game on them */ }
+    } catch (e) { console.warn('draft stats write failed:', e); /* stats are best-effort — never block the game on them */ }
   }
 
   // ===== RENDER CARD (draft) ===============================================
@@ -1655,15 +1655,27 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
     clear(root).append(spinner('Loading your stats\u2026'));
     let stats = normalizeStats(null);
     let name = 'You';
-    let offline = false;
+    let errorMsg = null;
     try {
       if (!identity) identity = await lazyIdentity();
       if (!firebase) firebase = await lazyFirebase();
       name = (identity && identity.name) || 'You';
       const raw = await firebase.get(`/draft/stats/${identity.uid}`);
       stats = normalizeStats(raw);
-    } catch { offline = true; }
-    renderStatsProfile(stats, { title: `\uD83D\uDCCA ${name}\u2019s Draft Stats`, offline, backTo: opts.backTo });
+    } catch (e) {
+      console.warn('player stats read failed:', e);
+      // A blanket "offline" label was misleading — a Firebase security-rules
+      // gap (a brand-new path with no rule yet) throws a permission-denied
+      // error, not a network error, and looks nothing like being offline to
+      // the player. Realtime Database's JS SDK surfaces this as `PERMISSION_
+      // DENIED`, but the exact code/casing isn't guaranteed across SDK
+      // versions, so also fall back to matching it in the message text.
+      const denied = e && /permission[_-]?denied/i.test(String((e.code || e.message || '')));
+      errorMsg = denied
+        ? '\u26A0\uFE0F Could not load stats \u2014 Firebase rules don\u2019t currently allow reading /draft/stats. Ask whoever manages the database to add a rule for it.'
+        : '\u26A0\uFE0F Could not load stats \u2014 check your connection and try again.';
+    }
+    renderStatsProfile(stats, { title: `\uD83D\uDCCA ${name}\u2019s Draft Stats`, errorMsg, backTo: opts.backTo });
   }
 
   // Pure-ish renderer for a normalized stats object → the profile card. Kept
@@ -1690,7 +1702,7 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
       el('div', { class: 'summary-container' },
         el('div', { class: 'summary-card' },
           el('div', { class: 'summary-result', style: { textAlign: 'center', marginBottom: '8px' } }, opts.title || '\uD83D\uDCCA Draft Stats'),
-          opts.offline ? el('div', { class: 'battle-offline' }, '\u26A0\uFE0F Offline \u2014 stats may be unavailable.') : null,
+          opts.errorMsg ? el('div', { class: 'battle-offline' }, opts.errorMsg) : null,
 
           el('div', { class: 'dstat-section-title' }, '\uD83C\uDFAE Daily Challenge'),
           el('div', { class: 'dstat-block' },

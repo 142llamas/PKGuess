@@ -2,7 +2,6 @@
   "rules": {
     ".read": false,
     ".write": false,
-
     "players": {
       "$uid": {
         ".read": "auth !== null",
@@ -10,7 +9,6 @@
         ".validate": "newData.hasChildren(['name', 'createdAt']) && newData.child('name').isString() && newData.child('name').val().length <= 16 && newData.child('createdAt').isNumber()"
       }
     },
-
     "nameclaims": {
       "$nameKey": {
         ".read": "auth !== null",
@@ -18,7 +16,6 @@
         ".validate": "newData.hasChildren(['uid', 'pinHash']) && newData.child('uid').isString() && newData.child('pinHash').isString() && $nameKey.length >= 1 && $nameKey.length <= 20"
       }
     },
-
     "leaderboard": {
       ".read": "auth !== null",
       "$gen": {
@@ -32,7 +29,6 @@
         }
       }
     },
-
     "rooms": {
       "$code": {
         ".read": "auth !== null",
@@ -40,7 +36,6 @@
         ".validate": "$code.length === 6"
       }
     },
-
     "draft": {
       "throne": {
         ".read": "auth !== null",
@@ -78,6 +73,13 @@
               ".validate": "newData.hasChildren(['name', 'at']) && newData.child('name').isString() && newData.child('name').val().length <= 16 && newData.child('at').isNumber()"
             }
           }
+        }
+      },
+      "stats": {
+        ".read": "auth !== null",
+        "$uid": {
+          ".write": "auth !== null && auth.uid === $uid",
+          ".validate": "newData.hasChildren(['name', 'e4']) && newData.child('name').isString() && newData.child('name').val().length <= 16 && newData.child('e4').hasChildren(['draftCount', 'spots', 'bstSum', 'bstCount', 'bstMax']) && newData.child('e4/draftCount').isNumber() && newData.child('e4/spots').hasChildren(['day', 'week', 'month', 'year', 'all']) && newData.child('e4/bstSum').isNumber() && newData.child('e4/bstCount').isNumber() && newData.child('e4/bstMax').isNumber()"
         }
       }
     }
