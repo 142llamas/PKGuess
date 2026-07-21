@@ -22,6 +22,7 @@
 
 import { getFirebase } from './firebase.js';
 import { getIdentity } from './identity.js';
+import { rankDraftStats } from './draft-stats.js';
 
 const VALID_GENS  = new Set(['gen1', 'gen2']);
 const VALID_MODES = new Set(['single', 'victoryroad', 'safari']);
@@ -80,11 +81,23 @@ export async function topEntries(gen, mode, n = 10, opts = {}) {
 }
 
 /**
- * Sort a raw {key: entry} object by score descending, return top N as array.
- * Pure function — usable client-side without a DB call.
- * @param {Record<string, {uid,name,score,detail,at}>} obj
+ * Read the Draft Battle per-player stat profiles and rank them for a board.
+ * Reads /draft/stats (a {uid: statsBlob} map) and delegates ranking to the
+ * pure rankDraftStats(). Returns [] on any error.
  * @param {number} n
+ * @param {{ sortBy?: string }} opts
  */
+export async function topDraftStats(n = 20, opts = {}) {
+  try {
+    const fb = await getFirebase();
+    const raw = await fb.get('/draft/stats');
+    if (!raw) return [];
+    return rankDraftStats(raw, { sortBy: opts.sortBy || 'dailyFirsts', n });
+  } catch (e) {
+    console.warn('draft stats read failed:', e);
+    return [];
+  }
+}
 export function rankEntries(obj, n = 10, opts = {}) {
   const { sortBy = 'score', metricAsc = false } = opts;
   const rows = Object.entries(obj || {})

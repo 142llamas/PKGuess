@@ -19,7 +19,8 @@
  */
 
 import { el, clear } from '../lib/dom.js';
-import { topEntries } from '../lib/leaderboard-data.js';
+import { topEntries, topDraftStats } from '../lib/leaderboard-data.js';
+import { DRAFT_STAT_METRICS } from '../lib/draft-stats.js';
 import { getIdentity } from '../lib/identity.js';
 
 const BOARDS = [
@@ -29,6 +30,10 @@ const BOARDS = [
   { gen: 'gen2', mode: 'single',      label: 'Gen 2 · Single Player' },
   { gen: 'gen2', mode: 'victoryroad', label: 'Gen 2 · Victory Road'  },
   { gen: 'gen2', mode: 'safari',      label: 'Gen 2 · Safari Zone'   },
+  // Draft Battle stats span both gens (Draft is Gen-2-only), so it's a single
+  // cross-cutting board rather than one per gen. Marked draftStats so the
+  // loader takes the dedicated per-player-profile path instead of a score read.
+  { draftStats: true, label: '\u2694\uFE0F Draft Stats' },
 ];
 
 // Per-mode sort behaviour.
@@ -56,6 +61,7 @@ export function createLeaderboard({ mount, config, data, params, onExit }) {
 
   let uid = null;
   let sortByMetric = false;  // VR toggle; Safari overrides to always-metric below
+  let draftSort = 'dailyFirsts'; // Draft Stats board's active metric
 
   // Wait for auth before rendering so reads succeed
   getIdentity()
@@ -83,6 +89,7 @@ export function createLeaderboard({ mount, config, data, params, onExit }) {
       el('div', { class: 'lb-board', id: 'lb-board' },
         el('div', { class: 'lb-empty' }, 'Loading\u2026')),
       sortToggle(),
+      draftMetricRow(),
       el('div', { class: 'sp-start-row' },
         el('button', { class: 'btn-secondary', onClick: () => onExit && onExit() }, '\u2190 Back'),
         el('button', { class: 'btn-secondary', onClick: render }, '\u21bb Refresh')));
@@ -92,6 +99,7 @@ export function createLeaderboard({ mount, config, data, params, onExit }) {
   // Victory Road gets a toggle to re-sort by the time-per-catch metric; other
   // boards have a fixed sort so no control is shown.
   function sortToggle() {
+    if (BOARDS[tab].draftStats) return el('span', { style: { display: 'none' } });
     const cfg = SORT_CONFIG[BOARDS[tab].mode] || {};
     if (!cfg.toggle) return el('span', { style: { display: 'none' } });
     return el('div', { class: 'lb-sort-row' },
@@ -106,8 +114,21 @@ export function createLeaderboard({ mount, config, data, params, onExit }) {
       }, cfg.metricLabel || 'Metric'));
   }
 
+  // Draft Stats board's metric picker — one button per rankable metric.
+  function draftMetricRow() {
+    if (!BOARDS[tab].draftStats) return el('span', { style: { display: 'none' } });
+    return el('div', { class: 'lb-sort-row' },
+      el('span', { class: 'sf-intro', style: { margin: 0 } }, 'Rank by:'),
+      ...Object.entries(DRAFT_STAT_METRICS).map(([key, m]) =>
+        el('button', {
+          class: 'btn-secondary' + (draftSort === key ? ' active' : ''),
+          onClick: () => { if (draftSort !== key) { draftSort = key; render(); } },
+        }, m.label)));
+  }
+
   async function loadBoard() {
     const board = root.querySelector('#lb-board');
+    if (BOARDS[tab].draftStats) { await loadDraftStatsBoard(board); return; }
     const { gen, mode, label } = BOARDS[tab];
     const cfg = SORT_CONFIG[mode] || {};
     // Safari always sorts by its metric; VR sorts by metric only when toggled;
@@ -157,6 +178,44 @@ export function createLeaderboard({ mount, config, data, params, onExit }) {
       console.warn('leaderboard load error:', err);
       if (board) board.replaceChildren(
         el('div', { class: 'lb-empty' }, 'Could not load scores — check your connection and that Firebase rules are published.'));
+    }
+  }
+
+  // Draft Stats board: per-player Draft Battle profiles, ranked by the chosen
+  // metric. Distinct columns from the score boards (no single "score"), so it
+  // has its own loader/renderer rather than threading through loadBoard's.
+  async function loadDraftStatsBoard(board) {
+    const pct = (v) => (v == null ? '\u2014' : `${Math.round(v * 100)}%`);
+    try {
+      const rows = await topDraftStats(20, { sortBy: draftSort });
+      if (!board) return;
+      if (!rows.length) {
+        board.replaceChildren(el('div', { class: 'lb-empty' }, 'No draft stats yet — play the Daily Challenge or run the Elite 4 to get on the board!'));
+        return;
+      }
+      const metricLabel = (DRAFT_STAT_METRICS[draftSort] || {}).label || 'Metric';
+      board.replaceChildren(
+        el('table', { class: 'lb-table' },
+          el('thead', {}, el('tr', {},
+            el('th', {}, '#'), el('th', {}, 'Player'),
+            el('th', {}, metricLabel),
+            el('th', {}, 'Daily #1s'), el('th', {}, 'E4 drafts'), el('th', {}, 'Avg BST'), el('th', {}, 'Fav type'))),
+          el('tbody', {},
+            ...rows.map((r, i) => {
+              const isMe = uid && r.uid === uid;
+              return el('tr', { class: isMe ? 'lb-me' : '' },
+                el('td', {}, PLACE[i] || String(i + 1)),
+                el('td', { style: { fontWeight: isMe ? 800 : 400, color: isMe ? 'var(--accent-gold)' : '' } }, r.name || 'Anonymous'),
+                el('td', { style: { fontWeight: 700, color: 'var(--accent-gold)' } }, String(r._metric)),
+                el('td', {}, String(r.dailyFirsts)),
+                el('td', {}, String(r.e4Drafts)),
+                el('td', {}, r.avgBst ? String(Math.round(r.avgBst)) : '\u2014'),
+                el('td', { class: 'lb-detail' }, r.favoriteType || '\u2014'));
+            }))));
+    } catch (err) {
+      console.warn('draft stats board load error:', err);
+      if (board) board.replaceChildren(
+        el('div', { class: 'lb-empty' }, 'Could not load draft stats — check your connection and that Firebase rules are published.'));
     }
   }
 

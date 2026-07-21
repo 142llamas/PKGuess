@@ -10,7 +10,7 @@
 import {
   centralDateParts, centralDateStr, centralPeriodKey, seedFromString, seedFromDate,
   buildSummaryText, buildMonCardPlan, typeColor, typeTextColor, drawMonCardToCanvas,
-  draftBattleLink, dailyChallengeLink, stablePlayerFallbackName,
+  draftBattleLink, dailyChallengeLink, stablePlayerFallbackName, baseStatTotal,
 } from '../../docs/js/lib/share.js';
 
 export default function (t) {
@@ -49,6 +49,24 @@ export default function (t) {
     t.ok(!noPlacement.toLowerCase().includes('undefined'), 'no placement label never renders literal "undefined"');
     const noPlacementPrefixed = buildSummaryText({ kind: 'gauntlet', monName: "Brock's Onix" });
     t.ok(noPlacementPrefixed.includes("Brock's Onix"), 'the OTHER monName usage ("My Elite 4 challenger: X") is NOT stripped — it\u2019s not a possessive clash, so the full name is still shown there');
+
+    // BST (base stat total) suffix on the "beat my <mon>" phrasing.
+    const withBst = buildSummaryText({ kind: 'gauntlet', placementLabel: 'Champion', monName: "Ash's Kangaskhan", bst: 490 });
+    t.ok(withBst.includes('beat my Kangaskhan (BST 490)'), 'BST is appended as "(BST ###)" right after the mon in the challenge phrase');
+    const noBst = buildSummaryText({ kind: 'gauntlet', placementLabel: 'Champion', monName: 'Kangaskhan' });
+    t.ok(!noBst.includes('BST'), 'no BST suffix at all when none is supplied (never renders "(BST )" or "undefined")');
+    const zeroBst = buildSummaryText({ kind: 'gauntlet', placementLabel: 'Champion', monName: 'Kangaskhan', bst: 0 });
+    t.ok(zeroBst.includes('(BST 0)'), 'a legitimately-zero BST is still shown (0 is a real value, not "missing")');
+  }
+
+  t.section('share.js — baseStatTotal: sums base stats from object or array form');
+  {
+    t.eq(baseStatTotal({ hp: 105, atk: 95, def: 80, spa: 40, spd: 80, spe: 90 }), 490, 'sums a Gen-2 stat object (Kangaskhan = 490)');
+    t.eq(baseStatTotal([45, 49, 49, 65, 65, 45]), 318, 'sums an array of six values (Bulbasaur = 318)');
+    t.eq(baseStatTotal([45, 49, 49, 65, 45]), 253, 'sums a Gen-1 five-value array too');
+    t.eq(baseStatTotal(null), 0, 'null/missing stats total to 0, never NaN');
+    t.eq(baseStatTotal({}), 0, 'an empty object totals to 0');
+    t.eq(baseStatTotal({ hp: 50, atk: undefined, def: '30', spa: null, spd: 20, spe: 10 }), 110, 'ignores non-numeric entries and coerces numeric strings (50+30+20+10)');
   }
 
   t.section('share.js — buildSummaryText: daily kind (#1) — exact spec\u2019d format + leading link');

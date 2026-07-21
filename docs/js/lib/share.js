@@ -137,6 +137,16 @@ export function seedFromDate(date = new Date()) {
 // ---- summary card --------------------------------------------------------
 
 
+/** Sum a mon's base stats into a single BST (Base Stat Total) number. Accepts
+ *  either an object ({hp,atk,...}) or an array of values; ignores non-numeric
+ *  entries. Pure, so the draft screens, share text, and E4 stats all compute
+ *  BST identically from one place. */
+export function baseStatTotal(baseStats) {
+  if (!baseStats) return 0;
+  const vals = Array.isArray(baseStats) ? baseStats : Object.values(baseStats);
+  return vals.reduce((sum, v) => sum + (parseInt(v, 10) || 0), 0);
+}
+
 /**
  * Build a shareable plain-text summary card.
  * @param {{kind?:'daily'|'throne'|'gauntlet', dateStr?:string, monName?:string,
@@ -144,7 +154,7 @@ export function seedFromDate(date = new Date()) {
  *   tierLabel?:string, claimed?:boolean, placementLabel?:string, link?:string}} opts
  */
 export function buildSummaryText(opts = {}) {
-  const { kind = 'daily', dateStr, monName, playerName, winPct, rank, total, tierLabel, claimed, beatName, placementLabel, link } = opts;
+  const { kind = 'daily', dateStr, monName, playerName, winPct, rank, total, tierLabel, claimed, beatName, placementLabel, link, bst } = opts;
   // "beat my Ash's Kangaskhan" / "with my Ash's Kangaskhan" reads wrong —
   // two possessives clashing. monName is generally "{playerName}'s
   // {species}"; strip that prefix specifically for the "my {mon}" phrases
@@ -152,22 +162,25 @@ export function buildSummaryText(opts = {}) {
   // (e.g. "My Elite 4 challenger: Ash's Kangaskhan") aren't a possessive
   // clash and are left as-is.
   const speciesOnly = (name) => (name || '').replace(/^.+?'s /, '');
+  // " (BST ###)" suffix for the "beat my <mon>" phrasings, when a total is
+  // supplied. BST = Base Stat Total (sum of all six base stats).
+  const bstSuffix = (bst != null && isFinite(Number(bst))) ? ` (BST ${Number(bst)})` : '';
   const lines = [];
   if (kind === 'gauntlet') {
     // #15 — one consolidated share after a full Elite-4 gauntlet run, instead
     // of a share prompt after every individual throne win.
     lines.push('PokeGuess Draft Battle');
-    if (placementLabel && monName) lines.push(`I just took the ${placementLabel} spot on the Elite 4! See if you can beat my ${speciesOnly(monName)}`);
+    if (placementLabel && monName) lines.push(`I just took the ${placementLabel} spot on the Elite 4! See if you can beat my ${speciesOnly(monName)}${bstSuffix}`);
     else if (placementLabel) lines.push(`I just took the ${placementLabel} spot on the Elite 4!`);
-    else if (monName) lines.push(`My Elite 4 challenger: ${monName}`);
+    else if (monName) lines.push(`My Elite 4 challenger: ${monName}${bstSuffix}`);
     if (link) lines.push(link);
   } else if (kind === 'throne') {
     lines.push('PokeGuess Draft Battle');
     const won = winPct != null ? winPct > 0.5 : !!claimed;
-    if (beatName && monName) lines.push(`I challenged ${beatName} and ${won ? 'won' : 'lost'} with my ${speciesOnly(monName)}`);
+    if (beatName && monName) lines.push(`I challenged ${beatName} and ${won ? 'won' : 'lost'} with my ${speciesOnly(monName)}${bstSuffix}`);
     else if (beatName) lines.push(`I challenged ${beatName} and ${won ? 'won' : 'lost'}`);
     else if (claimed && tierLabel) lines.push(`I claimed ${tierLabel}!`);
-    else if (monName) lines.push(`with my ${speciesOnly(monName)}`);
+    else if (monName) lines.push(`with my ${speciesOnly(monName)}${bstSuffix}`);
     if (winPct != null) lines.push(`(${Math.round(winPct * 100)}% win rate)`);
     if (link) lines.push(link);
   } else {

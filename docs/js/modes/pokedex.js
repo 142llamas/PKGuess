@@ -206,7 +206,7 @@ export function createPokedex({ mount, config, data, params, onExit }) {
     );
     // Replace placeholder with actual statSpreadEl (since infoHTML uses innerHTML)
     const placeholder = root.querySelector('#poke-stat-spread-placeholder');
-    if (placeholder && poke.fullStats) placeholder.replaceWith(statSpreadEl(poke.fullStats));
+    if (placeholder && poke.fullStats) placeholder.replaceWith(statSpreadEl(poke.fullStats, { showTotal: true }));
     wirePokemonInfo(root); // silhouette missing-file fallback
 
     const toggle = root.querySelector('.collapsible-toggle');

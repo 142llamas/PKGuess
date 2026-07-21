@@ -98,19 +98,30 @@ export function on(target, type, handler, opts) {
  * Render a full-stat-spread string as a labeled grid.
  * Detects gen from value count: 5 values = Gen 1, 6 = Gen 2.
  * @param {string} spreadStr  e.g. "45/49/49/65/45" or "45/49/49/65/65/45"
+ * @param {{ showTotal?: boolean }} [opts]  when showTotal is true, append a
+ *   "BST <sum>" cell summing every stat. Opt-in because this helper is ALSO
+ *   used to render a revealed stat CLUE in the guessing modes, where a running
+ *   total would clutter (and slightly over-inform) the clue — only the draft
+ *   summary / inspection screens want it.
  * @returns {HTMLElement}
  */
-export function statSpreadEl(spreadStr) {
+export function statSpreadEl(spreadStr, opts = {}) {
   const vals = String(spreadStr || '').split('/').map((v) => v.trim()).filter(Boolean);
   const gen1Names = ['HP', 'Atk', 'Def', 'Spc', 'Spe'];
   const gen2Names = ['HP', 'Atk', 'Def', 'SpA', 'SpD', 'Spe'];
   const names = vals.length === 5 ? gen1Names : gen2Names;
-  const grid = el('div', { class: `stat-spread-grid ${vals.length === 5 ? 'gen1' : 'gen2'}` });
+  const grid = el('div', { class: `stat-spread-grid ${vals.length === 5 ? 'gen1' : 'gen2'}${opts.showTotal ? ' has-total' : ''}` });
   vals.forEach((v, i) => {
     const cell = el('div', { class: 'stat-cell' });
     cell.innerHTML = `<span class="sname">${names[i] || '?'}</span><span class="sval">${v}</span>`;
     grid.appendChild(cell);
   });
+  if (opts.showTotal && vals.length) {
+    const total = vals.reduce((sum, v) => sum + (parseInt(v, 10) || 0), 0);
+    const cell = el('div', { class: 'stat-cell stat-cell-total' });
+    cell.innerHTML = `<span class="sname">BST</span><span class="sval">${total}</span>`;
+    grid.appendChild(cell);
+  }
   return grid;
 }
 

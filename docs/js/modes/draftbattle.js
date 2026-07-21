@@ -279,9 +279,12 @@ import {
   buildSpeciesList, buildLearnsetMap, runMatch, toRealStats,
 } from '../lib/draft-adapter.js';
 import {
-  centralDateStr, centralPeriodKey, seedFromDate, seedFromString, buildSummaryText,
+  centralDateStr, centralPeriodKey, seedFromDate, seedFromString, buildSummaryText, baseStatTotal,
   copyToClipboard, shareWhatsApp, draftBattleLink, dailyChallengeLink, stablePlayerFallbackName,
 } from '../lib/share.js';
+import {
+  normalizeStats, applyE4Draft, applyE4Claim, recordDailyDay, deriveE4, deriveDaily,
+} from '../lib/draft-stats.js';
 
 const STAT_LABELS = { hp: 'HP', atk: 'Atk', def: 'Def', spc: 'Spc', spa: 'SpA', spd: 'SpD', spe: 'Spe', acc: 'accuracy', eva: 'evasiveness' };
 const STATUS_LABELS = { par: 'paralyzed', brn: 'burned', psn: 'poisoned', tox: 'badly poisoned', slp: 'asleep', frz: 'frozen', leechseed: 'Leech Seed', curse: 'the curse', nightmare: 'a nightmare', trap: 'the trap', sandstorm: 'the sandstorm' };
@@ -445,6 +448,26 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
   function specFromResult(res) { return { name: res.name, types: res.types.filter(Boolean), stats: res.stats, moves: res.moves }; }
   function specFromStored(m) {
     return { name: m.name, types: (m.types || []).filter(Boolean), stats: toRealStats(m.baseStats, 2), moves: m.moves || [] };
+  }
+
+  // Read-modify-write the player's persisted stat profile at
+  // /draft/stats/{uid}. `mutate(stats)` receives the normalized profile and
+  // adjusts it in place (via draft-stats.js's pure apply* helpers). Best-effort
+  // and fully non-blocking: any failure (offline, no identity) is swallowed so
+  // stat tracking can never interfere with the actual draft/battle flow. The
+  // last-write-wins race window is negligible here — a player only ever updates
+  // their OWN stats, sequentially, from one session at a time.
+  async function mutateStats(mutate) {
+    try {
+      if (!identity) identity = await lazyIdentity();
+      if (!firebase) firebase = await lazyFirebase();
+      if (!identity || !firebase) return;
+      const raw = await firebase.get(`/draft/stats/${identity.uid}`);
+      const stats = normalizeStats(raw);
+      mutate(stats);
+      stats.name = (identity.name || 'Anonymous').slice(0, 16); // carried for the leaderboard (stats are uid-keyed)
+      await firebase.set(`/draft/stats/${identity.uid}`, stats);
+    } catch { /* stats are best-effort — never block the game on them */ }
   }
 
   // ===== RENDER CARD (draft) ===============================================
@@ -680,7 +703,7 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
             el('div', { class: 'summary-mon' }, result.name)),
           el('div', { class: 'type-pills' },
             ...result.types.filter(Boolean).map((t) => el('span', { class: `type-pill type-${t.toLowerCase()}` }, t))),
-          statSpreadEl(statVals.join('/')),
+          statSpreadEl(statVals.join('/'), { showTotal: true }),
           el('div', { class: 'draft-complete-moves' },
             el('div', { class: 'draft-section-title', style: { marginTop: '12px' } }, 'Moves'),
             el('div', { class: 'draft-move-grid' },
@@ -703,9 +726,10 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
     // Text-only now, matching that same pattern everywhere, with enough
     // detail (types + moves) to stand on its own without the image.
     const typesLine = (result.types || []).filter(Boolean).join(' / ') || '\u2014';
+    const bst = baseStatTotal(result.baseStats);
     const text = [
       'Check out my drafted Pok\u00e9mon!',
-      `${result.name} (${typesLine})`,
+      `${result.name} (${typesLine}) \u2014 BST ${bst}`,
       (result.moves || []).join(', '),
       draftBattleLink(),
     ].filter(Boolean).join('\n');
@@ -778,6 +802,7 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
           el('div', { class: 'draft-throne-grid' },
             ...thrones.map((t) => throneCard(t))),
           el('div', { class: 'summary-actions' },
+            el('button', { class: 'btn-secondary', onClick: () => renderPlayerStats({ backTo: showThrones }) }, '\uD83D\uDCCA My Stats'),
             haveBuild ? el('button', { class: 'btn-secondary', onClick: () => renderBuild(lastResult) }, '\u2190 My Build') : null,
             el('button', { class: 'btn-secondary', onClick: () => onExit && onExit() }, 'Main Menu')))));
   }
@@ -855,6 +880,24 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
         const row = rows[highestIndex];
         claimResult = await claimThrone(row.throne.tier, {
           defeatedUid: row.throne.holderUid, defeatedMon: row.throne.mon, champLabel: row.throne.holderName,
+        });
+      }
+      // Per-player stats (best-effort, non-blocking). EVERY gauntlet run counts
+      // toward draft count / favorite move / favorite type / BST — claimed or
+      // not — per the design. A spot count only increments when this run
+      // genuinely results in HOLDING a spot: not when the claim failed to save,
+      // and not when the player kept a higher spot they already held (this
+      // lower one reverts to vacant, so they don't newly hold it).
+      if (lastResult) {
+        const claimedTierKey = (highestIndex >= 0 && claimResult && claimResult.ok && !claimResult.keptHigherTier)
+          ? rows[highestIndex].throne.tier.key : null;
+        mutateStats((stats) => {
+          applyE4Draft(stats, {
+            moves: lastResult.moves || [],
+            types: (lastResult.types || []).filter(Boolean),
+            bst: baseStatTotal(lastResult.baseStats),
+          });
+          if (claimedTierKey) applyE4Claim(stats, claimedTierKey);
         });
       }
       renderGauntletResults(rows, highestIndex, challengerSpec, claimResult);
@@ -1345,6 +1388,7 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
     return async () => {
       const text = buildSummaryText({
         kind: 'gauntlet', placementLabel, monName: lastResult ? lastResult.name : undefined,
+        bst: lastResult ? baseStatTotal(lastResult.baseStats) : undefined,
         link: draftBattleLink('thrones'),
       });
       const ok = await copyToClipboard(text);
@@ -1457,6 +1501,33 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
     const me = myIndex >= 0 ? ranked[myIndex] : null;
     const hasOpponents = ranked.length >= 2;
 
+    // Per-player daily stats (best-effort, non-blocking, idempotent per date).
+    // Only record a REAL saved entry — never the provisional "unsaved local
+    // build" fallback (no uid to attribute it to, and it isn't persisted).
+    // vs-Cal and vs-players are split out from this player's own matchups:
+    // Cal is the house entry (uid '__rival__'); everyone else is a human.
+    // Recording here (rather than at submit) is deliberate — the split win
+    // rates and the final rank only exist once the round-robin has run, and
+    // keying by dateStr means refreshing (or re-viewing) just overwrites the
+    // day rather than double-counting it.
+    if (me && !me._me && myUid && me.matchups) {
+      const calM = me.matchups.find((mm) => mm.oppUid === '__rival__');
+      const playerMs = me.matchups.filter((mm) => mm.oppUid !== '__rival__' && mm.oppUid !== myUid);
+      const vsPlayers = playerMs.length ? playerMs.reduce((s, mm) => s + mm.myWinPct, 0) / playerMs.length : null;
+      const hasPlayers = playerMs.length > 0;
+      mutateStats((stats) => recordDailyDay(stats, dateStr, {
+        vsCal: calM ? calM.myWinPct : 0,
+        vsPlayers,
+        rank: hasOpponents ? myIndex + 1 : null,
+        total: hasOpponents ? ranked.length : null,
+        // "#1 daily drafter" only counts on a day with real competition (at
+        // least one other human) — topping a board of just you + the house
+        // bot isn't a meaningful finish.
+        isFirst: hasPlayers && myIndex === 0,
+        hasPlayers,
+      }));
+    }
+
     // #1 — share text now leads with a deep link into today's Daily Challenge
     // and shows the PLAYER's name (falling back to a stable "Player_NNNNN"
     // if they haven't set one, so it doesn't change on every share) instead
@@ -1505,6 +1576,7 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
               el('tbody', {}, ...rows))),
           el('div', { class: 'summary-actions' },
             me ? el('button', { class: 'btn-primary', onClick: async () => { const ok = await copyToClipboard(shareText); showShareSheet(shareText, ok); } }, '\uD83D\uDCE4 Share') : null,
+            el('button', { class: 'btn-secondary', onClick: () => renderPlayerStats({ backTo: () => showDailyResults(dateStr) }) }, '\uD83D\uDCCA My Stats'),
             el('button', { class: 'btn-secondary', onClick: () => showDailyResults(dateStr) }, '\u21BB Refresh'),
             isHistorical
               ? el('button', { class: 'btn-secondary', onClick: () => showDailyResults(ctx.dateStr) }, '\u2192 Today\u2019s Results')
@@ -1565,7 +1637,7 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
             el('div', { class: 'summary-mon' }, mon.name)),
           el('div', { class: 'type-pills' },
             ...(mon.types || []).filter(Boolean).map((t) => el('span', { class: `type-pill type-${t.toLowerCase()}` }, t))),
-          statSpreadEl(statVals.join('/')),
+          statSpreadEl(statVals.join('/'), { showTotal: true }),
           el('div', { class: 'draft-complete-moves' },
             el('div', { class: 'draft-section-title', style: { marginTop: '12px' } }, 'Moves'),
             el('div', { class: 'draft-move-grid' },
@@ -1573,6 +1645,72 @@ export function createDraftBattle({ mount, config, data, params = {}, onExit }) 
           mon.species ? el('div', { class: 'summary-meta' }, el('div', {}, `Based on: ${mon.species}`)) : null,
           el('div', { class: 'summary-actions' },
             el('button', { class: 'btn-secondary', onClick: opts.onBack }, '\u2190 Back')))));
+  }
+
+  // ===== PLAYER STATS PROFILE ==============================================
+  // Fetches and displays the current player's persisted Draft Battle stat
+  // profile (E4 + Daily), with a Back button to wherever they came from.
+  async function renderPlayerStats(opts = {}) {
+    stopPlay();
+    clear(root).append(spinner('Loading your stats\u2026'));
+    let stats = normalizeStats(null);
+    let name = 'You';
+    let offline = false;
+    try {
+      if (!identity) identity = await lazyIdentity();
+      if (!firebase) firebase = await lazyFirebase();
+      name = (identity && identity.name) || 'You';
+      const raw = await firebase.get(`/draft/stats/${identity.uid}`);
+      stats = normalizeStats(raw);
+    } catch { offline = true; }
+    renderStatsProfile(stats, { title: `\uD83D\uDCCA ${name}\u2019s Draft Stats`, offline, backTo: opts.backTo });
+  }
+
+  // Pure-ish renderer for a normalized stats object → the profile card. Kept
+  // separate from the fetch so the same layout can be reused (e.g. from the
+  // Leaderboard's stats tab) without re-fetching here.
+  function renderStatsProfile(stats, opts = {}) {
+    const e4 = deriveE4(stats);
+    const daily = deriveDaily(stats);
+    const pct = (v) => (v == null ? '\u2014' : `${Math.round(v * 100)}%`);
+    const numOr = (v, dash = '\u2014') => (v == null ? dash : String(v));
+
+    const statRow = (label, value) => el('div', { class: 'dstat-row' },
+      el('span', { class: 'dstat-label' }, label),
+      el('span', { class: 'dstat-value' }, value));
+
+    // E4 spot-hold counts as a compact per-tier grid.
+    const spotGrid = el('div', { class: 'dstat-spot-grid' },
+      ...TIERS.map((tier) => el('div', { class: 'dstat-spot-cell' },
+        el('div', { class: 'dstat-spot-icon' }, tier.icon),
+        el('div', { class: 'dstat-spot-label' }, tier.npc),
+        el('div', { class: 'dstat-spot-count' }, String(e4.spots[tier.key] || 0)))));
+
+    clear(root).append(
+      el('div', { class: 'summary-container' },
+        el('div', { class: 'summary-card' },
+          el('div', { class: 'summary-result', style: { textAlign: 'center', marginBottom: '8px' } }, opts.title || '\uD83D\uDCCA Draft Stats'),
+          opts.offline ? el('div', { class: 'battle-offline' }, '\u26A0\uFE0F Offline \u2014 stats may be unavailable.') : null,
+
+          el('div', { class: 'dstat-section-title' }, '\uD83C\uDFAE Daily Challenge'),
+          el('div', { class: 'dstat-block' },
+            statRow('Times played', String(daily.plays)),
+            statRow('#1 finishes', String(daily.firstCount)),
+            statRow('Avg win rate vs Cal', pct(daily.avgVsCal)),
+            statRow('Avg win rate vs players', pct(daily.avgVsPlayers))),
+
+          el('div', { class: 'dstat-section-title', style: { marginTop: '14px' } }, '\u2694\uFE0F Elite 4'),
+          el('div', { class: 'dstat-block' },
+            statRow('Drafts run', String(e4.draftCount)),
+            statRow('Favorite move', e4.favoriteMove ? `${e4.favoriteMove} (\u00d7${e4.favoriteMoveCount})` : '\u2014'),
+            statRow('Favorite type', e4.favoriteType ? `${e4.favoriteType} (\u00d7${e4.favoriteTypeCount})` : '\u2014'),
+            statRow('Average BST', e4.avgBst ? String(Math.round(e4.avgBst)) : '\u2014'),
+            statRow('Highest BST', e4.maxBst ? String(e4.maxBst) : '\u2014')),
+          el('div', { class: 'dstat-subtitle' }, 'Spots claimed'),
+          spotGrid,
+
+          el('div', { class: 'summary-actions', style: { marginTop: '14px' } },
+            el('button', { class: 'btn-secondary', onClick: () => (opts.backTo ? opts.backTo() : (onExit && onExit())) }, '\u2190 Back')))));
   }
 
   return { destroy() { stopPlay(); if (toast) { toast.remove(); toast = null; } clear(mount); } };
